@@ -241,7 +241,13 @@ public actor ChapterContentCoordinator {
             )
         }
         inFlight[key] = task
-        let report = await task.value
+        // The caller that started the request owns it: cancelling that caller
+        // still cancels the network load, as before requests were shared.
+        let report = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
         if inFlight[key] == task { inFlight[key] = nil }
         await saveContent(report, book: book, chapter: chapter, source: source)
         return .init(report: report, loadedFromCache: false)

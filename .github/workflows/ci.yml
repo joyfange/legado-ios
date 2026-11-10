@@ -32,8 +32,29 @@ jobs:
       - name: 核心与页面模型测试（swift test）
         run: |
           set +e
-          swift test --disable-sandbox > swift-test.log 2>&1
-          status=$?
+          swift build --build-tests --disable-sandbox > swift-build.log 2>&1 || { grep -n "error:" swift-build.log | head -n 80; exit 1; }
+          swift test --skip-build --disable-sandbox > swift-test.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 600); do kill -0 $pid 2>/dev/null || break; sleep 1; done
+          if kill -0 $pid 2>/dev/null; then
+            echo "::error::swift test 超过 10 分钟未结束，以下为已开始但未完成的测试"
+            kill -9 $pid
+            python3 - <<'PY'
+          import re
+          started, done = [], set()
+          for line in open("swift-test.log", errors="ignore"):
+              m = re.search(r'Test (?:case )?"?([^"]+?)"? started', line)
+              if m: started.append(m.group(1))
+              m = re.search(r'Test (?:case )?"?([^"]+?)"? (passed|failed|skipped)', line)
+              if m: done.add(m.group(1))
+          for name in started:
+              if name not in done: print("未完成:", name)
+          PY
+            status=124
+          else
+            wait $pid
+            status=$?
+          fi
           echo "::group::失败与错误摘要"
           grep -nE "error:|✘|failed|[Ff]atal|Crash|signal" swift-test.log | grep -v "warning:" | head -n 150
           echo "::endgroup::"
