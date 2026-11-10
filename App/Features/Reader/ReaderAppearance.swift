@@ -638,9 +638,45 @@ private struct ReaderReviewWebView: UIViewRepresentable {
         let web = WKWebView(frame: .zero)
         web.customUserAgent = ApplicationSettingsStore.shared.settings.effectiveUserAgent
         web.allowsBackForwardNavigationGestures = true
+        web.navigationDelegate = context.coordinator
         web.load(URLRequest(url: url))
         return web
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(host: url.host) }
+
+    /// 不少段评接口的证书已过期，书源阅读里会直接空白。只对段评页自己的域名、
+    /// 且仅在“证书过期”这一个错误时放行；其他证书问题照常拦下。
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        let host: String?
+        init(host: String?) { self.host = host }
+
+        func webView(
+            _ webView: WKWebView,
+            didReceive challenge: URLAuthenticationChallenge,
+            completionHandler: @escaping @MainActor @Sendable (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
+        ) {
+            let space = challenge.protectionSpace
+            guard space.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+                  let trust = space.serverTrust, let host, Self.sameSite(space.host, host) else {
+                completionHandler(.performDefaultHandling, nil)
+                return
+            }
+            var error: CFError?
+            if SecTrustEvaluateWithError(trust, &error) {
+                completionHandler(.performDefaultHandling, nil)
+            } else if let error, CFErrorGetCode(error) == Int(errSecCertificateExpired) {
+                completionHandler(.useCredential, URLCredential(trust: trust))
+            } else {
+                completionHandler(.performDefaultHandling, nil)
+            }
+        }
+
+        static func sameSite(_ a: String, _ b: String) -> Bool {
+            func root(_ h: String) -> String { h.lowercased().split(separator: ".").suffix(2).joined(separator: ".") }
+            return root(a) == root(b)
+        }
+    }
 }
