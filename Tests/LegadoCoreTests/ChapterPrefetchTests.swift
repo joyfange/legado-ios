@@ -68,7 +68,7 @@ private actor GatedLoader: ChapterContentLoading {
     }
 
     func waitUntilStarted() async {
-        while !started { await Task.yield() }
+        while !started { try? await Task.sleep(nanoseconds: 5_000_000) }
     }
 
     func release() {

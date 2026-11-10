@@ -201,7 +201,10 @@ public actor ChapterContentCoordinator {
     private let cache: ChapterContentCache
     /// Network loads in flight, keyed by book and chapter, so a foreground
     /// open and a prefetch of the same chapter share one request.
-    private var inFlight: [String: Task<ChapterContentReport, Never>] = [:]
+    /// Only requests started by a prefetch are joined by a foreground load;
+    /// two foreground loads (for example after the rules changed) stay
+    /// separate so the newer one always gets a fresh result.
+    private var inFlight: [String: (task: Task<ChapterContentReport, Never>, isPrefetch: Bool)] = [:]
     public private(set) var networkLoadCount = 0
 
     public init(loader: any ChapterContentLoading = NetworkBookService(), cache: ChapterContentCache = .live()) {
@@ -217,6 +220,19 @@ public actor ChapterContentCoordinator {
         maxPages: Int = 20,
         forceRefresh: Bool = false
     ) async -> CoordinatedChapterContent {
+        await load(book: book, chapter: chapter, source: source, nextChapterURL: nextChapterURL,
+                   maxPages: maxPages, forceRefresh: forceRefresh, isPrefetch: false)
+    }
+
+    private func load(
+        book: Book,
+        chapter: BookChapter,
+        source: BookSource,
+        nextChapterURL: String?,
+        maxPages: Int,
+        forceRefresh: Bool,
+        isPrefetch: Bool
+    ) async -> CoordinatedChapterContent {
         if !forceRefresh, let cached = try? await cache.load(bookURL: book.bookUrl, chapterURL: chapter.url),
                   cached.sourceID == nil || cached.sourceID == source.id {
             return .init(report: .init(
@@ -226,8 +242,8 @@ public actor ChapterContentCoordinator {
             ), loadedFromCache: true)
         }
         let key = "\(book.bookUrl)\u{1}\(chapter.url)\u{1}\(source.id)"
-        if !forceRefresh, let running = inFlight[key] {
-            return .init(report: await running.value, loadedFromCache: false)
+        if !forceRefresh, let running = inFlight[key], running.isPrefetch || isPrefetch {
+            return .init(report: await running.task.value, loadedFromCache: false)
         }
         let loader = self.loader
         networkLoadCount += 1
@@ -240,7 +256,7 @@ public actor ChapterContentCoordinator {
                 maxPages: maxPages
             )
         }
-        inFlight[key] = task
+        inFlight[key] = (task, isPrefetch)
         // The caller that started the request owns it: cancelling that caller
         // still cancels the network load, as before requests were shared.
         let report = await withTaskCancellationHandler {
@@ -248,7 +264,7 @@ public actor ChapterContentCoordinator {
         } onCancel: {
             task.cancel()
         }
-        if inFlight[key] == task { inFlight[key] = nil }
+        if inFlight[key]?.task == task { inFlight[key] = nil }
         await saveContent(report, book: book, chapter: chapter, source: source)
         return .init(report: report, loadedFromCache: false)
     }
@@ -288,7 +304,8 @@ public actor ChapterContentCoordinator {
     ) async -> Bool {
         if let cached = try? await cache.load(bookURL: book.bookUrl, chapterURL: chapter.url),
            cached.sourceID == nil || cached.sourceID == source.id { return false }
-        let result = await load(book: book, chapter: chapter, source: source, nextChapterURL: nextChapterURL)
+        let result = await load(book: book, chapter: chapter, source: source, nextChapterURL: nextChapterURL,
+                                maxPages: 20, forceRefresh: false, isPrefetch: true)
         return !Task.isCancelled && !result.report.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !result.report.diagnostics.contains(where: { $0.severity == .error })
     }
