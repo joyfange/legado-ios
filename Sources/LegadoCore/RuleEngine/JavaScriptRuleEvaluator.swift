@@ -296,6 +296,7 @@ public struct JavaScriptRuleEvaluator: Sendable {
         installSource(in: context, source: executionContext.source, variables: box)
         installBook(in: context, book: executionContext.book)
         installChapter(in: context, chapter: executionContext.chapter)
+        installRuntimeExtras(in: context, book: executionContext.book)
         context.evaluateScript("""
             (function () {
               var nativeParse = JSON.parse;
@@ -463,9 +464,39 @@ public struct JavaScriptRuleEvaluator: Sendable {
             Self.byteData(from: value).base64EncodedString()
         }
         let base64DecodeBytes: @convention(block) (String) -> [Int] = { value in
-            guard let data = Data(base64Encoded: value) else { return [] }
+            // android.util.Base64 is lenient: whitespace, URL-safe letters and
+            // missing padding all decode.
+            var text = value.filter { !$0.isWhitespace }
+                .replacingOccurrences(of: "-", with: "+")
+                .replacingOccurrences(of: "_", with: "/")
+            if text.count % 4 != 0 { text += String(repeating: "=", count: 4 - text.count % 4) }
+            guard let data = Data(base64Encoded: text) else { return [] }
             return data.map { Int(Int8(bitPattern: $0)) }
         }
+        let decodeBytes: @convention(block) (Any?, String) -> Any? = { value, charset in
+            guard let encoding = Self.stringEncoding(charset) else { return nil }
+            let data = Self.byteData(from: value)
+            return String(data: data, encoding: encoding) ?? String(decoding: data, as: UTF8.self)
+        }
+        let encodeString: @convention(block) (String, String) -> Any? = { value, charset in
+            guard let encoding = Self.stringEncoding(charset),
+                  let data = value.data(using: encoding, allowLossyConversion: true) else { return nil }
+            return data.map { Int(Int8(bitPattern: $0)) }
+        }
+        let md5Hex: @convention(block) (Any?) -> String = { value in
+            let data = value is [Any] ? Self.byteData(from: value) : Data(Self.stringify(value).utf8)
+            return Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        let sha256Hex: @convention(block) (Any?) -> String = { value in
+            let data = value is [Any] ? Self.byteData(from: value) : Data(Self.stringify(value).utf8)
+            return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        let uuid: @convention(block) () -> String = { UUID().uuidString.lowercased() }
+        context.setObject(decodeBytes, forKeyedSubscript: "__legadoDecodeBytes" as NSString)
+        context.setObject(encodeString, forKeyedSubscript: "__legadoEncodeString" as NSString)
+        context.setObject(md5Hex, forKeyedSubscript: "__legadoMD5Hex" as NSString)
+        context.setObject(sha256Hex, forKeyedSubscript: "__legadoSHA256Hex" as NSString)
+        context.setObject(uuid, forKeyedSubscript: "__legadoUUID" as NSString)
         let hexEncodeBytes: @convention(block) (Any?) -> String = { value in
             Self.byteData(from: value).map { String(format: "%02X", $0) }.joined()
         }
@@ -997,6 +1028,65 @@ public struct JavaScriptRuleEvaluator: Sendable {
             """)
     }
 
+    /// Android Legado APIs some sources call directly: java.longToast,
+    /// java.upLoginData, the in-memory `cache`, and book variables.
+    private func installRuntimeExtras(in context: JSContext, book: Book?) {
+        let memoryGet: @convention(block) (String) -> Any? = { JSMemoryCache.shared.get($0) }
+        let memoryPut: @convention(block) (String, Any?) -> Void = { JSMemoryCache.shared.put($0, Self.stringify($1)) }
+        let memoryDelete: @convention(block) (String) -> Void = { JSMemoryCache.shared.put($0, nil) }
+        let bookKey = book?.bookUrl ?? ""
+        let bookGet: @convention(block) (String) -> String = { key in
+            if let value = JSMemoryCache.shared.get("book-var:\(bookKey):\(key)") { return value }
+            guard let variable = book?.variable, let data = variable.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let value = object[key] else { return "" }
+            return Self.stringify(value)
+        }
+        let bookPut: @convention(block) (String, Any?) -> Void = { key, value in
+            JSMemoryCache.shared.put("book-var:\(bookKey):\(key)", Self.stringify(value))
+        }
+        context.setObject(memoryGet, forKeyedSubscript: "__legadoMemoryGet" as NSString)
+        context.setObject(memoryPut, forKeyedSubscript: "__legadoMemoryPut" as NSString)
+        context.setObject(memoryDelete, forKeyedSubscript: "__legadoMemoryDelete" as NSString)
+        context.setObject(bookGet, forKeyedSubscript: "__legadoBookGet" as NSString)
+        context.setObject(bookPut, forKeyedSubscript: "__legadoBookPut" as NSString)
+        context.evaluateScript(#"""
+            (function (global) {
+              var memory = {
+                getFromMemory: function (k) { return __legadoMemoryGet(String(k)); },
+                putMemory: function (k, v) { __legadoMemoryPut(String(k), v); },
+                deleteMemory: function (k) { __legadoMemoryDelete(String(k)); },
+                get: function (k) { return __legadoMemoryGet(String(k)); },
+                put: function (k, v) { __legadoMemoryPut(String(k), v); },
+                getFile: function (k) { return __legadoMemoryGet(String(k)); },
+                putFile: function (k, v) { __legadoMemoryPut(String(k), v); },
+                delete: function (k) { __legadoMemoryDelete(String(k)); }
+              };
+              if (typeof global.cache === 'undefined') global.cache = memory;
+              if (global.book) {
+                global.book.getVariable = function (k) { return __legadoBookGet(String(k)); };
+                global.book.putVariable = function (k, v) { __legadoBookPut(String(k), v); };
+              }
+              if (global.chapter && !global.chapter.putImgUrl) global.chapter.putImgUrl = function () {};
+              if (global.java) {
+                if (!global.java.longToast) global.java.longToast = global.java.toast;
+                global.java.upLoginData = function (map) {
+                  if (!global.source || !global.source.putLoginInfo) return;
+                  var current = {};
+                  try { current = global.source.getLoginInfoMap ? (global.source.getLoginInfoMap() || {}) : {}; } catch (e) {}
+                  var values = global.__legadoMapObject ? global.__legadoMapObject(map) : map;
+                  var merged = {};
+                  var k;
+                  var base = current && current.__entries ? current.__entries : current;
+                  for (k in base) if (Object.prototype.hasOwnProperty.call(base, k)) merged[k] = base[k];
+                  for (k in values) if (Object.prototype.hasOwnProperty.call(values, k)) merged[k] = values[k];
+                  global.source.putLoginInfo(JSON.stringify(merged));
+                };
+              }
+            })(this);
+            """#)
+    }
+
     private func installBook(in context: JSContext, book: Book?) {
         let object = JSValue(newObjectIn: context)
         let getName: @convention(block) () -> String = { book?.name ?? "" }
@@ -1185,6 +1275,22 @@ public struct JavaScriptRuleEvaluator: Sendable {
         }
     }
 
+    static func stringEncoding(_ name: String) -> String.Encoding? {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        switch trimmed.lowercased() {
+        case "", "utf-8", "utf8": return .utf8
+        case "iso-8859-1", "latin1", "iso8859-1": return .isoLatin1
+        case "us-ascii", "ascii": return .ascii
+        case "utf-16le": return .utf16LittleEndian
+        case "utf-16be": return .utf16BigEndian
+        case "utf-16": return .utf16
+        default:
+            let cf = CFStringConvertIANACharSetNameToEncoding(trimmed as CFString)
+            guard cf != kCFStringEncodingInvalidId else { return nil }
+            return String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(cf))
+        }
+    }
+
     private static func byteData(from value: Any?) -> Data {
         let values: [Any]
         if let value = value as? [Any] {
@@ -1216,18 +1322,73 @@ public struct JavaScriptRuleEvaluator: Sendable {
             if (!Array.isArray(value)) throw new TypeError('Java byte[] required');
             return value;
           }
-          function JavaString(value) {
-            var text = new NativeString(Array.isArray(value) ? __legadoUTF8String(value) : (value == null ? '' : value));
+          function decodeJavaBytes(bytes, charset) {
+            if (!charset || /^utf-?8$/i.test(NativeString(charset))) return __legadoUTF8String(bytes);
+            var decoded = __legadoDecodeBytes(bytes, NativeString(charset));
+            if (decoded == null) throw new Error('Unsupported charset: ' + charset);
+            return decoded;
+          }
+          function JavaString(value, a, b, c) {
+            var source;
+            if (Array.isArray(value)) {
+              if (typeof a === 'number') source = decodeJavaBytes(value.slice(a, a + Number(b || 0)), c);
+              else source = decodeJavaBytes(value, a);
+            } else {
+              source = value == null ? '' : value;
+            }
+            var text = new NativeString(source);
             Object.defineProperty(text, 'getBytes', {
               value: function (charset) {
-                if (charset && !/^utf-?8$/i.test(NativeString(charset))) {
-                  throw new Error('Unsupported charset: ' + charset);
-                }
-                return __legadoUTF8Bytes(NativeString(this));
+                if (!charset || /^utf-?8$/i.test(NativeString(charset))) return __legadoUTF8Bytes(NativeString(this));
+                var encoded = __legadoEncodeString(NativeString(this), NativeString(charset));
+                if (encoded == null) throw new Error('Unsupported charset: ' + charset);
+                return encoded;
               }
             });
             return text;
           }
+          function HashMap() {
+            if (!(this instanceof HashMap)) return new HashMap();
+            Object.defineProperty(this, '__entries', { value: {} });
+          }
+          HashMap.prototype.put = function (key, value) {
+            var k = NativeString(key), old = this.__entries.hasOwnProperty(k) ? this.__entries[k] : null;
+            this.__entries[k] = value; return old;
+          };
+          HashMap.prototype.get = function (key) {
+            var k = NativeString(key); return this.__entries.hasOwnProperty(k) ? this.__entries[k] : null;
+          };
+          HashMap.prototype.getOrDefault = function (key, fallback) {
+            var k = NativeString(key); return this.__entries.hasOwnProperty(k) ? this.__entries[k] : fallback;
+          };
+          HashMap.prototype.containsKey = function (key) { return this.__entries.hasOwnProperty(NativeString(key)); };
+          HashMap.prototype.remove = function (key) { var old = this.get(key); delete this.__entries[NativeString(key)]; return old; };
+          HashMap.prototype.size = function () { return Object.keys(this.__entries).length; };
+          HashMap.prototype.isEmpty = function () { return this.size() === 0; };
+          HashMap.prototype.clear = function () { var e = this.__entries; Object.keys(e).forEach(function (k) { delete e[k]; }); };
+          HashMap.prototype.keySet = function () { return Object.keys(this.__entries); };
+          HashMap.prototype.values = function () { var e = this.__entries; return Object.keys(e).map(function (k) { return e[k]; }); };
+          HashMap.prototype.putAll = function (other) {
+            var source = other && other.__entries ? other.__entries : (other || {});
+            for (var k in source) if (Object.prototype.hasOwnProperty.call(source, k)) this.put(k, source[k]);
+          };
+          HashMap.prototype.toJSON = function () { return this.__entries; };
+          HashMap.prototype.toString = function () { return JSON.stringify(this.__entries); };
+          global.__legadoMapObject = function (value) {
+            if (value && value.__entries) return value.__entries;
+            return value;
+          };
+          var UUID = javaClass('UUID', {
+            randomUUID: function () { return new NativeString(__legadoUUID()); }
+          });
+          var DigestUtil = javaClass('DigestUtil', {
+            md5Hex: function (value) { return __legadoMD5Hex(value); },
+            sha256Hex: function (value) { return __legadoSHA256Hex(value); }
+          });
+          var SecureUtil = javaClass('SecureUtil', {
+            md5: function (value) { return __legadoMD5Hex(value); },
+            sha256: function (value) { return __legadoSHA256Hex(value); }
+          });
           function SecretKeySpec(bytes, algorithm) {
             if (!(this instanceof SecretKeySpec)) return new SecretKeySpec(bytes, algorithm);
             this.key = checkedBytes(bytes).slice();
@@ -1327,8 +1488,10 @@ public struct JavaScriptRuleEvaluator: Sendable {
               crypto: { Mac: Mac, Cipher: Cipher, spec: { SecretKeySpec: SecretKeySpec, IvParameterSpec: IvParameterSpec } },
               xml: { bind: { DatatypeConverter: DatatypeConverter } }
             },
-            java: { net: { URLEncoder: URLEncoder }, lang: { String: JavaString }, util: { Base64: Base64, Arrays: Arrays } },
-            android: { util: { Base64: Base64 } }
+            java: { net: { URLEncoder: URLEncoder }, lang: { String: JavaString },
+                    util: { Base64: Base64, Arrays: Arrays, HashMap: HashMap, LinkedHashMap: HashMap, UUID: UUID } },
+            android: { util: { Base64: Base64 } },
+            cn: { hutool: { crypto: { SecureUtil: SecureUtil, digest: { DigestUtil: DigestUtil } } } }
           };
           Object.freeze(packages.javax.crypto.spec);
           Object.freeze(packages.javax.crypto);
@@ -1341,6 +1504,10 @@ public struct JavaScriptRuleEvaluator: Sendable {
           Object.freeze(packages.java);
           Object.freeze(packages.android.util);
           Object.freeze(packages.android);
+          Object.freeze(packages.cn.hutool.crypto.digest);
+          Object.freeze(packages.cn.hutool.crypto);
+          Object.freeze(packages.cn.hutool);
+          Object.freeze(packages.cn);
           global.Packages = Object.freeze(packages);
           global.JavaImporter = Object.freeze(function () {
             var imported = Object.create(null);
@@ -1461,5 +1628,24 @@ public final class BookSourceRuntimeStore: @unchecked Sendable {
 
     private func persistentKey(sourceID: String, key: String) -> String {
         key == "loginHeader" ? "loginHeader_\(sourceID)" : "v_\(sourceID)_\(key)"
+    }
+}
+
+
+/// Process-wide memory used by `cache.putMemory` / `cache.getFromMemory`.
+final class JSMemoryCache: @unchecked Sendable {
+    static let shared = JSMemoryCache()
+    private let lock = NSLock()
+    private var values: [String: String] = [:]
+
+    func get(_ key: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        return values[key]
+    }
+
+    func put(_ key: String, _ value: String?) {
+        lock.lock(); defer { lock.unlock() }
+        if values.count > 2_000, value != nil { values.removeAll(keepingCapacity: true) }
+        values[key] = value
     }
 }

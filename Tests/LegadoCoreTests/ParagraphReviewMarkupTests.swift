@@ -68,4 +68,19 @@ struct ParagraphReviewMarkupTests {
         )
         #expect(result.value.stringValue == "https://lib.example.com/c?id=7")
     }
+
+    @Test func androidJavaShimsUsedByQimaoSourcesWork() throws {
+        let script = """
+        var md5 = String(Packages.cn.hutool.crypto.digest.DigestUtil.md5Hex('abc'));
+        var uuid = String(Packages.java.util.UUID.randomUUID().toString()).replace(/-/g, '');
+        var map = new Packages.java.util.HashMap(); map.put('k', 'v');
+        var bytes = new Packages.java.lang.String('héllo').getBytes('UTF-8');
+        var latin = String(new Packages.java.lang.String(bytes, 0, 1, 'ISO-8859-1'));
+        var cached = (cache.putMemory('x', 'y'), String(cache.getFromMemory('x')));
+        java.longToast('ok');
+        [md5, uuid.length, map.get('k'), map.size(), latin, cached].join('|')
+        """
+        let result = try JavaScriptRuleEvaluator().evaluate(script: script, result: .string(""), executionContext: RuleExecutionContext())
+        #expect(result.value.stringValue == "900150983cd24fb0d6963f7d28e17f72|32|v|1|h|y")
+    }
 }
