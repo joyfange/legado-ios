@@ -1,5 +1,8 @@
 import Foundation
 import CoreFoundation
+#if canImport(Compression)
+import Compression
+#endif
 #if canImport(FoundationNetworking)
 import FoundationNetworking
 #endif
@@ -22,6 +25,7 @@ public struct HTTPResponse: Sendable {
     }
 
     public var decodedText: String {
+        let data = HTTPTextDecoder.gunzipIfNeeded(self.data)
         let encoding = requestedCharset.flatMap(HTTPTextDecoder.encoding(named:))
             ?? contentTypeCharset.flatMap(HTTPTextDecoder.encoding(named:))
             ?? HTTPTextDecoder.bomEncoding(data)
@@ -46,6 +50,39 @@ public struct HTTPResponse: Sendable {
 }
 
 public enum HTTPTextDecoder {
+    /// Some servers (e.g. 七猫 api-bc.wtzw.com) send gzip bodies even when the
+    /// request asked for identity; inflate any body carrying the gzip magic.
+    public static func gunzipIfNeeded(_ data: Data) -> Data {
+        #if canImport(Compression)
+        guard data.count > 18, data[data.startIndex] == 0x1F, data[data.startIndex + 1] == 0x8B,
+              data[data.startIndex + 2] == 0x08 else { return data }
+        let bytes = [UInt8](data)
+        var offset = 10
+        let flags = Int(bytes[3])
+        if flags & 0x04 != 0 {
+            guard offset + 2 < bytes.count else { return data }
+            offset += 2 + (Int(bytes[offset]) | (Int(bytes[offset + 1]) << 8))
+        }
+        if flags & 0x08 != 0 { while offset < bytes.count, bytes[offset] != 0 { offset += 1 }; offset += 1 }
+        if flags & 0x10 != 0 { while offset < bytes.count, bytes[offset] != 0 { offset += 1 }; offset += 1 }
+        if flags & 0x02 != 0 { offset += 2 }
+        guard offset < bytes.count - 8 else { return data }
+        let payload = Array(bytes[offset..<(bytes.count - 8)])
+        var capacity = max(payload.count * 6, 64 * 1_024)
+        let limit = 64 * 1_024 * 1_024
+        while capacity <= limit {
+            var output = [UInt8](repeating: 0, count: capacity)
+            let produced = compression_decode_buffer(&output, capacity, payload, payload.count, nil, COMPRESSION_ZLIB)
+            if produced > 0, produced < capacity { return Data(output.prefix(produced)) }
+            if produced == 0 { return data }
+            capacity *= 2
+        }
+        return data
+        #else
+        return data
+        #endif
+    }
+
     public static func htmlEncoding(_ data: Data) -> String.Encoding? {
         let head = String(decoding: data.prefix(16_384), as: UTF8.self)
         guard let meta = try? NSRegularExpression(pattern: #"<meta\b[^>]*>"#, options: .caseInsensitive),

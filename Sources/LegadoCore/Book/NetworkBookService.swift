@@ -401,7 +401,7 @@ public struct NetworkBookService: Sendable {
             baseURL: baseURL ?? URL(string: source.bookSourceUrl),
             defaultHeaders: try BookSourceHeaderResolver().resolve(source)
         )
-        let timeout = min(max(Double(source.respondTime) / 1_000, 5), 180)
+        let timeout = min(max(Double(source.respondTime) / 1_000, 15), 180)
         return try await networkPolicy.execute(
             prepared,
             source: source,

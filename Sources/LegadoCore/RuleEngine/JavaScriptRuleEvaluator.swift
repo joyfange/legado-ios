@@ -633,6 +633,9 @@ public struct JavaScriptRuleEvaluator: Sendable {
                     executionContext: executionContext
                 )
                 return response.decodedText
+            } catch HTTPClientError.statusResponse(let response) {
+                // Android Legado returns the body for 4xx/5xx too.
+                return response.decodedText
             } catch {
                 return error.localizedDescription
             }
@@ -891,7 +894,7 @@ public struct JavaScriptRuleEvaluator: Sendable {
         }
         let milliseconds = Self.number(timeoutValue)
         let timeout = milliseconds.map { min(max($0 / 1_000, 1), 180) }
-            ?? min(max(Double(source?.respondTime ?? 30_000) / 1_000, 5), 180)
+            ?? min(max(Double(source?.respondTime ?? 30_000) / 1_000, 15), 180)
         var request = prepared.urlRequest(timeout: timeout, handleCookies: source?.enabledCookieJar == true)
         if source?.enabledCookieJar == true {
             let stored = LegadoCookieStore.shared.cookieHeader(for: prepared.url.absoluteString)

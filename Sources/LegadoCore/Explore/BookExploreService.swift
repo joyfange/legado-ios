@@ -72,7 +72,7 @@ public struct BookExploreService: Sendable {
                 baseURL: URL(string: source.bookSourceUrl),
                 defaultHeaders: parseHeaders(source.header)
             )
-            let timeout = min(max(Double(source.respondTime) / 1_000, 5), 180)
+            let timeout = min(max(Double(source.respondTime) / 1_000, 15), 180)
             let response = try await networkPolicy.execute(
                 prepared,
                 source: source,

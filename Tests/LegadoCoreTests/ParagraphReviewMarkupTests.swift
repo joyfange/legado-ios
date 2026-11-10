@@ -83,4 +83,10 @@ struct ParagraphReviewMarkupTests {
         let result = try JavaScriptRuleEvaluator().evaluate(script: script, result: .string(""), executionContext: RuleExecutionContext())
         #expect(result.value.stringValue == "900150983cd24fb0d6963f7d28e17f72|32|v|1|h|y")
     }
+
+    @Test func gzipBodyIsInflatedEvenWithoutContentEncoding() {
+        let bytes: [UInt8] = [31,139,8,0,0,0,0,0,2,3,171,86,74,84,178,50,172,5,0,175,172,27,86,7,0,0,0]
+        let response = HTTPResponse(data: Data(bytes), statusCode: 200, headers: [:], finalURL: URL(string: "https://example.com")!)
+        #expect(response.decodedText == "{\"a\":1}")
+    }
 }

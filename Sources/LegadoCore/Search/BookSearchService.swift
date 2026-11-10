@@ -248,7 +248,7 @@ public struct BookSearchService: Sendable {
                                               baseURL: URL(string: source.bookSourceUrl), defaultHeaders: headers)
             }
             if timeoutLimit < 30 { prepared.retry = min(prepared.retry, 1) }
-            let timeout = min(max(Double(source.respondTime) / 1_000, 5), timeoutLimit)
+            let timeout = min(max(Double(source.respondTime) / 1_000, 15), timeoutLimit)
             let response = try await networkPolicy.execute(
                 prepared,
                 source: source,
