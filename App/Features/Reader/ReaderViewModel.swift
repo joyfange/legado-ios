@@ -70,6 +70,7 @@ final class ReaderViewModel: ObservableObject {
         let title: String
         let content: String
         let usesReplaceRules: Bool
+        let fromCache: Bool
     }
     private var readyChapters: [Int: ReadyChapter] = [:]
     private var neighborTask: Task<Void, Never>?
@@ -369,7 +370,30 @@ final class ReaderViewModel: ObservableObject {
                 guard let self, !Task.isCancelled, self.chapters.indices.contains(index) else { return }
                 let chapter = self.chapters[index]
                 let usesRules = self.usesReplaceRules
-                let value = await self.loadAdjacentChapter(chapter, rules: rules)
+                var fromCache = false
+                let value: (title: String, content: String, error: String?)
+                if let source = self.source {
+                    let result = await self.contentCoordinator.load(
+                        book: self.book,
+                        chapter: chapter,
+                        source: source,
+                        nextChapterURL: self.nextReadableChapter(after: chapter.index)?.url,
+                        forceRefresh: false
+                    )
+                    fromCache = result.loadedFromCache
+                    var effectiveChapter = chapter
+                    if let resolvedTitle = result.report.title { effectiveChapter.title = resolvedTitle }
+                    let processed = self.sanitizer.process(
+                        book: self.book,
+                        chapter: effectiveChapter,
+                        content: result.report.content,
+                        rules: usesRules ? rules : []
+                    )
+                    let error = (result.report.diagnostics + processed.diagnostics).first(where: { $0.severity == .error })?.message
+                    value = (processed.title, processed.content, error)
+                } else {
+                    value = await self.loadAdjacentChapter(chapter, rules: rules)
+                }
                 guard !Task.isCancelled,
                       value.error == nil,
                       !value.content.isEmpty,
@@ -380,7 +404,8 @@ final class ReaderViewModel: ObservableObject {
                     url: chapter.url,
                     title: value.title,
                     content: value.content,
-                    usesReplaceRules: usesRules
+                    usesReplaceRules: usesRules,
+                    fromCache: fromCache
                 )
             }
         }
@@ -630,7 +655,7 @@ final class ReaderViewModel: ObservableObject {
             content = ready.content
             paragraphs = Self.makeParagraphs(ready.content)
             diagnostics = []
-            loadedFromCache = true
+            loadedFromCache = ready.fromCache
             hasLoadedCurrentChapter = true
             if let source { schedulePreload(after: index, source: source) }
             prepareNeighborChapters()
