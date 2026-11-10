@@ -228,12 +228,16 @@ private extension KeyedDecodingContainer {
         if let value = try? decode(T.self, forKey: key) {
             return value
         }
-        guard let json = try? decode(String.self, forKey: key),
-              !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        // An empty array (`"ruleExplore": []`) is what several editors write for
+        // "no rules"; Android treats it as empty. Anything else stays strict.
+        if let array = try? decode([JSONValue].self, forKey: key), array.isEmpty { return nil }
+        let json = try decode(String.self, forKey: key)
+        guard !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let data = json.data(using: .utf8) else {
             return nil
         }
-        return try? JSONDecoder().decode(T.self, from: data)
+        if let array = try? JSONDecoder().decode([JSONValue].self, from: data), array.isEmpty { return nil }
+        return try JSONDecoder().decode(T.self, from: data)
     }
 
     /// Strings in hand-edited sources are sometimes numbers, booleans, or
