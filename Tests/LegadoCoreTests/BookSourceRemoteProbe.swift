@@ -122,17 +122,22 @@ private actor ProbeTransport: HTTPTransport {
             let on = ["段评开关", "神评开关", "本章说", "书评开关", "热门评论"].reduce(into: [String: String]()) { $0[$1] = "✅" }
             let info = String(decoding: try JSONSerialization.data(withJSONObject: on), as: UTF8.self)
             BookSourceRuntimeStore.shared.put(sourceID: source.id, key: "loginInfo", value: info)
-            let search = await BookSearchService(transport: transport).search(keyword: keyword, page: 1, source: source)
-            guard let first = search.books.first else { print("REVIEW \(source.bookSourceName) no search"); continue }
+            _ = keyword
+            let explore = BookExploreService(transport: transport)
+            let kinds = await explore.kinds(for: source)
+            guard let kind = kinds.kinds.first(where: { !($0.url ?? "").isEmpty }),
+                  let first = await explore.explore(source: source, kind: kind, page: 1).books.dropFirst().first
+            else { print("REVIEW \(source.bookSourceName) no explore"); continue }
             let detail = await service.loadDetail(searchBook: first, source: source)
             let toc = await service.loadChapters(book: detail.book, source: source, maxPages: 3)
             print("REVIEW_TOC \(toc.chapters.count) diag=\(toc.diagnostics.map { "\($0.severity):\($0.code):\($0.message.prefix(160))" })")
             let readable = toc.chapters.filter { !$0.isVolume }
-            guard readable.count > 3 else { continue }
-            let chapter = readable[3]
+            guard readable.count > 10 else { continue }
+            let chapter = readable[10]
             let content = await service.loadContent(book: detail.book, chapter: chapter, source: source, maxPages: 2)
             let text = content.content
             let markers = text.components(separatedBy: "<img").count - 1
+            print("REVIEW_TEXT " + String(text.prefix(600)).replacingOccurrences(of: "\n", with: "⏎"))
             print("REVIEW_CONTENT \(chapter.title) len=\(text.count) imgs=\(markers) diag=\(content.diagnostics.map { "\($0.code):\($0.message.prefix(160))" })")
             let tags = text.components(separatedBy: "<img").dropFirst().prefix(3).map { String($0.prefix(400)) }
             for tag in tags { print("REVIEW_TAG <img" + tag) }
