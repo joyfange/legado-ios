@@ -59,16 +59,21 @@ extension ReaderPageBreaker: NSLayoutManagerDelegate {
         let band = self.band
         guard stride > 1, band > 1 else { return false }
         let rect = lineFragmentRect.pointee
+        // The deepest descender of every font on the line (substituted CJK
+        // fonts included), plus a small safety margin for rounding in the
+        // final glyph placement, decides where the line really ends.
         var descent: CGFloat = 0
         if let storage = layoutManager.textStorage, storage.length > 0 {
-            let character = min(layoutManager.characterIndexForGlyph(at: glyphRange.location), storage.length - 1)
-            if let font = storage.attribute(.font, at: character, effectiveRange: nil) as? UIFont {
-                descent = abs(font.descender)
+            let characters = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+            let range = NSIntersectionRange(characters, NSRange(location: 0, length: storage.length))
+            storage.enumerateAttribute(.font, in: range, options: []) { value, _, _ in
+                if let font = value as? UIFont { descent = max(descent, abs(font.descender)) }
             }
         }
+        let safetyMargin: CGFloat = 2
         let glyphBottom = descent > 0
-            ? rect.minY + baselineOffset.pointee + descent
-            : rect.minY + lineFragmentUsedRect.pointee.height
+            ? rect.minY + baselineOffset.pointee + descent + safetyMargin
+            : rect.minY + lineFragmentUsedRect.pointee.height + safetyMargin
         let origin = ReaderPageBreaker.adjustedLineOrigin(
             minY: rect.minY, glyphBottom: glyphBottom, stride: stride, band: band
         )
