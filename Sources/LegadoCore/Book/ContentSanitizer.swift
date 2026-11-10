@@ -103,7 +103,7 @@ struct ChapterHTMLFormatter {
         if options["style"]?.lowercased() == "text" || Self.isParagraphReviewMarker(src) {
             let svgCount = svg.flatMap { Self.svgTexts($0).compactMap { Int($0) }.first }
             let count = Self.commentCount(svgCount: svgCount, click: Self.clickScript(tag: tag, options: options) ?? click, payloadIsSVG: svg?.contains("<svg") == true)
-            return (Self.bubbleMarker(count: count, url: click, script: Self.clickScript(tag: tag, options: options)), true)
+            return (Self.bubbleMarker(count: count, url: click, script: Self.clickScript(tag: tag, options: options), color: svg.flatMap(Self.svgColor)), true)
         }
         if let svg, let card = Self.commentCardText(fromSVG: svg, click: click, script: Self.clickScript(tag: tag, options: options)) {
             return (card, false)
@@ -126,9 +126,18 @@ struct ChapterHTMLFormatter {
         return candidates.compactMap { $0 }.first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
     }
 
-    static func bubbleMarker(count: Int?, url: String?, script: String? = nil) -> String {
+    /// 书源画的气泡用的颜色（描边或文字色）。纯黑是书源的默认值，交给阅读器按主题配色。
+    static func svgColor(_ svg: String) -> String? {
+        guard let re = try? NSRegularExpression(pattern: #"(?:stroke|fill)\s*=\s*"(#[0-9a-fA-F]{6})""#),
+              let m = re.firstMatch(in: svg, range: NSRange(location: 0, length: (svg as NSString).length)) else { return nil }
+        let hex = (svg as NSString).substring(with: m.range(at: 1)).uppercased()
+        return hex == "#000000" ? nil : hex
+    }
+
+    static func bubbleMarker(count: Int?, url: String?, script: String? = nil, color: String? = nil) -> String {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         var value = "bubble://paragraph?num=" + (count.map(String.init) ?? "")
+        if let color { value += "&displayColor=%23" + color.dropFirst() }
         if let url, url.lowercased().hasPrefix("http"),
            let encoded = url.addingPercentEncoding(withAllowedCharacters: allowed) {
             value += "&url=" + encoded

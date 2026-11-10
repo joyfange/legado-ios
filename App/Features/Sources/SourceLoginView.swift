@@ -394,8 +394,12 @@ struct SourceLoginFormView: View {
                 }
             }
             ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
-                Section(section.0) {
+                Section {
                     ForEach(section.1) { row in rowView(row) }
+                } header: {
+                    Text(section.0)
+                } footer: {
+                    if let note = footer(for: section.0) { Text(note) }
                 }
             }
         }
@@ -431,25 +435,30 @@ struct SourceLoginFormView: View {
 
     @ViewBuilder private func rowView(_ row: SourceLoginUIRow) -> some View {
         switch row.type {
-        case "password":
-            HStack {
-                Text(row.title)
-                SecureField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
-            }
-        case "toggle":
-            Button {
-                let options = row.chars.isEmpty ? ["🔳", "✅"] : row.chars
-                let current = values[row.name] ?? row.defaultValue
-                let index = options.firstIndex(of: current) ?? -1
-                values[row.name] = options[(index + 1) % options.count]
-                persist()
-                if let action = row.action { Task { await run(action) } }
-            } label: {
-                HStack {
-                    Text(row.title).foregroundStyle(.primary)
-                    Spacer()
-                    Text(values[row.name] ?? row.defaultValue)
+        case "toggle" where row.chars.count == 2 || row.chars.isEmpty:
+            Toggle(row.title, isOn: Binding(
+                get: {
+                    let on = row.chars.last ?? "✅"
+                    let value = values[row.name] ?? row.defaultValue
+                    return value == on || ["1", "true", "开", "开启"].contains(value.lowercased())
+                },
+                set: { isOn in
+                    let options = row.chars.isEmpty ? ["🔳", "✅"] : row.chars
+                    values[row.name] = isOn ? options[1] : options[0]
+                    persist()
+                    if let action = row.action { Task { await run(action, quiet: true) } }
                 }
+            ))
+        case "toggle":
+            Picker(row.title, selection: Binding(
+                get: { values[row.name] ?? row.defaultValue },
+                set: {
+                    values[row.name] = $0
+                    persist()
+                    if let action = row.action { Task { await run(action, quiet: true) } }
+                }
+            )) {
+                ForEach(row.chars, id: \.self) { Text($0).tag($0) }
             }
         case "select":
             Picker(row.title, selection: Binding(
@@ -457,7 +466,7 @@ struct SourceLoginFormView: View {
                 set: {
                     values[row.name] = $0
                     persist()
-                    if let action = row.action { Task { await run(action) } }
+                    if let action = row.action { Task { await run(action, quiet: true) } }
                 }
             )) {
                 ForEach(row.chars, id: \.self) { Text($0).tag($0) }
@@ -467,11 +476,68 @@ struct SourceLoginFormView: View {
                 if let action = row.action { Task { await run(action) } }
             }
         default:
-            HStack {
-                Text(row.title)
-                TextField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
+            if isLongField(row) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(row.title)
+                    TextEditor(text: binding(row))
+                        .font(.system(.footnote, design: .monospaced))
+                        .frame(minHeight: 90)
+                        .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.25)))
+                }
+                .padding(.vertical, 4)
+            } else if isColorField(row) {
+                HStack {
+                    Text(row.title)
+                    Spacer()
+                    TextField(row.defaultValue, text: binding(row))
+                        .multilineTextAlignment(.trailing)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(maxWidth: 110)
+                        .textInputAutocapitalization(.characters)
+                        .disableAutocorrection(true)
+                    ColorPicker("", selection: colorBinding(row), supportsOpacity: false).labelsHidden()
+                }
+            } else if row.type == "password" {
+                HStack {
+                    Text(row.title)
+                    SecureField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
+                }
+            } else {
+                HStack {
+                    Text(row.title)
+                    TextField(row.defaultValue, text: binding(row))
+                        .multilineTextAlignment(.trailing)
+                        .disableAutocorrection(true)
+                }
             }
         }
+    }
+
+    /// 自定义气泡等模板字段：内容是一整段 SVG，单行输入框放不下。
+    private func isLongField(_ row: SourceLoginUIRow) -> Bool {
+        row.name.contains("气泡") || row.name.contains("模板内容") || (values[row.name] ?? row.defaultValue).count > 40
+    }
+
+    private func isColorField(_ row: SourceLoginUIRow) -> Bool {
+        row.defaultValue.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil
+    }
+
+    private func colorBinding(_ row: SourceLoginUIRow) -> Binding<Color> {
+        Binding(
+            get: { Color(uiColor: UIColor(loginHex: values[row.name] ?? row.defaultValue) ?? .label) },
+            set: { values[row.name] = UIColor($0).loginHex; persist() }
+        )
+    }
+
+    /// 和阅读器设置的关系说明，写在对应分组底下。
+    private func footer(for header: String) -> String? {
+        if header.contains("评论") || header.contains("段评") {
+            return "开关改完后返回阅读页，下拉刷新本章即可生效。气泡的形状跟随「阅读设置 › 段评气泡」，这里设置的颜色会用在气泡上；半屏高度和评论主题用于点开后的评论页。"
+        }
+        if header.contains("气泡") {
+            return "这里的 SVG 气泡模板是给安卓「阅读」用的，本软件不使用；想换气泡样式，请在「阅读设置 › 段评气泡」里选择，支持导入自定义图片。"
+        }
+        return nil
     }
 
     private func binding(_ row: SourceLoginUIRow) -> Binding<String> {
@@ -513,20 +579,24 @@ struct SourceLoginFormView: View {
         return script
     }
 
-    private func run(_ action: String) async {
+    /// 安卓的按钮脚本以 `result` 拿到表单里填的值（loginInfo）。
+    private func run(_ action: String, quiet: Bool = false) async {
         persist()
-        isRunning = true
+        if !quiet { isRunning = true }
         defer { isRunning = false }
         let script = loginScript + "\n" + action
+        var info: [String: JSONValue] = [:]
+        for row in rows where row.type != "button" { info[row.name] = .string(values[row.name] ?? row.defaultValue) }
         do {
             let result = try await JavaScriptRuleEvaluator(maximumScriptLength: 8 * 1_024 * 1_024)
-                .evaluateAsync(script: script, result: .string(""), executionContext: .init(baseURL: source.bookSourceUrl, source: source))
-            loadValues()
-            if let toast = result.variables[JavaScriptRuleEvaluator.toastKey], !toast.isEmpty {
+                .evaluateAsync(script: script, result: .object(info), executionContext: .init(baseURL: source.bookSourceUrl, source: source))
+            if let toast = result.variables[JavaScriptRuleEvaluator.toastKey]?.trimmingCharacters(in: .whitespacesAndNewlines), !toast.isEmpty {
                 status = toast
-            } else {
-                let value = result.value.stringValue
-                status = value.isEmpty || value == "null" || value == "undefined" ? "已执行" : String(value.prefix(400))
+            } else if !quiet {
+                let value = result.value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+                let readable = !value.isEmpty && value != "null" && value != "undefined" && value != "true"
+                    && value != "false" && !value.hasPrefix("{") && !value.hasPrefix("[") && !value.hasPrefix("<")
+                status = readable ? String(value.prefix(200)) : "已执行"
             }
         } catch {
             status = "执行失败：\(error.localizedDescription)"
@@ -537,5 +607,22 @@ struct SourceLoginFormView: View {
         persist()
         await run("typeof login === 'function' ? login() : ''")
         if status == "已执行" { status = "已保存" }
+    }
+}
+
+private extension UIColor {
+    convenience init?(loginHex: String) {
+        var hex = loginHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if hex.hasPrefix("#") { hex.removeFirst() }
+        guard hex.count == 6, let value = UInt32(hex, radix: 16) else { return nil }
+        self.init(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
+                  blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+    }
+
+    var loginHex: String {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        getRed(&r, green: &g, blue: &b, alpha: &a)
+        func c(_ v: CGFloat) -> Int { Int((min(max(v, 0), 1) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", c(r), c(g), c(b))
     }
 }

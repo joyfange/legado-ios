@@ -105,12 +105,15 @@ public actor BookUpdateCoordinator {
         (try? await repository.load(bookURL: bookURL)) ?? []
     }
 
-    public func refresh(book: Book, source: BookSource, now: Int64? = nil, maxPages: Int = 20) async -> BookUpdateReport {
+    public func refresh(book: Book, source: BookSource, now: Int64? = nil, maxPages: Int = 300) async -> BookUpdateReport {
         let old = (try? await repository.load(bookURL: book.bookUrl)) ?? []
         let loaded = await loader.loadChapters(book: book, source: source, maxPages: maxPages)
-        // 和安卓一致：只要解析到章节就采用，个别字段/翻页的报错只作为诊断保留，
-        // 不能因此丢掉整份目录（否则详情页会先显示“当前源不可用”再换回同一源）。
-        guard !Task.isCancelled, !loaded.chapters.isEmpty else {
+        // 有报错（如翻页上限、某一页失败）时：已有更完整的旧目录就保留旧的；
+        // 新书没有旧目录，则采用已解析到的章节，不能整份丢掉（否则详情页会先
+        // 显示“当前源不可用”再换回同一源）。
+        let partial = loaded.diagnostics.contains(where: { $0.severity == .error })
+        guard !Task.isCancelled, !loaded.chapters.isEmpty,
+              !(partial && old.count > loaded.chapters.count) else {
             return .init(
                 book: book,
                 chapters: old,

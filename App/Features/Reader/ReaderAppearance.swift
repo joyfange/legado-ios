@@ -3,6 +3,9 @@ import ImageIO
 import SwiftUI
 import UIKit
 import WebKit
+#if SWIFT_PACKAGE
+import LegadoCore
+#endif
 
 private struct ReaderPositionPreferenceKey: PreferenceKey {
     static let defaultValue: [Int: CGFloat] = [:]
@@ -616,28 +619,68 @@ enum ReaderInlineMarkup {
 }
 
 struct ReaderReviewPage: Identifiable {
-    let url: URL
+    var url: URL?
     var html: String?
     var bridge: (@MainActor (String) async -> String)?
+    /// 书源回调：先弹出半屏显示“正在加载”，在后台执行脚本拿到页面。
+    var loader: (@MainActor () async -> JavaScriptRuleEvaluator.ClickResolution)?
     let id = UUID()
 
-    init(url: URL, html: String? = nil, bridge: (@MainActor (String) async -> String)? = nil) {
+    init(url: URL?, html: String? = nil, bridge: (@MainActor (String) async -> String)? = nil,
+         loader: (@MainActor () async -> JavaScriptRuleEvaluator.ClickResolution)? = nil) {
         self.url = url
         self.html = html
         self.bridge = bridge
+        self.loader = loader
     }
 }
 
-/// 段评 / 插图页：半屏打开，可上划展开到全屏。
+/// 段评 / 插图页：点一下立即半屏弹出，可上划展开到全屏；书源回调在里面加载，
+/// 失败时就地显示原因和重试。
 struct ReaderReviewSheet: View {
-    let url: URL
-    var html: String?
-    var bridge: (@MainActor (String) async -> String)?
+    let page: ReaderReviewPage
+    @State private var resolved: (url: URL, html: String?)?
+    @State private var error: String?
+    @State private var attempt = 0
 
     var body: some View {
-        ReaderReviewWebView(url: url, html: html, bridge: bridge)
-            .ignoresSafeArea(edges: .bottom)
-            .readingPresentationDetents([.medium, .large])
+        Group {
+            if let resolved {
+                ReaderReviewWebView(url: resolved.url, html: resolved.html, bridge: page.bridge)
+                    .ignoresSafeArea(edges: .bottom)
+            } else if let error {
+                VStack(spacing: 14) {
+                    Image(systemName: "text.bubble").font(.largeTitle).foregroundStyle(.secondary)
+                    Text("段评加载失败").font(.headline)
+                    Text(error).font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button("重试") { self.error = nil; attempt += 1 }.buttonStyle(.borderedProminent)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView("正在加载段评…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .readingPresentationDetents([.medium, .large])
+        .task(id: attempt) { await load() }
+    }
+
+    private func load() async {
+        guard resolved == nil else { return }
+        if let loader = page.loader {
+            let result = await loader()
+            if let html = result.html {
+                resolved = (result.url.flatMap(URL.init(string:)) ?? URL(string: "about:blank")!, html)
+            } else if let target = result.url.flatMap(URL.init(string:)) {
+                resolved = (target, nil)
+            } else {
+                error = result.error ?? "书源没有给出段评内容"
+            }
+        } else if let url = page.url {
+            resolved = (url, page.html)
+        } else {
+            error = "没有段评地址"
+        }
     }
 }
 

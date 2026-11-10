@@ -60,7 +60,6 @@ struct ReaderView: View {
     @AppStorage("reviewBubbleImageRevision") private var reviewBubbleImageRevision = 0
     @State private var showsBubbleImageImporter = false
     @State private var reviewError: String?
-    @State private var isResolvingReview = false
     @State private var chapterTurnDirection = 0
     @State private var isWaitingForPreviousChapter = false
     @State private var httpTTSEngines: [HttpTTS] = []
@@ -286,7 +285,7 @@ struct ReaderView: View {
         .sheet(isPresented: $showsTableOfContents) { tableOfContents }
         .sheet(isPresented: $showsBookmarks) { bookmarksSheet }
         .sheet(item: $reviewPage) { page in
-            ReaderReviewSheet(url: page.url, html: page.html, bridge: page.bridge)
+            ReaderReviewSheet(page: page)
         }
         .alert("打不开段评", isPresented: Binding(get: { reviewError != nil }, set: { if !$0 { reviewError = nil } })) {
             Button("好", role: .cancel) { reviewError = nil }
@@ -1593,21 +1592,13 @@ struct ReaderView: View {
             reviewPage = ReaderReviewPage(url: url)
             return
         }
-        guard !isResolvingReview else { return }
-        isResolvingReview = true
-        Task {
-            let resolution = await model.resolveReviewClick(script)
-            isResolvingReview = false
-            if let html = resolution.html {
-                let base = resolution.url.flatMap(URL.init(string:)) ?? URL(string: "about:blank")!
-                let model = model
-                reviewPage = ReaderReviewPage(url: base, html: html, bridge: { await model.runSourceBridge($0) })
-            } else if let target = resolution.url.flatMap(URL.init(string:)) {
-                reviewPage = ReaderReviewPage(url: target)
-            } else {
-                reviewError = resolution.error ?? "书源没有给出段评页地址"
-            }
-        }
+        guard reviewPage == nil else { return }
+        let model = model
+        reviewPage = ReaderReviewPage(
+            url: nil,
+            bridge: { await model.runSourceBridge($0) },
+            loader: { await model.resolveReviewClick(script) }
+        )
     }
 
     private func importBubbleImage(_ result: Result<URL, Error>) {

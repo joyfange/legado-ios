@@ -118,4 +118,15 @@ struct BookUpdateCoordinatorTests {
 private struct StubChapterListLoader: ChapterListLoading {
     let report: ChapterListReport
     func loadChapters(book: Book, source: BookSource, maxPages: Int) async -> ChapterListReport { report }
+
+    @Test func newBookKeepsChaptersEvenWhenALaterPageReportsAnError() async throws {
+        let chapters = (0..<3).map { BookChapter(url: "chapter\($0)", title: "第\($0)章", bookUrl: "book", index: $0) }
+        let repository = InMemoryBookChapterRepository(values: [:])
+        let coordinator = BookUpdateCoordinator(repository: repository, loader: StubChapterListLoader(report: .init(
+            chapters: chapters, diagnostics: [.init(severity: .error, code: "toc.page_limit", message: "目录超过翻页上限", rule: "toc")]
+        )))
+        let result = await coordinator.refresh(book: Book(bookUrl: "book", name: "书", origin: "source"), source: .init(bookSourceUrl: "source", bookSourceName: "源"))
+        #expect(result.chapters.count == 3)
+    }
+
 }
