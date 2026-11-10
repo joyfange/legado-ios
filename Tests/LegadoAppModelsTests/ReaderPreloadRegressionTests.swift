@@ -19,7 +19,7 @@ struct ReaderPreloadRegressionTests {
         let cache = ChapterContentCache(directory: directory)
         let book = Book(bookUrl: "book", name: "书", origin: "source")
         let chapters = makeChapters(count: 6)
-        try cache.save(.init(bookURL: "book", chapterURL: "chapter0", content: "已缓存正文", sourceID: "source"))
+        try await cache.save(.init(bookURL: "book", chapterURL: "chapter0", content: "已缓存正文", sourceID: "source"))
         let loader = RecordingPreloadLoader()
         let model = ReaderViewModel(book: book, chapters: chapters, initialIndex: 0,
                                     source: .init(bookSourceUrl: "source", bookSourceName: "源"),
