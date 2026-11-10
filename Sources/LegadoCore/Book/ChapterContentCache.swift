@@ -199,6 +199,10 @@ public struct CoordinatedChapterContent: Sendable {
 public actor ChapterContentCoordinator {
     private let loader: any ChapterContentLoading
     private let cache: ChapterContentCache
+    /// Network loads in flight, keyed by book and chapter, so a foreground
+    /// open and a prefetch of the same chapter share one request.
+    private var inFlight: [String: Task<ChapterContentReport, Never>] = [:]
+    public private(set) var networkLoadCount = 0
 
     public init(loader: any ChapterContentLoading = NetworkBookService(), cache: ChapterContentCache = .live()) {
         self.loader = loader
@@ -221,13 +225,24 @@ public actor ChapterContentCoordinator {
                 supplementalContent: cached.supplementalContent
             ), loadedFromCache: true)
         }
-        let report = await loader.loadContent(
-            book: book,
-            chapter: chapter,
-            source: source,
-            nextChapterURL: nextChapterURL,
-            maxPages: maxPages
-        )
+        let key = "\(book.bookUrl)\u{1}\(chapter.url)\u{1}\(source.id)"
+        if !forceRefresh, let running = inFlight[key] {
+            return .init(report: await running.value, loadedFromCache: false)
+        }
+        let loader = self.loader
+        networkLoadCount += 1
+        let task = Task<ChapterContentReport, Never> {
+            await loader.loadContent(
+                book: book,
+                chapter: chapter,
+                source: source,
+                nextChapterURL: nextChapterURL,
+                maxPages: maxPages
+            )
+        }
+        inFlight[key] = task
+        let report = await task.value
+        if inFlight[key] == task { inFlight[key] = nil }
         await saveContent(report, book: book, chapter: chapter, source: source)
         return .init(report: report, loadedFromCache: false)
     }

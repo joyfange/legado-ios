@@ -16,6 +16,70 @@ private final class ReaderLayoutTextView: UITextView {
     }
 }
 
+/// Keeps every line fragment inside one page band in paged mode. A page
+/// occupies `stride` points of the text container; only the first `band`
+/// points of it are visible between the top and bottom paddings. A line that
+/// would cross the band's end (or that starts in the gap) is moved to the
+/// beginning of the next page, so a page never shows half a line.
+final class ReaderPageBreaker: NSObject, @unchecked Sendable {
+    var stride: CGFloat = 0
+    var band: CGFloat = 0
+
+    var isEnabled: Bool { stride > 1 && band > 1 }
+
+    /// Pure geometry used by the layout delegate and unit tests. Returns the
+    /// adjusted origin for a line whose top is `minY` and whose glyphs end at
+    /// `glyphBottom`.
+    static func adjustedLineOrigin(minY: CGFloat, glyphBottom: CGFloat, stride: CGFloat, band: CGFloat) -> CGFloat {
+        guard stride > 1, band > 1 else { return minY }
+        let page = floor((minY + 0.01) / stride)
+        let bandStart = page * stride
+        let bandEnd = bandStart + band
+        let lineHeight = glyphBottom - minY
+        if minY >= bandEnd - 0.01 {
+            return bandStart + stride
+        }
+        if glyphBottom > bandEnd + 0.5, lineHeight <= band, minY > bandStart + 0.01 {
+            return bandStart + stride
+        }
+        return minY
+    }
+}
+
+extension ReaderPageBreaker: NSLayoutManagerDelegate {
+    nonisolated func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<CGRect>,
+        lineFragmentUsedRect: UnsafeMutablePointer<CGRect>,
+        baselineOffset: UnsafeMutablePointer<CGFloat>,
+        in textContainer: NSTextContainer,
+        forGlyphRange glyphRange: NSRange
+    ) -> Bool {
+        let stride = self.stride
+        let band = self.band
+        guard stride > 1, band > 1 else { return false }
+        let rect = lineFragmentRect.pointee
+        var descent: CGFloat = 0
+        if let storage = layoutManager.textStorage, storage.length > 0 {
+            let character = min(layoutManager.characterIndexForGlyph(at: glyphRange.location), storage.length - 1)
+            if let font = storage.attribute(.font, at: character, effectiveRange: nil) as? UIFont {
+                descent = abs(font.descender)
+            }
+        }
+        let glyphBottom = descent > 0
+            ? rect.minY + baselineOffset.pointee + descent
+            : rect.minY + lineFragmentUsedRect.pointee.height
+        let origin = ReaderPageBreaker.adjustedLineOrigin(
+            minY: rect.minY, glyphBottom: glyphBottom, stride: stride, band: band
+        )
+        guard origin != rect.minY else { return false }
+        let delta = origin - rect.minY
+        lineFragmentRect.pointee.origin.y += delta
+        lineFragmentUsedRect.pointee.origin.y += delta
+        return true
+    }
+}
+
 struct ReaderTextView: UIViewRepresentable {
     let text: String
     let title: String
@@ -83,6 +147,9 @@ struct ReaderTextView: UIViewRepresentable {
             view = ReaderLayoutTextView(frame: .zero)
         }
         view.onLayout = { [weak coordinator = context.coordinator] view in
+            coordinator?.updatePageBreaker(in: view)
+            coordinator?.alignPagedContent(in: view)
+            coordinator?.restorePendingPositionIfNeeded(in: view)
             coordinator?.reportPage(in: view)
             coordinator?.reportPageRanges(in: view)
         }
@@ -97,6 +164,8 @@ struct ReaderTextView: UIViewRepresentable {
         view.isScrollEnabled = true
         view.panGestureRecognizer.isEnabled = effectivePageAnimation == 3
         view.textContainer.lineFragmentPadding = 4
+        view.layoutManager.allowsNonContiguousLayout = false
+        view.layoutManager.delegate = context.coordinator.pageBreaker
         view.showsVerticalScrollIndicator = false
         view.isPagingEnabled = effectivePageAnimation != 3
         view.decelerationRate = effectivePageAnimation == 3 ? .normal : .fast
@@ -189,6 +258,7 @@ struct ReaderTextView: UIViewRepresentable {
                     attributes: bodyAttributes
                 ))
             }
+            context.coordinator.updatePageBreaker(in: view, invalidate: false)
             context.coordinator.isApplyingContent = true
             view.attributedText = rendered
             context.coordinator.isApplyingContent = false
@@ -203,7 +273,11 @@ struct ReaderTextView: UIViewRepresentable {
                 coordinator?.reportPageRanges(in: view)
             }
         } else if viewportSizeChanged {
-            context.coordinator.scroll(to: readerPosition, in: view)
+            context.coordinator.updatePageBreaker(in: view)
+            context.coordinator.scroll(
+                to: context.coordinator.pendingRestorePosition ?? readerPosition,
+                in: view
+            )
             let generation = context.coordinator.layoutGeneration
             DispatchQueue.main.async { [weak coordinator = context.coordinator] in
                 guard coordinator?.layoutGeneration == generation else { return }
@@ -267,6 +341,13 @@ struct ReaderTextView: UIViewRepresentable {
         private var pendingContinuationPosition: Int?
         var needsDeferredRender = false
         var isApplyingContent = false
+        let pageBreaker = ReaderPageBreaker()
+        /// A position that must be shown once the view has a real size. While
+        /// it is set, scroll callbacks never overwrite the saved position, so
+        /// a layout pass at zero size cannot reset it to the chapter start.
+        private(set) var pendingRestorePosition: Int?
+        private var pagedBottomPadding: CGFloat = 0
+        private var footerInset: CGFloat = 0
         private var isTurningPage = false
         private var isRenderingAutoPage = false
         private var lastReportedPage: Int?
@@ -331,7 +412,8 @@ struct ReaderTextView: UIViewRepresentable {
             if !visible {
                 loadingFooter?.removeFromSuperview()
                 loadingFooter = nil
-                view.contentInset.bottom = 0
+                footerInset = 0
+                view.contentInset.bottom = pagedBottomPadding
                 didRequestLoadingCancellation = false
                 return
             }
@@ -362,8 +444,67 @@ struct ReaderTextView: UIViewRepresentable {
                 loadingFooter = container
                 footer = container
             }
-            view.contentInset.bottom = 64
+            footerInset = isPagedMode ? 0 : 64
+            view.contentInset.bottom = pagedBottomPadding + footerInset
             footer.frame = CGRect(x: 0, y: view.contentSize.height, width: view.bounds.width, height: 52)
+        }
+
+        var isPagedMode: Bool {
+            (parent.isEInkMode ? 4 : parent.pageAnimation) != 3
+        }
+
+        /// The distance between two page tops in paged mode. Only the safe
+        /// area is excluded; the bottom content inset is owned by this
+        /// coordinator (page padding and the loading footer).
+        func pagedStride(for view: UITextView) -> CGFloat {
+            let safeBottom = max(view.adjustedContentInset.bottom - view.contentInset.bottom, 0)
+            return max(view.bounds.height - view.adjustedContentInset.top - safeBottom, 1)
+        }
+
+        func updatePageBreaker(in view: UITextView, invalidate: Bool = true) {
+            var stride: CGFloat = 0
+            var band: CGFloat = 0
+            if isPagedMode, view.bounds.height > 0 {
+                stride = pagedStride(for: view)
+                band = max(stride - view.textContainerInset.top - view.textContainerInset.bottom, 1)
+            }
+            guard abs(stride - pageBreaker.stride) > 0.5 || abs(band - pageBreaker.band) > 0.5 else { return }
+            pageBreaker.stride = stride
+            pageBreaker.band = band
+            if stride == 0, pagedBottomPadding != 0 {
+                pagedBottomPadding = 0
+                view.contentInset.bottom = footerInset
+            }
+            guard invalidate, view.textStorage.length > 0 else { return }
+            view.layoutManager.invalidateLayout(
+                forCharacterRange: NSRange(location: 0, length: view.textStorage.length),
+                actualCharacterRange: nil
+            )
+            view.layoutManager.ensureLayout(for: view.textContainer)
+        }
+
+        /// Pads the bottom so the last page top is an exact multiple of the
+        /// page stride; otherwise the last page would be clamped to the
+        /// content end and show a line cut at its top.
+        func alignPagedContent(in view: UITextView) {
+            guard isPagedMode, pageBreaker.isEnabled, view.textStorage.length > 0 else { return }
+            view.layoutManager.ensureLayout(for: view.textContainer)
+            let used = view.layoutManager.usedRect(for: view.textContainer)
+            let stride = pageBreaker.stride
+            let pages = max(Int(floor(max(used.maxY - 0.5, 0) / stride)) + 1, 1)
+            let minimum = -view.adjustedContentInset.top
+            let safeBottom = max(view.adjustedContentInset.bottom - view.contentInset.bottom, 0)
+            let desiredMaximum = minimum + CGFloat(pages - 1) * stride
+            let padding = desiredMaximum - view.contentSize.height + view.bounds.height - safeBottom
+            guard abs(padding - pagedBottomPadding) > 0.5 else { return }
+            pagedBottomPadding = padding
+            view.contentInset.bottom = padding + footerInset
+        }
+
+        private func pagedIndex(for offset: CGFloat, in view: UITextView) -> Int {
+            let stride = pagedStride(for: view)
+            let minimum = -view.adjustedContentInset.top
+            return max(Int(floor((offset - minimum + 1) / stride)), 0)
         }
 
         func shouldDeferRender(in view: UITextView) -> Bool {
@@ -407,6 +548,8 @@ struct ReaderTextView: UIViewRepresentable {
 
         func scroll(to characterPosition: Int, in view: UITextView) {
             guard !view.text.isEmpty else { return }
+            pendingRestorePosition = characterPosition
+            guard view.bounds.width > 0, view.bounds.height > 0 else { return }
             layoutGeneration &+= 1
             let generation = layoutGeneration
             let prefix = characterPosition == 0 && parent.pageAnimation == 3
@@ -425,18 +568,51 @@ struct ReaderTextView: UIViewRepresentable {
                     forGlyphRange: NSRange(location: glyph, length: 1),
                     in: view.textContainer
                 ).origin
-                point.y += view.textContainerInset.top
                 let limits = self.scrollLimits(for: view)
+                if self.isPagedMode, self.pageBreaker.isEnabled {
+                    self.alignPagedContent(in: view)
+                    let pagedLimits = self.scrollLimits(for: view)
+                    let page = floor(max(point.y + 1, 0) / self.pageBreaker.stride)
+                    let target = min(
+                        max(pagedLimits.minimum + page * self.pageBreaker.stride, pagedLimits.minimum),
+                        pagedLimits.maximum
+                    )
+                    view.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                    self.pendingRestorePosition = nil
+                    self.reportRestoredPosition(in: view)
+                    return
+                }
+                point.y += view.textContainerInset.top
                 let target = min(
                     max(point.y - view.adjustedContentInset.top, limits.minimum),
                     limits.maximum
                 )
                 view.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                self.pendingRestorePosition = nil
+                self.reportRestoredPosition(in: view)
+            }
+        }
+
+        /// Restores a position deferred while the view had no size.
+        func restorePendingPositionIfNeeded(in view: UITextView) {
+            guard let pendingRestorePosition, view.bounds.width > 0, view.bounds.height > 0 else { return }
+            scroll(to: pendingRestorePosition, in: view)
+        }
+
+        private func reportRestoredPosition(in view: UITextView) {
+            reportPage(in: view)
+            let character = contentCharacter(at: view.contentOffset, in: view)
+            guard character != parent.readerPosition, !isPagedMode || pageBreaker.isEnabled else { return }
+            let generation = layoutGeneration
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.layoutGeneration == generation else { return }
+                self.parent.readerPosition = character
             }
         }
 
         private func readingViewportHeight(for view: UITextView) -> CGFloat {
-            max(
+            if isPagedMode, pageBreaker.isEnabled { return pagedStride(for: view) }
+            return max(
                 view.bounds.height
                     - view.adjustedContentInset.top
                     - view.adjustedContentInset.bottom
@@ -481,7 +657,7 @@ struct ReaderTextView: UIViewRepresentable {
             let position = min(max(view.contentOffset.y - limits.minimum, 0), scrollRange)
             let current = position >= scrollRange - 0.5
                 ? total
-                : min(Int(floor(position / pageHeight)) + 1, total)
+                : min(Int(floor((position + 1) / pageHeight)) + 1, total)
             return (current, total)
         }
 
@@ -489,7 +665,9 @@ struct ReaderTextView: UIViewRepresentable {
             guard !view.text.isEmpty else { return 0 }
             let point = CGPoint(
                 x: view.textContainerInset.left + 1,
-                y: offset.y + view.textContainerInset.top + 1
+                y: isPagedMode && pageBreaker.isEnabled
+                    ? CGFloat(pagedIndex(for: offset.y, in: view)) * pageBreaker.stride + 1
+                    : offset.y + view.textContainerInset.top + 1
             )
             let glyphCount = view.layoutManager.numberOfGlyphs
             guard glyphCount > 0 else { return 0 }
@@ -574,7 +752,7 @@ struct ReaderTextView: UIViewRepresentable {
             }
             pendingPreviousPosition = nil
             pendingContinuationPosition = nil
-            guard contentCharacter != parent.readerPosition else { return }
+            guard pendingRestorePosition == nil, contentCharacter != parent.readerPosition else { return }
             let generation = layoutGeneration
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.layoutGeneration == generation else { return }
@@ -584,6 +762,7 @@ struct ReaderTextView: UIViewRepresentable {
 
         func reportPage(in view: UITextView) {
             guard view.bounds.width > 0, view.bounds.height > 0 else { return }
+            alignPagedContent(in: view)
             let metrics = pageMetrics(for: view)
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-uiPagingDiagnostics") {
@@ -619,12 +798,19 @@ struct ReaderTextView: UIViewRepresentable {
                 let offset = page == metrics.total - 1
                     ? limits.maximum
                     : min(limits.minimum + CGFloat(page) * pageHeight, limits.maximum)
-                let rect = CGRect(
-                    x: 0,
-                    y: max(0, offset + view.textContainerInset.top),
-                    width: max(view.textContainer.size.width, 1),
-                    height: pageHeight
-                )
+                let rect = pageBreaker.isEnabled
+                    ? CGRect(
+                        x: 0,
+                        y: CGFloat(page) * pageBreaker.stride,
+                        width: max(view.textContainer.size.width, 1),
+                        height: pageBreaker.band
+                    )
+                    : CGRect(
+                        x: 0,
+                        y: max(0, offset + view.textContainerInset.top),
+                        width: max(view.textContainer.size.width, 1),
+                        height: pageHeight
+                    )
                 let glyphRange = view.layoutManager.glyphRange(
                     forBoundingRect: rect,
                     in: view.textContainer
@@ -772,7 +958,10 @@ struct ReaderTextView: UIViewRepresentable {
             if isAutoReading { resetAutoReadForPageChange() }
             let pageHeight = readingViewportHeight(for: view)
             let (minimum, maximum) = scrollLimits(for: view)
-            let target = min(max(view.contentOffset.y + CGFloat(direction) * pageHeight, minimum), maximum)
+            let base = pageBreaker.isEnabled
+                ? minimum + CGFloat(pagedIndex(for: view.contentOffset.y, in: view)) * pageHeight
+                : view.contentOffset.y
+            let target = min(max(base + CGFloat(direction) * pageHeight, minimum), maximum)
             if direction < 0, view.contentOffset.y <= minimum + 0.5 {
                 parent.onReachedStart(contentCharacter(at: view.contentOffset, in: view))
                 return

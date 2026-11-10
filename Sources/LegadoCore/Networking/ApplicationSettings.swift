@@ -8,9 +8,13 @@ public struct ApplicationSettings: Codable, Equatable, Sendable {
     public var timeoutSeconds = 0
     public var concurrentSources = 32
     public var chapterCacheMB = 256
-    public var prefetchChapters = 1
+    public var prefetchChapters = ApplicationSettings.defaultPrefetchChapters
     public var recordLog = false
     public var ignoreCertificateErrors = true
+
+    public static let defaultPrefetchChapters = 10
+    /// The default before readable chapters were prefetched in a window.
+    public static let legacyDefaultPrefetchChapters = 1
 
     public init() {}
 
@@ -104,11 +108,25 @@ public final class ApplicationSettingsStore: @unchecked Sendable {
 
     public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
 
+    public static let prefetchMigrationKey = "legado.applicationSettings.prefetchDefaultMigrated"
+
     public var settings: ApplicationSettings {
         guard let data = defaults.data(forKey: Self.key),
               let value = try? JSONDecoder().decode(ApplicationSettings.self, from: data),
               let validated = try? value.validated() else { return .init() }
-        return validated
+        return migratePrefetchDefaultIfNeeded(validated)
+    }
+
+    /// Moves the old default (1 chapter) to the new default exactly once.
+    /// "Off" (0) and every other value the user picked are kept.
+    private func migratePrefetchDefaultIfNeeded(_ value: ApplicationSettings) -> ApplicationSettings {
+        guard !defaults.bool(forKey: Self.prefetchMigrationKey) else { return value }
+        defaults.set(true, forKey: Self.prefetchMigrationKey)
+        guard value.prefetchChapters == ApplicationSettings.legacyDefaultPrefetchChapters else { return value }
+        var migrated = value
+        migrated.prefetchChapters = ApplicationSettings.defaultPrefetchChapters
+        if let data = try? JSONEncoder().encode(migrated) { defaults.set(data, forKey: Self.key) }
+        return migrated
     }
 
     public func save(_ settings: ApplicationSettings) throws {

@@ -337,3 +337,64 @@ final class ReaderScrollGeometryTests: XCTestCase {
               onPageChanged: {}, onTapAction: { _ in })
     }
 }
+
+@MainActor
+final class ReaderPageBreakTests: XCTestCase {
+    func testLineCrossingBandEndMovesToNextPage() {
+        // stride 700, visible band 640: a line from 630 to 655 would be cut.
+        XCTAssertEqual(ReaderPageBreaker.adjustedLineOrigin(minY: 630, glyphBottom: 655, stride: 700, band: 640), 700)
+        // A line that ends inside the band stays.
+        XCTAssertEqual(ReaderPageBreaker.adjustedLineOrigin(minY: 600, glyphBottom: 639, stride: 700, band: 640), 600)
+        // A line that starts in the padding gap moves to the next page.
+        XCTAssertEqual(ReaderPageBreaker.adjustedLineOrigin(minY: 650, glyphBottom: 670, stride: 700, band: 640), 700)
+        // Disabled breaker leaves layout untouched.
+        XCTAssertEqual(ReaderPageBreaker.adjustedLineOrigin(minY: 630, glyphBottom: 655, stride: 0, band: 0), 630)
+    }
+
+    /// Lays out real text at several font sizes, line spacings and paddings
+    /// and checks that no line fragment crosses a page band.
+    func testNoLineIsSplitAcrossPagesForVariousTypography() {
+        let paragraph = String(repeating: "这是一段用于检查分页的正文，包含足够多的文字以产生很多行。", count: 6)
+        let text = Array(repeating: paragraph, count: 40).joined(separator: "\n")
+        for fontSize in [15.0, 17.0, 19.5, 23.0, 28.0] {
+            for lineSpacing in [0.0, 3.5, 7.0, 12.0] {
+                for (top, bottom) in [(12.0, 12.0), (30.0, 18.0), (47.0, 33.0)] {
+                    let storage = NSTextStorage()
+                    let manager = NSLayoutManager()
+                    manager.allowsNonContiguousLayout = false
+                    storage.addLayoutManager(manager)
+                    let container = NSTextContainer(size: CGSize(width: 343, height: .greatestFiniteMagnitude))
+                    container.lineFragmentPadding = 4
+                    manager.addTextContainer(container)
+                    let breaker = ReaderPageBreaker()
+                    let stride: CGFloat = 703
+                    breaker.stride = stride
+                    breaker.band = stride - CGFloat(top) - CGFloat(bottom)
+                    manager.delegate = breaker
+                    let style = NSMutableParagraphStyle()
+                    style.lineSpacing = CGFloat(lineSpacing)
+                    style.paragraphSpacing = CGFloat(lineSpacing) * 1.5
+                    let font = UIFont.systemFont(ofSize: CGFloat(fontSize))
+                    storage.setAttributedString(NSAttributedString(string: text, attributes: [.font: font, .paragraphStyle: style]))
+                    manager.ensureLayout(for: container)
+                    var glyph = 0
+                    var lines = 0
+                    while glyph < manager.numberOfGlyphs {
+                        var range = NSRange()
+                        let rect = manager.lineFragmentRect(forGlyphAt: glyph, effectiveRange: &range)
+                        let glyphBottom = rect.minY + manager.location(forGlyphAt: glyph).y + abs(font.descender)
+                        let page = floor((rect.minY + 0.01) / stride)
+                        let bandEnd = page * stride + breaker.band
+                        XCTAssertLessThanOrEqual(
+                            glyphBottom, bandEnd + 0.5,
+                            "font \(fontSize) spacing \(lineSpacing) padding \(top)/\(bottom): line \(lines) crosses page \(Int(page))"
+                        )
+                        glyph = NSMaxRange(range)
+                        lines += 1
+                    }
+                    XCTAssertGreaterThan(lines, 50)
+                }
+            }
+        }
+    }
+}

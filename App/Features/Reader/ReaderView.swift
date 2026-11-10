@@ -244,6 +244,7 @@ struct ReaderView: View {
             }
         }
         .onDisappear {
+            model.cancelPreload()
             isAutoReading = false
             UIApplication.shared.isIdleTimerDisabled = false
             if speech.isSpeaking || speech.isPaused { speech.toggle(text: "") }
@@ -314,7 +315,7 @@ struct ReaderView: View {
             readerJumpPosition = nil
             readerPageRanges = []
             if needsInitialPosition { readerPosition = model.requestedPosition }
-            await model.load(rules: model.usesReplaceRules ? replaceRules.rules : [], prefetchNextChapter: pageAnimation != 3)
+            await model.load(rules: model.usesReplaceRules ? replaceRules.rules : [], prefetchNextChapter: true)
             guard !Task.isCancelled else { return }
             if needsInitialPosition {
                 readerPosition = pageAnimation == 3

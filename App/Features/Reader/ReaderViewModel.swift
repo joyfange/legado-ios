@@ -52,6 +52,10 @@ final class ReaderViewModel: ObservableObject {
     private let localService: LocalBookService
     private let sanitizer = ContentSanitizer()
     private let contentCoordinator: ChapterContentCoordinator
+    private var preloadTask: Task<Void, Never>?
+    private var preloadAnchor: Int?
+    /// Indices the current preload window covers, for tests and diagnostics.
+    private(set) var preloadWindow: [Int] = []
     private var demoChapterContent: String?
     private var previousLoadedIndex: Int?
     private var continuationLoadedIndex: Int?
@@ -142,6 +146,7 @@ final class ReaderViewModel: ObservableObject {
     }
 
     private func setContinuousChapter(_ chapter: ReaderScrollChapter) {
+        if let source, demoChapterContent == nil { schedulePreload(after: chapter.id, source: source) }
         currentIndex = chapter.id
         title = chapter.title
         content = chapter.content
@@ -300,7 +305,9 @@ final class ReaderViewModel: ObservableObject {
         }
         guard requestedGeneration == chapterLoadGeneration, !Task.isCancelled else { return }
         loadedFromCache = fromCache
-        if prefetchNextChapter, !fromCache, let source { schedulePreload(after: requestedIndex, source: source) }
+        // Prefetch whether or not this chapter itself came from the cache;
+        // otherwise reading a cached chapter stalls on every later one.
+        if prefetchNextChapter, demoChapterContent == nil, let source { schedulePreload(after: requestedIndex, source: source) }
         hasLoadedCurrentChapter = true
         var effectiveChapter = chapter
         if let resolvedTitle = report.title { effectiveChapter.title = resolvedTitle }
@@ -494,6 +501,7 @@ final class ReaderViewModel: ObservableObject {
         let oldTitle = title
         let oldContent = content
         let promotedContentResolved = isContinuationWindowReady
+        if let source, demoChapterContent == nil { schedulePreload(after: value, source: source) }
         currentIndex = value
         title = continuationTitle.isEmpty ? chapters[value].title : continuationTitle
         content = continuationContent
@@ -520,6 +528,7 @@ final class ReaderViewModel: ObservableObject {
         let oldTitle = title
         let oldContent = content
         let promotedContentResolved = isPreviousWindowReady
+        if let source, demoChapterContent == nil { schedulePreload(after: value, source: source) }
         currentIndex = value
         title = previousTitle.isEmpty ? chapters[value].title : previousTitle
         content = previousContent
@@ -542,6 +551,7 @@ final class ReaderViewModel: ObservableObject {
 
     func select(index: Int, position: Int = 0) {
         guard chapters.indices.contains(index), !chapters[index].isVolume else { return }
+        if index != currentIndex { cancelPreload() }
         currentIndex = index
         pendingSourceContent = nil
         title = chapters[index].title
@@ -594,11 +604,31 @@ final class ReaderViewModel: ObservableObject {
         return nil
     }
 
+    /// Stops the running preload window (leaving the reader or jumping
+    /// elsewhere). A chapter request already shared with the foreground
+    /// keeps running for the foreground.
+    func cancelPreload() {
+        preloadTask?.cancel()
+        preloadTask = nil
+        preloadAnchor = nil
+        preloadWindow = []
+    }
+
     private func schedulePreload(after index: Int, source: BookSource) {
         let count = ApplicationSettingsStore.shared.settings.prefetchChapters
+        // Readable chapters only: volume headings are skipped by the planner,
+        // and the window shrinks naturally near the end of the book.
         let jobs = ChapterCachePlanner.plan(chapters: chapters, startIndex: index + 1, limit: count)
-        guard index + 1 < chapters.count, !jobs.isEmpty else { return }
-        Task { [book, contentCoordinator] in
+        guard count > 0, index + 1 < chapters.count, !jobs.isEmpty else {
+            cancelPreload()
+            return
+        }
+        guard preloadAnchor != index || preloadTask == nil else { return }
+        preloadTask?.cancel()
+        preloadAnchor = index
+        let urls = jobs.map(\.chapter.url)
+        preloadWindow = urls.compactMap { url in chapters.firstIndex(where: { $0.url == url }) }
+        preloadTask = Task { [book, contentCoordinator] in
             for job in jobs {
                 guard !Task.isCancelled else { return }
                 await contentCoordinator.prefetch(book: book, chapter: job.chapter, source: source, nextChapterURL: job.nextChapterURL)
