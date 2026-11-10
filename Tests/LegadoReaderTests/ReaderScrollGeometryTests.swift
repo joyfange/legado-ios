@@ -363,7 +363,7 @@ final class ReaderPageBreakTests: XCTestCase {
                     let manager = NSLayoutManager()
                     manager.allowsNonContiguousLayout = false
                     storage.addLayoutManager(manager)
-                    let container = NSTextContainer(size: CGSize(width: 343, height: .greatestFiniteMagnitude))
+                    let container = NSTextContainer(size: CGSize(width: 343, height: CGFloat.greatestFiniteMagnitude))
                     container.lineFragmentPadding = 4
                     manager.addTextContainer(container)
                     let breaker = ReaderPageBreaker()
