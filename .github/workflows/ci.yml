@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: 测试（核心 + 阅读器）
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: 选择 Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] && sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - name: 缓存 SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: |
+            .build
+            DerivedData/SourcePackages
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Legado.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      - name: 核心与页面模型测试（swift test）
+        run: swift test --disable-sandbox 2>&1 | tail -n 200
+        shell: bash -o pipefail {0}
+      - name: 选择模拟器
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];c=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')];print(c[-1]['udid'])")
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$UDID" || true
+      - name: 阅读器测试（翻页 / 阅读位置 / 排版 / 预加载）
+        run: |
+          set -o pipefail
+          xcodebuild -project Legado.xcodeproj -scheme LegadoReaderTests \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath DerivedData \
+            -collect-test-diagnostics never CODE_SIGNING_ALLOWED=NO test 2>&1 | tee reader-tests.log | grep -E "(error:|Test Case|Executed|\*\* TEST)" | tail -n 300
+      - name: 上传测试日志
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: reader-tests.log
+
+  build:
+    name: 构建 iPhone 安装包
+    needs: test
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: 选择 Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] && sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - name: 编译（未签名）
+        run: |
+          set -o pipefail
+          xcodebuild -project Legado.xcodeproj -scheme Legado -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build 2>&1 | grep -E "(error:|warning: unre|\*\* BUILD)" | tail -n 100
+      - name: 打包 IPA
+        run: |
+          APP=$(find DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name '*.app' | head -1)
+          mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry Legado-unsigned.ipa Payload
+          ls -lh Legado-unsigned.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Legado-unsigned-${{ github.sha }}
+          path: Legado-unsigned.ipa
