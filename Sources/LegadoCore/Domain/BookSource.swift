@@ -79,33 +79,33 @@ public struct BookSource: Codable, Hashable, Identifiable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
-        bookSourceUrl = try values.decodeIfPresent(String.self, forKey: .bookSourceUrl) ?? ""
-        bookSourceName = try values.decodeIfPresent(String.self, forKey: .bookSourceName) ?? ""
-        bookSourceGroup = try values.decodeIfPresent(String.self, forKey: .bookSourceGroup)
+        bookSourceUrl = values.decodeLossyString(forKey: .bookSourceUrl) ?? ""
+        bookSourceName = values.decodeLossyString(forKey: .bookSourceName) ?? ""
+        bookSourceGroup = values.decodeLossyString(forKey: .bookSourceGroup)
         bookSourceType = try values.decodeLossyInt(forKey: .bookSourceType) ?? 0
-        bookUrlPattern = try values.decodeIfPresent(String.self, forKey: .bookUrlPattern)
+        bookUrlPattern = values.decodeLossyString(forKey: .bookUrlPattern)
         customOrder = try values.decodeLossyInt(forKey: .customOrder) ?? 0
         enabled = try values.decodeLossyBool(forKey: .enabled) ?? true
         enabledExplore = try values.decodeLossyBool(forKey: .enabledExplore) ?? true
-        jsLib = try values.decodeIfPresent(String.self, forKey: .jsLib)
+        jsLib = values.decodeLossyString(forKey: .jsLib)
         enabledCookieJar = values.contains(.enabledCookieJar)
             ? try values.decodeLossyBool(forKey: .enabledCookieJar)
             : true
-        concurrentRate = try values.decodeIfPresent(String.self, forKey: .concurrentRate)
-        header = try values.decodeIfPresent(String.self, forKey: .header)
-        loginUrl = try values.decodeIfPresent(String.self, forKey: .loginUrl)
-        loginUi = try values.decodeIfPresent(String.self, forKey: .loginUi)
-        loginCheckJs = try values.decodeIfPresent(String.self, forKey: .loginCheckJs)
-        coverDecodeJs = try values.decodeIfPresent(String.self, forKey: .coverDecodeJs)
-        bookSourceComment = try values.decodeIfPresent(String.self, forKey: .bookSourceComment)
-        variableComment = try values.decodeIfPresent(String.self, forKey: .variableComment)
+        concurrentRate = values.decodeLossyString(forKey: .concurrentRate)
+        header = values.decodeLossyString(forKey: .header)
+        loginUrl = values.decodeLossyString(forKey: .loginUrl)
+        loginUi = values.decodeLossyString(forKey: .loginUi)
+        loginCheckJs = values.decodeLossyString(forKey: .loginCheckJs)
+        coverDecodeJs = values.decodeLossyString(forKey: .coverDecodeJs)
+        bookSourceComment = values.decodeLossyString(forKey: .bookSourceComment)
+        variableComment = values.decodeLossyString(forKey: .variableComment)
         lastUpdateTime = try values.decodeLossyInt64(forKey: .lastUpdateTime) ?? 0
         respondTime = try values.decodeLossyInt64(forKey: .respondTime) ?? 180_000
         weight = try values.decodeLossyInt(forKey: .weight) ?? 0
-        exploreUrl = try values.decodeIfPresent(String.self, forKey: .exploreUrl)
-        exploreScreen = try values.decodeIfPresent(String.self, forKey: .exploreScreen)
+        exploreUrl = values.decodeLossyString(forKey: .exploreUrl)
+        exploreScreen = values.decodeLossyString(forKey: .exploreScreen)
         ruleExplore = try values.decodeFlexible(ExploreRule.self, forKey: .ruleExplore)
-        searchUrl = try values.decodeIfPresent(String.self, forKey: .searchUrl)
+        searchUrl = values.decodeLossyString(forKey: .searchUrl)
         ruleSearch = try values.decodeFlexible(SearchRule.self, forKey: .ruleSearch)
         ruleBookInfo = try values.decodeFlexible(BookInfoRule.self, forKey: .ruleBookInfo)
         ruleToc = try values.decodeFlexible(TocRule.self, forKey: .ruleToc)
@@ -222,16 +222,34 @@ public extension BookSource {
 
 private extension KeyedDecodingContainer {
     func decodeFlexible<T: Decodable>(_ type: T.Type, forKey key: Key) throws -> T? {
-        guard contains(key), try !decodeNil(forKey: key) else { return nil }
+        // Android Legado tolerates `[]`, `""` or malformed rule blocks and
+        // treats them as empty; never reject a whole source over one block.
+        guard contains(key), (try? decodeNil(forKey: key)) != true else { return nil }
         if let value = try? decode(T.self, forKey: key) {
             return value
         }
-        let json = try decode(String.self, forKey: key)
-        guard !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        guard let json = try? decode(String.self, forKey: key),
+              !json.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let data = json.data(using: .utf8) else {
             return nil
         }
-        return try JSONDecoder().decode(T.self, from: data)
+        return try? JSONDecoder().decode(T.self, from: data)
+    }
+
+    /// Strings in hand-edited sources are sometimes numbers, booleans, or
+    /// inline JSON (e.g. `exploreUrl` as an array). Keep them as text.
+    func decodeLossyString(forKey key: Key) -> String? {
+        guard contains(key), (try? decodeNil(forKey: key)) != true else { return nil }
+        if let value = try? decode(String.self, forKey: key) { return value }
+        if let value = try? decode(JSONValue.self, forKey: key) {
+            switch value {
+            case .string(let text): return text
+            case .null: return nil
+            default:
+                if let data = try? JSONEncoder().encode(value) { return String(decoding: data, as: UTF8.self) }
+            }
+        }
+        return nil
     }
 
     func decodeLossyBool(forKey key: Key) throws -> Bool? {
