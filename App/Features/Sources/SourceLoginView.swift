@@ -350,12 +350,29 @@ struct SourceLoginUIRow: Identifiable, Equatable {
     var fullWidth: Bool
     var id: String { type + "|" + name }
 
-    var title: String {
-        guard var text = viewName?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return name }
-        if text.count >= 2, let first = text.first, first == text.last, first == "'" || first == "\"" {
-            text = String(text.dropFirst().dropLast())
-        }
+    /// 安卓把 viewName（没有时用 name）当 JS 表达式求值，例如
+    /// `'🌐 当前线路：'+(source.get('sqWeb')||'…')`。单纯的字符串字面量直接去引号。
+    var rawTitle: String {
+        let text = (viewName?.trimmingCharacters(in: .whitespaces)).flatMap { $0.isEmpty ? nil : $0 } ?? name
         return text.trimmingCharacters(in: .whitespaces)
+    }
+
+    var titleExpression: String? {
+        let text = rawTitle
+        guard let first = text.first, first == "'" || first == "\"" else { return nil }
+        if Self.isPlainLiteral(text) { return nil }
+        return text
+    }
+
+    var title: String {
+        let text = rawTitle
+        if Self.isPlainLiteral(text) { return String(text.dropFirst().dropLast()).trimmingCharacters(in: .whitespaces) }
+        return text
+    }
+
+    static func isPlainLiteral(_ text: String) -> Bool {
+        guard text.count >= 2, let first = text.first, first == text.last, first == "'" || first == "\"" else { return false }
+        return !text.dropFirst().dropLast().contains(first)
     }
 
     static func parse(_ raw: String?) -> [SourceLoginUIRow] {
@@ -385,6 +402,7 @@ struct SourceLoginFormView: View {
     @State private var values: [String: String] = [:]
     @State private var status: String?
     @State private var isRunning = false
+    @State private var titles: [String: String] = [:]
 
     var body: some View {
         Form {
@@ -413,6 +431,28 @@ struct SourceLoginFormView: View {
             }
         }
         .onAppear(perform: loadValues)
+        .task { await evaluateTitles() }
+    }
+
+    private func title(_ row: SourceLoginUIRow) -> String { titles[row.id] ?? row.title }
+
+    /// 一次执行所有需要求值的标题，避免逐行重复加载 jsLib。
+    private func evaluateTitles() async {
+        let dynamic = rows.filter { $0.titleExpression != nil }
+        guard !dynamic.isEmpty else { return }
+        let parts = dynamic.map { "(function(){try{var v=(\($0.titleExpression!));return v==null?null:String(v)}catch(e){return null}})()" }
+        let script = "JSON.stringify([" + parts.joined(separator: ",") + "])"
+        var info: [String: JSONValue] = [:]
+        for row in rows where row.type != "button" { info[row.name] = .string(values[row.name] ?? row.defaultValue) }
+        guard let result = try? await JavaScriptRuleEvaluator(maximumScriptLength: 8 * 1_024 * 1_024)
+            .evaluateAsync(script: script, result: .object(info), executionContext: .init(baseURL: source.bookSourceUrl, source: source)),
+              let data = result.value.stringValue.data(using: .utf8),
+              let array = try? JSONSerialization.jsonObject(with: data) as? [Any] else { return }
+        var next = titles
+        for (row, value) in zip(dynamic, array) {
+            if let text = value as? String, !text.isEmpty { next[row.id] = text.trimmingCharacters(in: .whitespaces) }
+        }
+        titles = next
     }
 
     /// 没有 action 的 button 在安卓上通常是分组标题。
@@ -423,7 +463,7 @@ struct SourceLoginFormView: View {
         for row in rows {
             if row.type == "button", row.action == nil {
                 if !current.isEmpty || !header.isEmpty { result.append((header, current)) }
-                header = row.title
+                header = title(row)
                 current = []
             } else {
                 current.append(row)
@@ -436,7 +476,7 @@ struct SourceLoginFormView: View {
     @ViewBuilder private func rowView(_ row: SourceLoginUIRow) -> some View {
         switch row.type {
         case "toggle" where row.chars.count == 2 || row.chars.isEmpty:
-            Toggle(row.title, isOn: Binding(
+            Toggle(title(row), isOn: Binding(
                 get: {
                     let on = row.chars.last ?? "✅"
                     let value = values[row.name] ?? row.defaultValue
@@ -450,7 +490,7 @@ struct SourceLoginFormView: View {
                 }
             ))
         case "toggle":
-            Picker(row.title, selection: Binding(
+            Picker(title(row), selection: Binding(
                 get: { values[row.name] ?? row.defaultValue },
                 set: {
                     values[row.name] = $0
@@ -461,7 +501,7 @@ struct SourceLoginFormView: View {
                 ForEach(row.chars, id: \.self) { Text($0).tag($0) }
             }
         case "select":
-            Picker(row.title, selection: Binding(
+            Picker(title(row), selection: Binding(
                 get: { values[row.name] ?? row.defaultValue },
                 set: {
                     values[row.name] = $0
@@ -472,13 +512,13 @@ struct SourceLoginFormView: View {
                 ForEach(row.chars, id: \.self) { Text($0).tag($0) }
             }
         case "button":
-            Button(row.title) {
+            Button(title(row)) {
                 if let action = row.action { Task { await run(action) } }
             }
         default:
             if isLongField(row) {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(row.title)
+                    Text(title(row))
                     TextEditor(text: binding(row))
                         .font(.system(.footnote, design: .monospaced))
                         .frame(minHeight: 90)
@@ -487,7 +527,7 @@ struct SourceLoginFormView: View {
                 .padding(.vertical, 4)
             } else if isColorField(row) {
                 HStack {
-                    Text(row.title)
+                    Text(title(row))
                     Spacer()
                     TextField(row.defaultValue, text: binding(row))
                         .multilineTextAlignment(.trailing)
@@ -499,12 +539,12 @@ struct SourceLoginFormView: View {
                 }
             } else if row.type == "password" {
                 HStack {
-                    Text(row.title)
+                    Text(title(row))
                     SecureField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
                 }
             } else {
                 HStack {
-                    Text(row.title)
+                    Text(title(row))
                     TextField(row.defaultValue, text: binding(row))
                         .multilineTextAlignment(.trailing)
                         .disableAutocorrection(true)
@@ -601,6 +641,7 @@ struct SourceLoginFormView: View {
         } catch {
             status = "执行失败：\(error.localizedDescription)"
         }
+        await evaluateTitles()
     }
 
     private func saveAndLogin() async {

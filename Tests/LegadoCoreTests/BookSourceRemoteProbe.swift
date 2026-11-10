@@ -150,4 +150,26 @@ private actor ProbeTransport: HTTPTransport {
         }
     }
 
+    /// 从发现页打开一本书：详情 → 目录，和详情页首次加载走同一条路。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LEGADO_REVIEW_PROBE_FILE"] != nil))
+    func sampleExploreDetailToc() async throws {
+        let path = try #require(ProcessInfo.processInfo.environment["LEGADO_REVIEW_PROBE_FILE"])
+        let sources = try BookSourceImporter().decode(Data(contentsOf: URL(fileURLWithPath: path)))
+        let transport = ProbeTransport()
+        let explore = BookExploreService(transport: transport)
+        let service = NetworkBookService(transport: transport)
+        for source in sources {
+            let kinds = await explore.kinds(for: source)
+            for kind in kinds.kinds.filter({ !($0.url ?? "").isEmpty }).prefix(2) {
+                let outcome = await explore.explore(source: source, kind: kind, page: 1)
+                for book in outcome.books.prefix(3) {
+                    let detail = await service.loadDetail(searchBook: book, source: source)
+                    let coordinator = BookUpdateCoordinator(repository: InMemoryBookChapterRepository(), loader: service)
+                    let toc = await coordinator.refresh(book: detail.book, source: source)
+                    print("EXPLORE_TOC [\(kind.title)] \(book.name) bookUrl=\(book.bookURL.prefix(160)) tocUrl=\(detail.book.tocUrl.prefix(200)) chapters=\(toc.chapters.count) detailDiag=\(detail.diagnostics.map { "\($0.severity):\($0.code):\($0.message.prefix(200))" }) tocDiag=\(toc.diagnostics.map { "\($0.severity):\($0.code):\($0.message.prefix(200))" })")
+                }
+            }
+        }
+    }
+
 }
