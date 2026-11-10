@@ -423,7 +423,7 @@ enum ReaderInlineMarkup {
     }
 
     /// Replaces each marker inside `range` without changing the text length.
-    static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor, showsBubbles: Bool = true) {
+    static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor, showsBubbles: Bool = true, bubbleStyle: Int = 0, bubbleAccent: Bool = false) {
         guard let expression = tagExpression, range.length > 0,
               containsMarkup((text.string as NSString).substring(with: range)) else { return }
         let matches = expression.matches(in: text.string, range: range)
@@ -438,10 +438,10 @@ enum ReaderInlineMarkup {
                 text.removeAttribute(.underlineStyle, range: match.range)
                 continue
             case .bubble(let bubble):
-                image = bubbleImage(text: bubble.text, font: font, color: bubble.color ?? (bubble.emphasis ? accent : foreground))
+                image = bubbleImage(text: bubble.text, font: font, color: bubble.color ?? (bubble.emphasis || bubbleAccent ? accent : foreground), style: bubbleStyle)
                 link = bubble.url
             case .image(let url):
-                image = bubbleImage(text: "插图", font: font, color: foreground)
+                image = bubbleImage(text: "插图", font: font, color: foreground, style: 0)
                 link = url
             }
             let attachment = NSTextAttachment()
@@ -466,22 +466,58 @@ enum ReaderInlineMarkup {
         }
     }
 
-    static func bubbleImage(text: String, font: UIFont, color: UIColor) -> UIImage {
+    /// 0 描边胶囊（默认）· 1 实心糖果 · 2 方角标签 · 3 对话气泡
+    static let bubbleStyleNames = ["描边胶囊", "实心糖果", "方角标签", "对话气泡"]
+
+    private static let imageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 300
+        return cache
+    }()
+
+    static func bubbleImage(text: String, font: UIFont, color: UIColor, style: Int = 0) -> UIImage {
+        let key = "\(text)|\(font.pointSize)|\(color.readerHex)|\(style)" as NSString
+        if let cached = imageCache.object(forKey: key) { return cached }
+        let image = renderBubble(text: text, font: font, color: color, style: style)
+        imageCache.setObject(image, forKey: key)
+        return image
+    }
+
+    private static func renderBubble(text: String, font: UIFont, color: UIColor, style: Int) -> UIImage {
         let labelFont = UIFont.systemFont(ofSize: max(9, font.pointSize * 0.58), weight: .semibold)
-        let attributes: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: color]
+        let textColor = style == 1 ? UIColor.white : color
+        let attributes: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: textColor]
         let textSize = (text as NSString).size(withAttributes: attributes)
         let height = ceil(labelFont.lineHeight + 4)
-        let size = CGSize(width: ceil(max(textSize.width + 12, height + 4)) + 4, height: height)
+        let tail: CGFloat = style == 3 ? 4 : 0
+        let size = CGSize(width: ceil(max(textSize.width + 12, height + 4)) + 4, height: height + tail)
         return UIGraphicsImageRenderer(size: size).image { _ in
-            let bubble = CGRect(x: 4, y: 0, width: size.width - 4, height: size.height)
-            let path = UIBezierPath(roundedRect: bubble, cornerRadius: size.height / 2)
-            color.withAlphaComponent(0.12).setFill()
-            path.fill()
-            color.withAlphaComponent(0.55).setStroke()
-            path.lineWidth = 0.8
-            path.stroke()
+            let bubble = CGRect(x: 4, y: 0, width: size.width - 4, height: height)
+            let path: UIBezierPath
+            switch style {
+            case 2: path = UIBezierPath(roundedRect: bubble, cornerRadius: 3)
+            case 3:
+                path = UIBezierPath(roundedRect: bubble, cornerRadius: height / 2)
+                let tip = UIBezierPath()
+                tip.move(to: CGPoint(x: bubble.minX + 5, y: bubble.maxY - 2))
+                tip.addLine(to: CGPoint(x: bubble.minX + 3, y: size.height))
+                tip.addLine(to: CGPoint(x: bubble.minX + 11, y: bubble.maxY - 1))
+                tip.close()
+                path.append(tip)
+            default: path = UIBezierPath(roundedRect: bubble, cornerRadius: height / 2)
+            }
+            if style == 1 {
+                color.withAlphaComponent(0.85).setFill()
+                path.fill()
+            } else {
+                color.withAlphaComponent(0.12).setFill()
+                path.fill()
+                color.withAlphaComponent(0.55).setStroke()
+                path.lineWidth = 0.8
+                path.stroke()
+            }
             (text as NSString).draw(
-                at: CGPoint(x: bubble.midX - textSize.width / 2, y: (size.height - textSize.height) / 2),
+                at: CGPoint(x: bubble.midX - textSize.width / 2, y: (height - textSize.height) / 2),
                 withAttributes: attributes
             )
         }

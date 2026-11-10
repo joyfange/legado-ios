@@ -160,6 +160,8 @@ struct ReaderTextView: UIViewRepresentable {
     /// Opens a 段评 page or an illustration tapped inside the text.
     var onOpenLink: ((URL) -> Void)? = nil
     var showsReviewBubbles: Bool = true
+    var reviewBubbleStyle: Int = 0
+    var reviewBubbleAccent: Bool = false
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -235,7 +237,7 @@ struct ReaderTextView: UIViewRepresentable {
         let adjacentContentKey = "\(showsPrevious)|\(previousTitle ?? "")|\(previousText)|\(showsContinuation)|\(continuationTitle ?? "")|\(continuationText)".hashValue
         let displaysTitle = titleMode != 2 || isVolume
         let titlePrefix = displaysTitle && !title.isEmpty ? title + "\n" : ""
-        let styleKey = "\(contentKey)|\(adjacentContentKey)|\(title)|\(isVolume)|\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(headerInset)|\(footerInset)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(isSelectable)|\(fullJustify)|\(effectivePageAnimation)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)"
+        let styleKey = "\(contentKey)|\(adjacentContentKey)|\(title)|\(isVolume)|\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(headerInset)|\(footerInset)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(isSelectable)|\(fullJustify)|\(effectivePageAnimation)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)"
         if context.coordinator.styleKey != styleKey {
             if context.coordinator.shouldDeferRender(in: view) {
                 context.coordinator.needsDeferredRender = true
@@ -300,7 +302,9 @@ struct ReaderTextView: UIViewRepresentable {
                     font: bodyFont,
                     foreground: foregroundColor,
                     accent: .systemOrange,
-                    showsBubbles: showsReviewBubbles
+                    showsBubbles: showsReviewBubbles,
+                    bubbleStyle: reviewBubbleStyle,
+                    bubbleAccent: reviewBubbleAccent
                 )
             }
             context.coordinator.updatePageBreaker(in: view, invalidate: false)

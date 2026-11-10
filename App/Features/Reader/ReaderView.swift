@@ -53,6 +53,8 @@ struct ReaderView: View {
     @State private var chapterTurnToken = 0
     @State private var reviewPage: ReaderReviewPage?
     @AppStorage("showsReviewBubbles") private var showsReviewBubbles = true
+    @AppStorage("reviewBubbleStyle") private var reviewBubbleStyle = 0
+    @AppStorage("reviewBubbleAccent") private var reviewBubbleAccent = false
     @State private var chapterTurnDirection = 0
     @State private var isWaitingForPreviousChapter = false
     @State private var httpTTSEngines: [HttpTTS] = []
@@ -664,7 +666,9 @@ struct ReaderView: View {
             chapterTurnToken: chapterTurnToken,
             chapterTurnDirection: chapterTurnDirection,
             onOpenLink: { url in reviewPage = ReaderReviewPage(url: url) },
-            showsReviewBubbles: showsReviewBubbles
+            showsReviewBubbles: showsReviewBubbles,
+            reviewBubbleStyle: reviewBubbleStyle,
+            reviewBubbleAccent: reviewBubbleAccent
         )
     }
 
@@ -1346,6 +1350,14 @@ struct ReaderView: View {
 
                 Section {
                     Toggle("显示段评气泡", isOn: $showsReviewBubbles)
+                    if showsReviewBubbles {
+                        Picker("气泡样式", selection: $reviewBubbleStyle) {
+                            ForEach(ReaderInlineMarkup.bubbleStyleNames.indices, id: \.self) { index in
+                                Text(ReaderInlineMarkup.bubbleStyleNames[index]).tag(index)
+                            }
+                        }
+                        Toggle("气泡使用强调色", isOn: $reviewBubbleAccent)
+                    }
                 } header: {
                     Text("段评")
                 } footer: {

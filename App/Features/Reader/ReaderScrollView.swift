@@ -323,8 +323,12 @@ struct ReaderScrollView: UIViewRepresentable {
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view, !view.isDragging, !view.isDecelerating else { return }
             let point = gesture.location(in: view)
+            if let url = link(at: point, in: view), let open = parent.configuration.onOpenLink {
+                open(url)
+                return
+            }
             if let row = (view.collectionViewLayout as? ReaderContinuousLayout)?.row(at: point.y),
-               blocks[row].chapter.chapter.error != nil {
+               blocks.indices.contains(row), blocks[row].chapter.chapter.error != nil {
                 parent.configuration.onTapAction(0)
                 return
             }
@@ -335,6 +339,24 @@ struct ReaderScrollView: UIViewRepresentable {
             let actions = parent.configuration.clickActions
             let action = index == 4 ? 0 : (actions.indices.contains(index) ? actions[index] : 0)
             if action != 1, action != 2, action != -1 { parent.configuration.onTapAction(action) }
+        }
+
+        /// 段评气泡 / 插图标记的点击目标。
+        private func link(at point: CGPoint, in view: UICollectionView) -> URL? {
+            guard parent.configuration.onOpenLink != nil,
+                  let layout = view.collectionViewLayout as? ReaderContinuousLayout,
+                  let row = layout.row(at: point.y), blocks.indices.contains(row), layout.frames.indices.contains(row) else { return nil }
+            let block = blocks[row]
+            let frame = layout.frames[row]
+            let chapter = block.chapter
+            let location = CGPoint(x: point.x - frame.minX - chapter.left, y: point.y - frame.minY + block.top)
+            let glyph = chapter.manager.glyphIndex(for: location, in: chapter.container)
+            guard NSLocationInRange(glyph, block.glyphRange) else { return nil }
+            let rect = chapter.manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: chapter.container)
+            guard rect.insetBy(dx: -8, dy: -8).contains(location) else { return nil }
+            let character = chapter.manager.characterIndexForGlyph(at: glyph)
+            guard character < chapter.storage.length else { return nil }
+            return chapter.storage.attribute(.readerLink, at: character, effectiveRange: nil) as? URL
         }
 
         @objc private func step(_ link: CADisplayLink) {
@@ -489,7 +511,9 @@ final class ReaderScrollChapterLayout {
                 font: bodyFont,
                 foreground: configuration.foregroundColor,
                 accent: .systemOrange,
-                showsBubbles: configuration.showsReviewBubbles
+                showsBubbles: configuration.showsReviewBubbles,
+                bubbleStyle: configuration.reviewBubbleStyle,
+                bubbleAccent: configuration.reviewBubbleAccent
             )
         }
         storage = NSTextStorage(attributedString: attributed)
@@ -596,6 +620,6 @@ struct ReaderTypography {
 
 extension ReaderTextView {
     var scrollTypographyKey: String {
-        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)"
+        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)"
     }
 }
