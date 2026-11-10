@@ -153,6 +153,12 @@ struct ReaderTextView: UIViewRepresentable {
     var titleColor: UIColor? = nil
     /// Chapter titles are bold by default so they stand out from the body.
     var titleBold: Bool = true
+    /// Bumped by the reader for every page turn that crosses a chapter;
+    /// the direction (1 next, -1 previous) picks the slide direction.
+    var chapterTurnToken: Int = 0
+    var chapterTurnDirection: Int = 0
+    /// Opens a 段评 page or an illustration tapped inside the text.
+    var onOpenLink: ((URL) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -235,6 +241,15 @@ struct ReaderTextView: UIViewRepresentable {
                 return
             }
             let primaryContentChanged = context.coordinator.primaryContentKey != primaryContentKey
+            if primaryContentChanged,
+               let lastTurn = context.coordinator.lastChapterTurnToken,
+               lastTurn != chapterTurnToken,
+               chapterTurnDirection != 0,
+               effectivePageAnimation != 3,
+               effectivePageAnimation != 4 {
+                context.coordinator.beginChapterTurnTransition(in: view, direction: chapterTurnDirection)
+            }
+            context.coordinator.lastChapterTurnToken = chapterTurnToken
             let visiblePosition = context.coordinator.contentCharacter(at: view.contentOffset, in: view)
             context.coordinator.resetAutoReadForPageChange()
             context.coordinator.resetPageRangeRetry()
@@ -277,6 +292,15 @@ struct ReaderTextView: UIViewRepresentable {
                     attributes: bodyAttributes
                 ))
             }
+            if let bodyFont = bodyAttributes[.font] as? UIFont {
+                ReaderInlineMarkup.decorate(
+                    rendered,
+                    in: NSRange(location: 0, length: rendered.length),
+                    font: bodyFont,
+                    foreground: foregroundColor,
+                    accent: .systemOrange
+                )
+            }
             context.coordinator.updatePageBreaker(in: view, invalidate: false)
             context.coordinator.isApplyingContent = true
             view.attributedText = rendered
@@ -310,6 +334,9 @@ struct ReaderTextView: UIViewRepresentable {
         } else if jumpPosition == nil {
             context.coordinator.lastJumpPosition = nil
         }
+        if context.coordinator.lastChapterTurnToken == nil || context.coordinator.styleKey == styleKey {
+            context.coordinator.lastChapterTurnToken = chapterTurnToken
+        }
         context.coordinator.updateLoadingFooter(in: view, visible: isLoadingNextChapter)
         context.coordinator.updateAutoRead(
             isRunning: isAutoReading,
@@ -330,6 +357,38 @@ struct ReaderTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
         var parent: ReaderTextView
+        var lastChapterTurnToken: Int?
+        private weak var chapterTurnSnapshot: UIView?
+
+        /// Covers the reader with a picture of the page being left (its
+        /// background included) and slides it away once the next chapter's
+        /// first or last page is laid out underneath, so a chapter change
+        /// looks like an ordinary page turn with no blank or loading frame.
+        func beginChapterTurnTransition(in view: UITextView, direction: Int) {
+            guard let window = view.window, let container = view.superview,
+                  view.bounds.width > 1, view.bounds.height > 1 else { return }
+            let frameInWindow = view.convert(view.bounds, to: window)
+            guard let snapshot = window.resizableSnapshotView(
+                from: frameInWindow, afterScreenUpdates: false, withCapInsets: .zero
+            ) else { return }
+            chapterTurnSnapshot?.removeFromSuperview()
+            snapshot.frame = view.frame
+            snapshot.isUserInteractionEnabled = false
+            snapshot.layer.shadowColor = UIColor.black.cgColor
+            snapshot.layer.shadowOpacity = 0.18
+            snapshot.layer.shadowRadius = 8
+            snapshot.layer.shadowOffset = CGSize(width: direction > 0 ? 3 : -3, height: 0)
+            container.insertSubview(snapshot, aboveSubview: view)
+            chapterTurnSnapshot = snapshot
+            let distance = view.bounds.width + 12
+            DispatchQueue.main.async {
+                UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+                    snapshot.transform = CGAffineTransform(translationX: direction > 0 ? -distance : distance, y: 0)
+                } completion: { _ in
+                    snapshot.removeFromSuperview()
+                }
+            }
+        }
         var contentKey = 0
         var primaryContentKey = 0
         var styleKey = ""
@@ -948,6 +1007,10 @@ struct ReaderTextView: UIViewRepresentable {
             // gesture locations use that content coordinate space. Convert
             // back to viewport coordinates before dividing the visible screen
             // into the 3×3 tap grid.
+            if let link = link(at: point, in: view) {
+                parent.onOpenLink?(link)
+                return
+            }
             let viewportX = point.x - view.bounds.minX
             let viewportY = point.y - view.bounds.minY
             let column = min(max(Int(viewportX / max(view.bounds.width / 3, 1)), 0), 2)
@@ -966,6 +1029,18 @@ struct ReaderTextView: UIViewRepresentable {
             case -1: break
             default: parent.onTapAction(action)
             }
+        }
+
+        private func link(at point: CGPoint, in view: UITextView) -> URL? {
+            guard parent.onOpenLink != nil, view.textStorage.length > 0 else { return nil }
+            let location = CGPoint(x: point.x - view.textContainerInset.left, y: point.y - view.textContainerInset.top)
+            let manager = view.layoutManager
+            let glyph = manager.glyphIndex(for: location, in: view.textContainer)
+            let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer)
+            guard rect.insetBy(dx: -8, dy: -8).contains(location) else { return nil }
+            let character = manager.characterIndexForGlyph(at: glyph)
+            guard character < view.textStorage.length else { return nil }
+            return view.textStorage.attribute(.readerLink, at: character, effectiveRange: nil) as? URL
         }
 
         @objc private func swiped(_ gesture: UISwipeGestureRecognizer) {

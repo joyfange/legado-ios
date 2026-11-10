@@ -59,15 +59,27 @@ struct ChapterHTMLFormatter {
             let src = ["data-src", "data-original", "data-srcset", "src"]
                 .compactMap { try? element.attr($0) }.first { !$0.isEmpty } ?? ""
             let marker = "LEGADO_IMAGE_\(token)_\(index)"
-            let url = LegadoURLBuilder.resolve(src, against: baseURL)
+            // Paragraph-review bubbles (段评) stay inline at the end of their
+            // paragraph; real illustrations get a line of their own.
+            let inline = Self.isParagraphReviewMarker(src)
+            let url = (inline ? src : LegadoURLBuilder.resolve(src, against: baseURL))
                 .replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "\"", with: "&quot;")
             images[marker] = src.isEmpty ? "" : "<img src=\"\(url)\">"
-            protected.replaceSubrange(range, with: "\n\(marker)\n")
+            protected.replaceSubrange(range, with: inline ? marker : "\n\(marker)\n")
         }
         var result = MetadataTextSanitizer().clean(protected) ?? ""
         for (marker, image) in images { result = result.replacingOccurrences(of: marker, with: image) }
         return result
+    }
+
+    static func isParagraphReviewMarker(_ src: String) -> Bool {
+        let lower = src.lowercased()
+        if lower.hasPrefix("dp:") || lower.hasPrefix("bubble://") { return true }
+        guard let options = src.range(of: ",{") else { return false }
+        let json = src[src.index(after: options.lowerBound)...].lowercased()
+        return ["\"cmt\"", "\"comment\"", "\"review\"", "\"paragraph\"", "\"qd\"", "\"fqpl\"", "\"fanqie\"", "showcmt(", "showcomment("]
+            .contains { json.contains($0) }
     }
 }
 

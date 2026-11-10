@@ -50,6 +50,9 @@ struct ReaderView: View {
     @State private var totalPages = 1
     @State private var readerRenderRevision = 0
     @State private var isWaitingForNextChapter = false
+    @State private var chapterTurnToken = 0
+    @Environment(\.openURL) private var openURL
+    @State private var chapterTurnDirection = 0
     @State private var isWaitingForPreviousChapter = false
     @State private var httpTTSEngines: [HttpTTS] = []
     @State private var resumesSpeechAfterChapterLoad = false
@@ -612,6 +615,8 @@ struct ReaderView: View {
                     // Keep every chapter in its own TextKit document. Appending
                     // text here makes the absolute UTF-16 offset belong to the
                     // previous chapter while progress is saved under the next.
+                    chapterTurnDirection = 1
+                    chapterTurnToken &+= 1
                     model.goNext()
                     readerPosition = model.requestedPosition
                 } else {
@@ -628,6 +633,8 @@ struct ReaderView: View {
                 readerPosition = boundaryPosition
                 saveProgress(immediate: true)
                 readerJumpPosition = nil
+                chapterTurnDirection = -1
+                chapterTurnToken &+= 1
                 model.goPrevious(position: Int.max)
             },
             onEnteredPrevious: { position in
@@ -649,7 +656,10 @@ struct ReaderView: View {
             onPageChanged: pageDidChange,
             onTapAction: handleTapAction,
             titleColor: titleColorHex.isEmpty ? nil : UIColor(readerHex: titleColorHex),
-            titleBold: titleBold
+            titleBold: titleBold,
+            chapterTurnToken: chapterTurnToken,
+            chapterTurnDirection: chapterTurnDirection,
+            onOpenLink: { url in openURL(url) }
         )
     }
 

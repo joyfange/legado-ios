@@ -423,3 +423,31 @@ final class ReaderAppearanceTests: XCTestCase {
         defaults.removePersistentDomain(forName: "ReaderAppearanceTests")
     }
 }
+
+@MainActor
+final class ReaderInlineMarkupTests: XCTestCase {
+    func testParsesReviewBubbleForms() {
+        XCTAssertEqual(ReaderInlineMarkup.parse(src: "dp:12"), .bubble(.init(text: "12", color: nil, emphasis: false, url: nil)))
+        if case .bubble(let bubble) = ReaderInlineMarkup.parse(src: "bubble://paragraph?num=1200&status=emphasis") {
+            XCTAssertEqual(bubble.text, "1k+")
+            XCTAssertTrue(bubble.emphasis)
+        } else { XCTFail("expected bubble") }
+        if case .bubble(let bubble) = ReaderInlineMarkup.parse(src: "https://h/r.png,{&quot;type&quot;:&quot;cmt&quot;,&quot;click&quot;:&quot;java.showBrowser(url, html)&quot;}") {
+            XCTAssertEqual(bubble.text, "段评")
+            XCTAssertEqual(bubble.url?.absoluteString, "https://h/r.png")
+        } else { XCTFail("expected bubble") }
+        XCTAssertEqual(ReaderInlineMarkup.parse(src: "https://h/a.jpg"), .image(URL(string: "https://h/a.jpg")))
+    }
+
+    func testDecorateKeepsLengthAndHidesMarkup() {
+        let source = "　　他说完了。<img src=\"dp:5\">\n<img src=\"https://h/a.jpg\">\n下一段"
+        let text = NSMutableAttributedString(string: source, attributes: [.font: UIFont.systemFont(ofSize: 18)])
+        ReaderInlineMarkup.decorate(text, in: NSRange(location: 0, length: text.length),
+                                    font: UIFont.systemFont(ofSize: 18), foreground: .black, accent: .orange)
+        XCTAssertEqual(text.length, (source as NSString).length)
+        let bubbleStart = (source as NSString).range(of: "<img src=\"dp:5\">").location
+        XCTAssertNotNil(text.attribute(.attachment, at: bubbleStart, effectiveRange: nil))
+        let imageStart = (source as NSString).range(of: "<img src=\"https://h/a.jpg\">").location
+        XCTAssertEqual(text.attribute(.readerLink, at: imageStart + 3, effectiveRange: nil) as? URL, URL(string: "https://h/a.jpg"))
+    }
+}

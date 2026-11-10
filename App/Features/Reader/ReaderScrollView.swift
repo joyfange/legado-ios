@@ -478,9 +478,19 @@ final class ReaderScrollChapterLayout {
         if configuration.titleMode != 2, !chapter.title.isEmpty {
             attributed.append(NSAttributedString(string: chapter.title + "\n", attributes: typography.headingAttributes))
         }
-        bodyStart = attributed.length
+        let bodyLocation = attributed.length
+        bodyStart = bodyLocation
         let body = chapter.error.map { "本章加载失败\n\n\($0)\n\n轻点打开阅读菜单。\n" } ?? (chapter.content.isEmpty ? "本章暂无正文\n" : chapter.content)
         attributed.append(NSAttributedString(string: body, attributes: typography.bodyAttributes))
+        if let bodyFont = typography.bodyAttributes[.font] as? UIFont {
+            ReaderInlineMarkup.decorate(
+                attributed,
+                in: NSRange(location: bodyLocation, length: attributed.length - bodyLocation),
+                font: bodyFont,
+                foreground: configuration.foregroundColor,
+                accent: .systemOrange
+            )
+        }
         storage = NSTextStorage(attributedString: attributed)
         storage.addLayoutManager(manager)
         manager.addTextContainer(container)

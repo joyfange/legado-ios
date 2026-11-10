@@ -62,6 +62,18 @@ final class ReaderViewModel: ObservableObject {
     @Published private(set) var scrollRetries: Set<Int> = []
     private var sourceCacheNeedsInvalidation = false
     private var pendingSourceContent: ChapterContentReport?
+    /// Processed text of the chapters right before and after the current one,
+    /// kept in memory so a page turn across chapters swaps in the next page
+    /// at once instead of flashing the "正在打开本章" screen.
+    private struct ReadyChapter {
+        let url: String
+        let title: String
+        let content: String
+        let usesReplaceRules: Bool
+    }
+    private var readyChapters: [Int: ReadyChapter] = [:]
+    private var neighborTask: Task<Void, Never>?
+    private var neighborRules: [ReplaceRule] = []
 
     func bookmarks(at position: Int, in bookmarks: [Bookmark], pageRange: NSRange? = nil) -> [Bookmark] {
         bookmarks.filter { bookmark in
@@ -244,6 +256,7 @@ final class ReaderViewModel: ObservableObject {
         self.source = source
         demoChapterContent = nil
         sourceCacheNeedsInvalidation = true
+        discardReadyChapters()
         select(index: Self.validIndex(report.book.durChapterIndex, chapters: chapters), position: report.book.durChapterPos)
         pendingSourceContent = report.verifiedContent
     }
@@ -255,6 +268,7 @@ final class ReaderViewModel: ObservableObject {
         let requestedGeneration = chapterLoadGeneration
         if forceRefresh {
             pendingSourceContent = nil
+            discardReadyChapters()
             clearContinuousReading()
             content = ""
             paragraphs = []
@@ -321,6 +335,55 @@ final class ReaderViewModel: ObservableObject {
         content = processed.content
         paragraphs = Self.makeParagraphs(processed.content)
         diagnostics = report.diagnostics + processed.diagnostics
+        neighborRules = rules
+        prepareNeighborChapters()
+    }
+
+    /// Whether the chapter at `index` can be shown without waiting.
+    func isChapterReady(_ index: Int) -> Bool {
+        guard let ready = readyChapters[index], chapters.indices.contains(index) else { return false }
+        return ready.url == chapters[index].url && ready.usesReplaceRules == usesReplaceRules
+    }
+
+    private func discardReadyChapters() {
+        neighborTask?.cancel()
+        neighborTask = nil
+        readyChapters = [:]
+    }
+
+    /// Loads the previous and next readable chapters into memory (from the
+    /// on-disk cache when they are there, the source otherwise).
+    func prepareNeighborChapters() {
+        guard demoChapterContent == nil else { return }
+        let targets = [
+            readableIndex(from: currentIndex, direction: 1),
+            readableIndex(from: currentIndex, direction: -1)
+        ].compactMap { $0 }
+        readyChapters = readyChapters.filter { targets.contains($0.key) && isChapterReady($0.key) }
+        let missing = targets.filter { readyChapters[$0] == nil }
+        guard !missing.isEmpty else { return }
+        neighborTask?.cancel()
+        let rules = neighborRules
+        neighborTask = Task { [weak self] in
+            for index in missing {
+                guard let self, !Task.isCancelled, self.chapters.indices.contains(index) else { return }
+                let chapter = self.chapters[index]
+                let usesRules = self.usesReplaceRules
+                let value = await self.loadAdjacentChapter(chapter, rules: rules)
+                guard !Task.isCancelled,
+                      value.error == nil,
+                      !value.content.isEmpty,
+                      self.chapters.indices.contains(index),
+                      self.chapters[index].url == chapter.url,
+                      self.usesReplaceRules == usesRules else { continue }
+                self.readyChapters[index] = ReadyChapter(
+                    url: chapter.url,
+                    title: value.title,
+                    content: value.content,
+                    usesReplaceRules: usesRules
+                )
+            }
+        }
     }
 
     func prepareAdjacentWindows() {
@@ -461,6 +524,7 @@ final class ReaderViewModel: ObservableObject {
         var config = book.readConfig ?? BookReadConfig()
         config.useReplaceRule = !usesReplaceRules
         book.readConfig = config
+        discardReadyChapters()
         content = ""
         pendingSourceContent = nil
         paragraphs = []
@@ -552,18 +616,32 @@ final class ReaderViewModel: ObservableObject {
     func select(index: Int, position: Int = 0) {
         guard chapters.indices.contains(index), !chapters[index].isVolume else { return }
         if index != currentIndex { cancelPreload() }
+        let ready = isChapterReady(index) && pendingSourceContent == nil ? readyChapters[index] : nil
         currentIndex = index
         pendingSourceContent = nil
+        requestedPosition = max(position, 0)
+        clearAdjacentChapters()
+        isLoading = false
+        chapterLoadGeneration &+= 1
+        if let ready {
+            // Swap in the prepared chapter in the same update: the reader
+            // never shows an empty "loading" page between two chapters.
+            title = ready.title
+            content = ready.content
+            paragraphs = Self.makeParagraphs(ready.content)
+            diagnostics = []
+            loadedFromCache = true
+            hasLoadedCurrentChapter = true
+            if let source { schedulePreload(after: index, source: source) }
+            prepareNeighborChapters()
+            return
+        }
         title = chapters[index].title
         content = ""
         paragraphs = []
         diagnostics = []
-        requestedPosition = max(position, 0)
         loadedFromCache = false
         hasLoadedCurrentChapter = false
-        clearAdjacentChapters()
-        isLoading = false
-        chapterLoadGeneration &+= 1
     }
 
     private func clearAdjacentChapters() {

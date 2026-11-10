@@ -315,3 +315,170 @@ struct ReaderTipRowLayout: View {
             .frame(maxWidth: .infinity, alignment: alignment)
     }
 }
+
+extension NSAttributedString.Key {
+    /// A tappable link inside chapter text (段评气泡 or an illustration).
+    static let readerLink = NSAttributedString.Key("legado.readerLink")
+}
+
+/// Renders the `<img src="…">` markers chapter text can carry. Paragraph
+/// review counts (段评, `dp:12`, `bubble://paragraph?num=12`, or a review
+/// image with `{"type":"cmt"…}` options) become a small count bubble at the
+/// end of the paragraph; other images become an "插图" chip instead of raw
+/// HTML. The marker keeps its length (its other characters are drawn at
+/// near-zero size) so saved reading positions stay valid.
+enum ReaderInlineMarkup {
+    struct Bubble: Equatable {
+        var text: String
+        var color: UIColor?
+        var emphasis: Bool
+        var url: URL?
+    }
+
+    enum Item: Equatable {
+        case bubble(Bubble)
+        case image(URL?)
+    }
+
+    private static let reviewTypes: Set<String> = [
+        "qd", "fqpl", "fanqie", "cmt", "comment", "comments", "review", "reviews", "paragraph", "duanping", "dp"
+    ]
+
+    static let tagExpression = try? NSRegularExpression(pattern: #"<img\s+src\s*=\s*"([^"]*)"\s*/?>"#, options: [.caseInsensitive])
+
+    static func containsMarkup(_ text: String) -> Bool {
+        text.range(of: "<img", options: .caseInsensitive) != nil
+    }
+
+    static func unescape(_ value: String) -> String {
+        value.replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#34;", with: "\"")
+            .replacingOccurrences(of: "&amp;", with: "&")
+    }
+
+    static func parse(src rawSource: String) -> Item {
+        let source = unescape(rawSource).trimmingCharacters(in: .whitespacesAndNewlines)
+        // dp:12  or  dp:12,{"status":"emphasis","displayColor":"#FF0000"}
+        if source.lowercased().hasPrefix("dp:") {
+            let body = String(source.dropFirst(3))
+            let (head, options) = splitOptions(body)
+            return .bubble(.init(
+                text: displayCount(options["displayText"] as? String ?? head),
+                color: (options["displayColor"] as? String).flatMap { UIColor(readerHex: $0) },
+                emphasis: (options["status"] as? String) == "emphasis",
+                url: nil
+            ))
+        }
+        // bubble://paragraph?num=12&status=emphasis&displayColor=%23FF0000
+        if source.lowercased().hasPrefix("bubble://"), let components = URLComponents(string: source) {
+            let query = Dictionary((components.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { first, _ in first })
+            return .bubble(.init(
+                text: displayCount(query["displayText"] ?? query["num"] ?? ""),
+                color: query["displayColor"].flatMap { UIColor(readerHex: $0) },
+                emphasis: query["status"] == "emphasis",
+                url: query["url"].flatMap { URL(string: $0) }
+            ))
+        }
+        let (head, options) = splitOptions(source)
+        let url = URL(string: head)
+        if !options.isEmpty {
+            let type = (options["type"] as? String ?? "").lowercased()
+            let style = (options["style"] as? String ?? "").uppercased()
+            let click = (options["click"] as? String ?? "") + (options["pclick"] as? String ?? "")
+            let isReview = reviewTypes.contains(type)
+                || click.contains("showCmt(") || click.contains("showComment(") || click.contains("paragraph")
+                || (style == "TEXT" && !type.isEmpty)
+            if isReview {
+                let count = (options["num"] as? String) ?? (options["num"] as? Int).map(String.init)
+                    ?? (options["text"] as? String) ?? ""
+                let link = (options["url"] as? String).flatMap { URL(string: $0) }
+                    ?? (click.contains("showBrowser") ? url : nil)
+                return .bubble(.init(
+                    text: displayCount(count),
+                    color: (options["displayColor"] as? String).flatMap { UIColor(readerHex: $0) },
+                    emphasis: (options["status"] as? String) == "emphasis",
+                    url: link.flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+                ))
+            }
+        }
+        return .image(url.flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil })
+    }
+
+    private static func splitOptions(_ value: String) -> (String, [String: Any]) {
+        guard let comma = value.range(of: ",{") else { return (value, [:]) }
+        let head = String(value[..<comma.lowerBound])
+        let json = String(value[value.index(after: comma.lowerBound)...])
+        let options = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+        return (head, options)
+    }
+
+    private static func displayCount(_ value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "段评" }
+        if let number = Int(trimmed), number >= 1000 {
+            return number >= 10000 ? String(format: "%.1fw", Double(number) / 10000) : "\(number / 1000)k+"
+        }
+        return trimmed
+    }
+
+    /// Replaces each marker inside `range` without changing the text length.
+    static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor) {
+        guard let expression = tagExpression, range.length > 0,
+              containsMarkup((text.string as NSString).substring(with: range)) else { return }
+        let matches = expression.matches(in: text.string, range: range)
+        for match in matches where match.range.length > 1 && match.numberOfRanges > 1 {
+            let source = (text.string as NSString).substring(with: match.range(at: 1))
+            let item = parse(src: source)
+            let image: UIImage
+            var link: URL?
+            switch item {
+            case .bubble(let bubble):
+                image = bubbleImage(text: bubble.text, font: font, color: bubble.color ?? (bubble.emphasis ? accent : foreground))
+                link = bubble.url
+            case .image(let url):
+                image = bubbleImage(text: "插图", font: font, color: foreground)
+                link = url
+            }
+            let attachment = NSTextAttachment()
+            attachment.image = image
+            let capHeight = font.capHeight
+            attachment.bounds = CGRect(x: 0, y: (capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
+            let existing = text.attributes(at: match.range.location, effectiveRange: nil)
+            let replacement = NSMutableAttributedString(attachment: attachment)
+            var attributes = existing
+            attributes[.attachment] = attachment
+            attributes.removeValue(forKey: .underlineStyle)
+            replacement.setAttributes(attributes, range: NSRange(location: 0, length: replacement.length))
+            text.replaceCharacters(in: NSRange(location: match.range.location, length: 1), with: replacement)
+            let hidden = NSRange(location: match.range.location + 1, length: match.range.length - 1)
+            text.addAttributes([
+                .font: UIFont.systemFont(ofSize: 0.01),
+                .foregroundColor: UIColor.clear,
+                .kern: 0
+            ], range: hidden)
+            text.removeAttribute(.underlineStyle, range: hidden)
+            if let link { text.addAttribute(.readerLink, value: link, range: match.range) }
+        }
+    }
+
+    static func bubbleImage(text: String, font: UIFont, color: UIColor) -> UIImage {
+        let labelFont = UIFont.systemFont(ofSize: max(9, font.pointSize * 0.58), weight: .semibold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: color]
+        let textSize = (text as NSString).size(withAttributes: attributes)
+        let height = ceil(labelFont.lineHeight + 4)
+        let size = CGSize(width: ceil(max(textSize.width + 12, height + 4)) + 4, height: height)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            let bubble = CGRect(x: 4, y: 0, width: size.width - 4, height: size.height)
+            let path = UIBezierPath(roundedRect: bubble, cornerRadius: size.height / 2)
+            color.withAlphaComponent(0.12).setFill()
+            path.fill()
+            color.withAlphaComponent(0.55).setStroke()
+            path.lineWidth = 0.8
+            path.stroke()
+            (text as NSString).draw(
+                at: CGPoint(x: bubble.midX - textSize.width / 2, y: (size.height - textSize.height) / 2),
+                withAttributes: attributes
+            )
+        }
+    }
+}
