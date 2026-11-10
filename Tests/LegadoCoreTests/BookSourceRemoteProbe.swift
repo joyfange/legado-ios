@@ -36,7 +36,7 @@ struct BookSourceRemoteProbe {
             print("EXPLORE_KINDS \(source.bookSourceName) count=\(kinds.kinds.count) diag=\(kinds.diagnostics.map { "\($0.code): \($0.message)" })")
             for kind in kinds.kinds.filter({ !($0.url ?? "").isEmpty }).prefix(2) {
                 let outcome = await service.explore(source: source, kind: kind, page: 1)
-                print("EXPLORE \(source.bookSourceName) [\(kind.title)] url=\((kind.url ?? "").prefix(200)) books=\(outcome.books.count) first=\(outcome.books.first.map { "\($0.name)/\($0.author)/\($0.bookURL)" } ?? "-")")
+                print("EXPLORE \(source.bookSourceName) [\(kind.title)] url=\((kind.url ?? "").replacingOccurrences(of: "\n", with: " ").prefix(120)) books=\(outcome.books.count) first=\(outcome.books.first.map { "\($0.name)/\($0.author)/\($0.bookURL)" } ?? "-")")
                 for diagnostic in outcome.diagnostics { print("EXPLORE_DIAG \(diagnostic.code): \(diagnostic.message.prefix(400)) rule=\(diagnostic.rule.prefix(160))") }
             }
         }
