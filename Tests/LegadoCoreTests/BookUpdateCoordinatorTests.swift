@@ -113,11 +113,6 @@ struct BookUpdateCoordinatorTests {
         #expect(result.chapters == old)
         #expect(result.diagnostics.first?.code == "toc.failed")
     }
-}
-
-private struct StubChapterListLoader: ChapterListLoading {
-    let report: ChapterListReport
-    func loadChapters(book: Book, source: BookSource, maxPages: Int) async -> ChapterListReport { report }
 
     @Test func newBookKeepsChaptersEvenWhenALaterPageReportsAnError() async throws {
         let chapters = (0..<3).map { BookChapter(url: "chapter\($0)", title: "第\($0)章", bookUrl: "book", index: $0) }
@@ -128,5 +123,11 @@ private struct StubChapterListLoader: ChapterListLoading {
         let result = await coordinator.refresh(book: Book(bookUrl: "book", name: "书", origin: "source"), source: .init(bookSourceUrl: "source", bookSourceName: "源"))
         #expect(result.chapters.count == 3)
     }
+
+}
+
+private struct StubChapterListLoader: ChapterListLoading {
+    let report: ChapterListReport
+    func loadChapters(book: Book, source: BookSource, maxPages: Int) async -> ChapterListReport { report }
 
 }
