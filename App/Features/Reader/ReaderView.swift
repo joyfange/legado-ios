@@ -51,7 +51,8 @@ struct ReaderView: View {
     @State private var readerRenderRevision = 0
     @State private var isWaitingForNextChapter = false
     @State private var chapterTurnToken = 0
-    @Environment(\.openURL) private var openURL
+    @State private var reviewPage: ReaderReviewPage?
+    @AppStorage("showsReviewBubbles") private var showsReviewBubbles = true
     @State private var chapterTurnDirection = 0
     @State private var isWaitingForPreviousChapter = false
     @State private var httpTTSEngines: [HttpTTS] = []
@@ -276,6 +277,9 @@ struct ReaderView: View {
         }
         .sheet(isPresented: $showsTableOfContents) { tableOfContents }
         .sheet(isPresented: $showsBookmarks) { bookmarksSheet }
+        .sheet(item: $reviewPage) { page in
+            ReaderReviewSheet(url: page.url)
+        }
         .sheet(item: $illustrationChapter) { chapter in
             EPUBIllustrationsView(book: book, chapter: chapter)
         }
@@ -659,7 +663,8 @@ struct ReaderView: View {
             titleBold: titleBold,
             chapterTurnToken: chapterTurnToken,
             chapterTurnDirection: chapterTurnDirection,
-            onOpenLink: { url in openURL(url) }
+            onOpenLink: { url in reviewPage = ReaderReviewPage(url: url) },
+            showsReviewBubbles: showsReviewBubbles
         )
     }
 
@@ -1337,6 +1342,14 @@ struct ReaderView: View {
                     }
                     valueSlider("标题上间距", value: $titleTopSpacing, range: 0...100, format: { "\(Int($0))" })
                     valueSlider("标题下间距", value: $titleBottomSpacing, range: 0...100, format: { "\(Int($0))" })
+                }
+
+                Section {
+                    Toggle("显示段评气泡", isOn: $showsReviewBubbles)
+                } header: {
+                    Text("段评")
+                } footer: {
+                    Text("书源提供段评时，气泡显示在段落末尾，轻点打开段评页。")
                 }
 
                 Section("翻页动画") {

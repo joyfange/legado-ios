@@ -488,7 +488,8 @@ final class ReaderScrollChapterLayout {
                 in: NSRange(location: bodyLocation, length: attributed.length - bodyLocation),
                 font: bodyFont,
                 foreground: configuration.foregroundColor,
-                accent: .systemOrange
+                accent: .systemOrange,
+                showsBubbles: configuration.showsReviewBubbles
             )
         }
         storage = NSTextStorage(attributedString: attributed)

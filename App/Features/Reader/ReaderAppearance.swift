@@ -2,6 +2,7 @@ import CoreText
 import ImageIO
 import SwiftUI
 import UIKit
+import WebKit
 
 private struct ReaderPositionPreferenceKey: PreferenceKey {
     static let defaultValue: [Int: CGFloat] = [:]
@@ -422,7 +423,7 @@ enum ReaderInlineMarkup {
     }
 
     /// Replaces each marker inside `range` without changing the text length.
-    static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor) {
+    static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor, showsBubbles: Bool = true) {
         guard let expression = tagExpression, range.length > 0,
               containsMarkup((text.string as NSString).substring(with: range)) else { return }
         let matches = expression.matches(in: text.string, range: range)
@@ -432,6 +433,10 @@ enum ReaderInlineMarkup {
             let image: UIImage
             var link: URL?
             switch item {
+            case .bubble where !showsBubbles:
+                text.addAttributes([.font: UIFont.systemFont(ofSize: 0.01), .foregroundColor: UIColor.clear, .kern: 0], range: match.range)
+                text.removeAttribute(.underlineStyle, range: match.range)
+                continue
             case .bubble(let bubble):
                 image = bubbleImage(text: bubble.text, font: font, color: bubble.color ?? (bubble.emphasis ? accent : foreground))
                 link = bubble.url
@@ -481,4 +486,34 @@ enum ReaderInlineMarkup {
             )
         }
     }
+}
+
+struct ReaderReviewPage: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+/// 段评 / 插图页：半屏打开，可上划展开到全屏。
+struct ReaderReviewSheet: View {
+    let url: URL
+
+    var body: some View {
+        ReaderReviewWebView(url: url)
+            .ignoresSafeArea(edges: .bottom)
+            .readingPresentationDetents([.medium, .large])
+    }
+}
+
+private struct ReaderReviewWebView: UIViewRepresentable {
+    let url: URL
+
+    func makeUIView(context: Context) -> WKWebView {
+        let web = WKWebView(frame: .zero)
+        web.customUserAgent = ApplicationSettingsStore.shared.settings.effectiveUserAgent
+        web.allowsBackForwardNavigationGestures = true
+        web.load(URLRequest(url: url))
+        return web
+    }
+
+    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
