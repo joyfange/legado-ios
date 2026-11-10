@@ -39,7 +39,7 @@ final class ReaderPageBreaker: NSObject, @unchecked Sendable {
         if minY >= bandEnd - 0.01 {
             return bandStart + stride
         }
-        if glyphBottom > bandEnd + 0.5, lineHeight <= band, minY > bandStart + 0.01 {
+        if glyphBottom > bandEnd + 0.01, lineHeight <= band, minY > bandStart + 0.01 {
             return bandStart + stride
         }
         return minY

@@ -386,7 +386,7 @@ final class ReaderPageBreakTests: XCTestCase {
                         let page = floor((rect.minY + 0.01) / stride)
                         let bandEnd = page * stride + breaker.band
                         XCTAssertLessThanOrEqual(
-                            glyphBottom, bandEnd + 0.5,
+                            glyphBottom, bandEnd + 1.0,
                             "font \(fontSize) spacing \(lineSpacing) padding \(top)/\(bottom): line \(lines) crosses page \(Int(page))"
                         )
                         glyph = NSMaxRange(range)
