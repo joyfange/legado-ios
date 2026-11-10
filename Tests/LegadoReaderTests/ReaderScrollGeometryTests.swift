@@ -399,3 +399,27 @@ final class ReaderPageBreakTests: XCTestCase {
         }
     }
 }
+
+@MainActor
+final class ReaderAppearanceTests: XCTestCase {
+    func testHexColorRoundTrip() {
+        XCTAssertEqual(UIColor(readerHex: "#C0EDC6")?.readerHex, "C0EDC6")
+        XCTAssertEqual(UIColor(readerHex: "0b0b0b")?.readerHex, "0B0B0B")
+        XCTAssertNil(UIColor(readerHex: "xyz"))
+        XCTAssertNil(UIColor(readerHex: ""))
+    }
+
+    func testCustomThemeUsesStoredColorsAndFallsBack() {
+        let defaults = UserDefaults(suiteName: "ReaderAppearanceTests")!
+        defaults.removePersistentDomain(forName: "ReaderAppearanceTests")
+        XCTAssertEqual(ReaderStylePreset.custom(defaults: defaults).background.readerHex, ReaderStylePreset.defaultCustomBackground)
+        defaults.set("112233", forKey: ReaderStylePreset.customBackgroundKey)
+        defaults.set("not a colour", forKey: ReaderStylePreset.customForegroundKey)
+        let custom = ReaderStylePreset.custom(defaults: defaults)
+        XCTAssertEqual(custom.id, ReaderStylePreset.customID)
+        XCTAssertEqual(custom.background.readerHex, "112233")
+        XCTAssertEqual(custom.foreground.readerHex, ReaderStylePreset.defaultCustomForeground)
+        XCTAssertEqual(ReaderStylePreset.resolve("preset2").id, "preset2")
+        defaults.removePersistentDomain(forName: "ReaderAppearanceTests")
+    }
+}

@@ -39,7 +39,42 @@ struct ReaderStylePreset: Identifiable {
         case "paper": "preset2"
         default: id
         }
+        if migratedID == customID { return custom() }
         return legadoDefaults.first(where: { $0.id == migratedID }) ?? legadoDefaults[0]
+    }
+
+    static let customID = "custom"
+    static let customBackgroundKey = "readerCustomBackgroundHex"
+    static let customForegroundKey = "readerCustomForegroundHex"
+    static let defaultCustomBackground = "F5EFDF"
+    static let defaultCustomForeground = "2E2A24"
+
+    /// User-defined background and text colours ("自定义").
+    static func custom(defaults: UserDefaults = .standard) -> ReaderStylePreset {
+        let background = UIColor(readerHex: defaults.string(forKey: customBackgroundKey) ?? "")
+            ?? UIColor(readerHex: defaultCustomBackground)!
+        let foreground = UIColor(readerHex: defaults.string(forKey: customForegroundKey) ?? "")
+            ?? UIColor(readerHex: defaultCustomForeground)!
+        return ReaderStylePreset(id: customID, name: "自定义", background: background, foreground: foreground)
+    }
+}
+
+extension UIColor {
+    /// Parses "RRGGBB" or "#RRGGBB"; returns nil for anything else.
+    convenience init?(readerHex: String) {
+        var text = readerHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("#") { text.removeFirst() }
+        guard text.count == 6, let value = UInt32(text, radix: 16) else { return nil }
+        self.init(hex: value)
+    }
+
+    /// "RRGGBB" in sRGB, alpha ignored.
+    var readerHex: String {
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        let resolved = resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        guard resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return "" }
+        func channel(_ value: CGFloat) -> Int { Int((min(max(value, 0), 1) * 255).rounded()) }
+        return String(format: "%02X%02X%02X", channel(red), channel(green), channel(blue))
     }
 }
 
@@ -140,5 +175,143 @@ enum ReaderFontStore {
             return UIFont(descriptor: descriptor, size: size)
         }
         return base
+    }
+}
+
+/// A small live sample of the reading page, shown at the top of the style
+/// sheet so every change is visible while adjusting it. It renders sample
+/// text only and never touches reading progress.
+struct ReaderStylePreviewCard: View {
+    let background: UIColor
+    let foreground: UIColor
+    let backgroundImage: UIImage?
+    let fontSize: Double
+    let fontPath: String
+    let fontWeight: Int
+    let letterSpacing: Double
+    let lineSpacing: Double
+    let paragraphSpacing: Double
+    let paragraphIndent: String
+    let paddingLeft: Double
+    let paddingRight: Double
+    let titleMode: Int
+    let titleSize: Double
+    let titleColor: UIColor?
+    let titleBold: Bool
+    let footerLeft: String
+    let footerRight: String
+    let footerPaddingLeft: Double
+    let footerPaddingRight: Double
+    let showsFooter: Bool
+
+    static let sampleTitle = "第一章 示例标题"
+    static let sampleText = "清晨的阳光透过窗棂洒在书页上，他翻开那本泛黄的旧书，指尖轻轻拂过一行行文字。\n这是一段示例正文，用来实时预览字号、行距、段距、缩进与配色的效果，不会写入阅读记录。"
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if titleMode != 2 {
+                Text(Self.sampleTitle)
+                    .font(Font(font(size: fontSize + titleSize, bold: titleBold) as CTFont))
+                    .foregroundStyle(Color(uiColor: titleColor ?? foreground))
+                    .frame(maxWidth: .infinity, alignment: titleMode == 1 ? .center : .leading)
+                    .padding(.bottom, max(lineSpacing, 4))
+            }
+            VStack(alignment: .leading, spacing: CGFloat(lineSpacing + paragraphSpacing)) {
+                ForEach(Array(Self.sampleText.split(separator: "\n").enumerated()), id: \.offset) { _, line in
+                    Text(paragraphIndent + String(line))
+                        .font(Font(font(size: fontSize, bold: false) as CTFont))
+                        .kerning(CGFloat(letterSpacing * fontSize))
+                        .lineSpacing(CGFloat(lineSpacing))
+                        .foregroundStyle(Color(uiColor: foreground))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            Spacer(minLength: 0)
+            if showsFooter {
+                HStack {
+                    Text(footerLeft).lineLimit(1).minimumScaleFactor(0.75)
+                    Spacer(minLength: 8)
+                    Text(footerRight).lineLimit(1).fixedSize()
+                }
+                .font(.system(size: 10))
+                .foregroundStyle(Color(uiColor: foreground))
+                .padding(.leading, max(0, footerPaddingLeft - paddingLeft))
+                .padding(.trailing, max(0, footerPaddingRight - paddingRight))
+                .padding(.top, 6)
+            }
+        }
+        .padding(.leading, min(paddingLeft, 40))
+        .padding(.trailing, min(paddingRight, 40))
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .frame(height: 150, alignment: .top)
+        .background {
+            ZStack {
+                Color(uiColor: background)
+                if let backgroundImage {
+                    Image(uiImage: backgroundImage).resizable().scaledToFill()
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.secondary.opacity(0.25), lineWidth: 0.5)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("排版预览")
+        .accessibilityIdentifier("reader.stylePreview")
+    }
+
+    private func font(size: Double, bold: Bool) -> UIFont {
+        let size = CGFloat(max(5, size))
+        if let custom = ReaderFontStore.font(at: fontPath, size: size, weight: bold ? 1 : fontWeight) {
+            return custom
+        }
+        if bold { return UIFont.systemFont(ofSize: size, weight: .bold) }
+        switch fontWeight {
+        case 1: return UIFont.systemFont(ofSize: size, weight: .bold)
+        case 2: return UIFont.systemFont(ofSize: size, weight: .light)
+        default: return UIFont(name: "STSongti-SC-Regular", size: size) ?? UIFont.systemFont(ofSize: size)
+        }
+    }
+}
+
+/// Header/footer row. Short items (time, page, progress) keep their natural
+/// width so a long chapter title can use the rest of the row instead of
+/// being squeezed into a third of it and cut off with "…".
+struct ReaderTipRowLayout: View {
+    let left: String
+    let middle: String
+    let right: String
+
+    var body: some View {
+        if middle.isEmpty {
+            HStack(spacing: 8) {
+                if left.count >= right.count {
+                    flexible(left, alignment: .leading)
+                    if !right.isEmpty { Text(right).lineLimit(1).fixedSize() }
+                } else {
+                    if !left.isEmpty { Text(left).lineLimit(1).fixedSize() }
+                    flexible(right, alignment: .trailing)
+                }
+            }
+        } else {
+            HStack(spacing: 8) {
+                flexible(left, alignment: .leading)
+                Text(middle).lineLimit(1).minimumScaleFactor(0.7)
+                    .layoutPriority(1)
+                flexible(right, alignment: .trailing)
+            }
+        }
+    }
+
+    private func flexible(_ text: String, alignment: Alignment) -> some View {
+        Text(text)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .truncationMode(.middle)
+            .frame(maxWidth: .infinity, alignment: alignment)
     }
 }

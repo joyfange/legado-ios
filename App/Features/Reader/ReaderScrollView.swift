@@ -571,18 +571,20 @@ struct ReaderTypography {
             body[.underlineColor] = c.foregroundColor
         }
         bodyAttributes = body
-        let headingFont = ReaderFontStore.font(at: c.fontPath, size: CGFloat(max(5, c.fontSize + c.titleSize)), weight: c.fontWeight)
-            ?? UIFont.systemFont(ofSize: CGFloat(max(5, c.fontSize + c.titleSize)), weight: weight)
+        let headingSize = CGFloat(max(5, c.fontSize + c.titleSize))
+        let headingWeight: UIFont.Weight = c.titleBold ? .bold : weight
+        let headingFont = ReaderFontStore.font(at: c.fontPath, size: headingSize, weight: c.titleBold ? 1 : c.fontWeight)
+            ?? UIFont.systemFont(ofSize: headingSize, weight: headingWeight)
         let heading = NSMutableParagraphStyle()
         heading.alignment = c.titleMode == 1 ? .center : .left
         heading.paragraphSpacingBefore = CGFloat(c.titleTopSpacing)
         heading.paragraphSpacing = CGFloat(c.titleBottomSpacing)
-        headingAttributes = [.font: headingFont, .foregroundColor: c.foregroundColor, .paragraphStyle: heading]
+        headingAttributes = [.font: headingFont, .foregroundColor: c.titleColor ?? c.foregroundColor, .paragraphStyle: heading]
     }
 }
 
 extension ReaderTextView {
     var scrollTypographyKey: String {
-        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)"
+        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)"
     }
 }

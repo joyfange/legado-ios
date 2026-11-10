@@ -75,6 +75,10 @@ struct ReaderView: View {
     @AppStorage("titleSize") private var titleSize = 0.0
     @AppStorage("titleTopSpacing") private var titleTopSpacing = 0.0
     @AppStorage("titleBottomSpacing") private var titleBottomSpacing = 0.0
+    @AppStorage("titleColorHex") private var titleColorHex = ""
+    @AppStorage("titleBold") private var titleBold = true
+    @AppStorage(ReaderStylePreset.customBackgroundKey) private var customBackgroundHex = ReaderStylePreset.defaultCustomBackground
+    @AppStorage(ReaderStylePreset.customForegroundKey) private var customForegroundHex = ReaderStylePreset.defaultCustomForeground
     @AppStorage("underlineMode") private var underlineMode = 0
     @AppStorage("headerPaddingBottom") private var headerPaddingBottom = 0.0
     @AppStorage("headerPaddingLeft") private var headerPaddingLeft = 16.0
@@ -643,7 +647,9 @@ struct ReaderView: View {
             onDeferredRender: { readerRenderRevision &+= 1 },
             onCancelNextLoading: { isWaitingForNextChapter = false },
             onPageChanged: pageDidChange,
-            onTapAction: handleTapAction
+            onTapAction: handleTapAction,
+            titleColor: titleColorHex.isEmpty ? nil : UIColor(readerHex: titleColorHex),
+            titleBold: titleBold
         )
     }
 
@@ -696,7 +702,12 @@ struct ReaderView: View {
     }
 
     private var resolvedStyle: ReaderStylePreset {
-        themeMode == "3" ? .eInk : ReaderStylePreset.resolve(theme)
+        if themeMode == "3" { return .eInk }
+        if theme == ReaderStylePreset.customID {
+            _ = (customBackgroundHex, customForegroundHex)
+            return ReaderStylePreset.custom()
+        }
+        return ReaderStylePreset.resolve(theme)
     }
 
     private var headerVisible: Bool {
@@ -741,17 +752,10 @@ struct ReaderView: View {
     }
 
     private func readerTipRow(_ values: [Int], date: Date, showDivider: Bool, isHeader: Bool) -> some View {
-        HStack(spacing: 8) {
-            Text(readerTipText(values[0], date: date))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(readerTipText(values[1], date: date))
-                .frame(maxWidth: .infinity, alignment: .center)
-            Text(readerTipText(values[2], date: date))
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }
+        let texts = values.map { readerTipText($0, date: date) }
+        return ReaderTipRowLayout(left: texts[0], middle: texts[1], right: texts[2])
         .font(.system(size: 12))
         .foregroundStyle(foregroundColor)
-        .lineLimit(1)
         .padding(.leading, isHeader ? headerPaddingLeft : footerPaddingLeft)
         .padding(.trailing, isHeader ? headerPaddingRight : footerPaddingRight)
         .overlay(alignment: .bottom) {
@@ -1217,6 +1221,26 @@ struct ReaderView: View {
                             }
                         }
                     }
+                    Button {
+                        useBackgroundImage = false
+                        theme = ReaderStylePreset.customID
+                    } label: {
+                        HStack {
+                            Label("自定义颜色", systemImage: "paintpalette")
+                            Spacer()
+                            if resolvedStyle.id == ReaderStylePreset.customID && activeBackgroundImage == nil {
+                                Image(systemName: "checkmark").foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    if theme == ReaderStylePreset.customID {
+                        ColorPicker("背景颜色", selection: hexColorBinding($customBackgroundHex, fallback: ReaderStylePreset.defaultCustomBackground), supportsOpacity: false)
+                        ColorPicker("文字颜色", selection: hexColorBinding($customForegroundHex, fallback: ReaderStylePreset.defaultCustomForeground), supportsOpacity: false)
+                        Button("恢复自定义默认颜色") {
+                            customBackgroundHex = ReaderStylePreset.defaultCustomBackground
+                            customForegroundHex = ReaderStylePreset.defaultCustomForeground
+                        }
+                    }
                     Button("选择背景图片", systemImage: "photo") {
                         backgroundError = nil
                         showsBackgroundPicker = true
@@ -1292,6 +1316,15 @@ struct ReaderView: View {
                     }
                     .pickerStyle(.segmented)
                     valueSlider("标题字号增量", value: $titleSize, range: -10...30, format: { String(format: "%+.0f", $0) })
+                    Toggle("标题加粗", isOn: $titleBold)
+                    ColorPicker(
+                        "标题颜色",
+                        selection: hexColorBinding($titleColorHex, fallback: resolvedStyle.foreground.readerHex),
+                        supportsOpacity: false
+                    )
+                    if !titleColorHex.isEmpty {
+                        Button("标题颜色跟随正文") { titleColorHex = "" }
+                    }
                     valueSlider("标题上间距", value: $titleTopSpacing, range: 0...100, format: { "\(Int($0))" })
                     valueSlider("标题下间距", value: $titleBottomSpacing, range: 0...100, format: { "\(Int($0))" })
                 }
@@ -1362,7 +1395,7 @@ struct ReaderView: View {
                 Section("页眉边距") {
                     valueSlider("左边距", value: $headerPaddingLeft, range: 0...100, format: { "\(Int($0))" })
                     valueSlider("右边距", value: $headerPaddingRight, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("上边距", value: $headerPaddingTop, range: 0...100, format: { "\(Int($0))" })
+                    valueSlider("上边距", value: $headerPaddingTop, range: -40...100, format: { "\(Int($0))" })
                     valueSlider("下边距", value: $headerPaddingBottom, range: 0...100, format: { "\(Int($0))" })
                 }
 
@@ -1370,8 +1403,17 @@ struct ReaderView: View {
                     valueSlider("左边距", value: $footerPaddingLeft, range: 0...100, format: { "\(Int($0))" })
                     valueSlider("右边距", value: $footerPaddingRight, range: 0...100, format: { "\(Int($0))" })
                     valueSlider("上边距", value: $footerPaddingTop, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("下边距", value: $footerPaddingBottom, range: 0...100, format: { "\(Int($0))" })
+                    valueSlider("下边距", value: $footerPaddingBottom, range: -40...100, format: { "\(Int($0))" })
+                    Text("调到负数可让页脚继续往屏幕底边靠，进入底部安全区。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+            }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                stylePreviewCard
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(.bar)
             }
             .navigationTitle("阅读样式")
             .navigationBarTitleDisplayMode(.inline)
@@ -1405,7 +1447,7 @@ struct ReaderView: View {
                 fontError = error.localizedDescription
             }
         }
-        .readingPresentationDetents([.medium])
+        .readingPresentationDetents([.medium, .large])
         .readingPresentationDragIndicator()
     }
 
@@ -1431,6 +1473,40 @@ struct ReaderView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var stylePreviewCard: some View {
+        ReaderStylePreviewCard(
+            background: resolvedStyle.background,
+            foreground: resolvedStyle.foreground,
+            backgroundImage: activeBackgroundImage,
+            fontSize: fontSize,
+            fontPath: fontPath,
+            fontWeight: fontWeight,
+            letterSpacing: letterSpacing,
+            lineSpacing: lineSpacing,
+            paragraphSpacing: paragraphSpacing,
+            paragraphIndent: paragraphIndent,
+            paddingLeft: paddingLeft,
+            paddingRight: paddingRight,
+            titleMode: titleMode,
+            titleSize: titleSize,
+            titleColor: titleColorHex.isEmpty ? nil : UIColor(readerHex: titleColorHex),
+            titleBold: titleBold,
+            footerLeft: ReaderStylePreviewCard.sampleTitle,
+            footerRight: "1/8  0.9%",
+            footerPaddingLeft: footerPaddingLeft,
+            footerPaddingRight: footerPaddingRight,
+            showsFooter: footerVisible
+        )
+    }
+
+    /// Binds a stored "RRGGBB" string to a ColorPicker.
+    private func hexColorBinding(_ hex: Binding<String>, fallback: String) -> Binding<Color> {
+        Binding(
+            get: { Color(uiColor: UIColor(readerHex: hex.wrappedValue) ?? UIColor(readerHex: fallback) ?? .label) },
+            set: { hex.wrappedValue = UIColor($0).readerHex }
+        )
     }
 
     private func valueSlider(
