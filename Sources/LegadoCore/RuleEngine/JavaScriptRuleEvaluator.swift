@@ -250,7 +250,7 @@ public struct JavaScriptRuleEvaluator: Sendable {
 
     public init(
         maximumScriptLength: Int = 64 * 1_024,
-        maximumResultLength: Int = 2 * 1_024 * 1_024,
+        maximumResultLength: Int = 64 * 1_024 * 1_024,
         networkLoader: any JavaScriptNetworkLoading = SynchronousJavaScriptNetworkLoader(),
         urlBuilder: LegadoURLBuilder = .init()
     ) {
