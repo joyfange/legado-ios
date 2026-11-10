@@ -70,7 +70,8 @@ struct ChapterHTMLFormatter {
             let output: (text: String, inline: Bool)
             if name == "comment" {
                 let count = Self.attribute("count", in: tag).flatMap { Int($0) }
-                output = (Self.bubbleMarker(count: count, url: Self.clickURL(in: tag)), true)
+                let script = Self.attribute("onClick", in: tag) ?? Self.attribute("onPress", in: tag)
+                output = (Self.bubbleMarker(count: count, url: Self.clickURL(in: tag), script: script), true)
             } else {
                 output = imageOutput(tag: tag, baseURL: baseURL)
             }
@@ -102,9 +103,9 @@ struct ChapterHTMLFormatter {
         if options["style"]?.lowercased() == "text" || Self.isParagraphReviewMarker(src) {
             let svgCount = svg.flatMap { Self.svgTexts($0).compactMap { Int($0) }.first }
             let count = Self.commentCount(svgCount: svgCount, click: click, payloadIsSVG: svg?.contains("<svg") == true)
-            return (Self.bubbleMarker(count: count, url: click), true)
+            return (Self.bubbleMarker(count: count, url: click, script: Self.clickScript(tag: tag, options: options)), true)
         }
-        if let svg, let card = Self.commentCardText(fromSVG: svg, click: click) {
+        if let svg, let card = Self.commentCardText(fromSVG: svg, click: click, script: Self.clickScript(tag: tag, options: options)) {
             return (card, false)
         }
         if clean.lowercased().hasPrefix("data:") {
@@ -118,12 +119,22 @@ struct ChapterHTMLFormatter {
         value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;")
     }
 
-    static func bubbleMarker(count: Int?, url: String?) -> String {
+    /// The source's own click callback (`showCmt(...)`), kept when it opens no plain URL.
+    static func clickScript(tag: String, options: [String: String]) -> String? {
+        let candidates = [attribute("onClick", in: tag), attribute("onPress", in: tag),
+                          options["click"], options["js"], options["onClick"]]
+        return candidates.compactMap { $0 }.first { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    }
+
+    static func bubbleMarker(count: Int?, url: String?, script: String? = nil) -> String {
         let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
         var value = "bubble://paragraph?num=" + (count.map(String.init) ?? "")
         if let url, url.lowercased().hasPrefix("http"),
            let encoded = url.addingPercentEncoding(withAllowedCharacters: allowed) {
             value += "&url=" + encoded
+        } else if let script, script.utf8.count <= 4_096,
+                  let encoded = script.addingPercentEncoding(withAllowedCharacters: allowed) {
+            value += "&js=" + encoded
         }
         return "<img src=\"\(escape(value))\">"
     }
@@ -272,10 +283,10 @@ struct ChapterHTMLFormatter {
 
     /// Comment cards that sources draw as SVG, as readable text: 热评 cards
     /// become 「热评」text; 本章说 summaries become a heading plus their lines.
-    static func commentCardText(fromSVG svg: String, click: String?) -> String? {
+    static func commentCardText(fromSVG svg: String, click: String?, script: String? = nil) -> String? {
         let texts = svgTexts(svg)
         guard let first = texts.first else { return nil }
-        let link = click.map { bubbleMarker(count: nil, url: $0) } ?? ""
+        let link = (click != nil || script != nil) ? bubbleMarker(count: nil, url: click, script: script) : ""
         if hotCommentLabels.contains(first), texts.count >= 2 {
             return "【\(first)】" + texts.dropFirst().joined() + link
         }
@@ -288,7 +299,7 @@ struct ChapterHTMLFormatter {
             }
             heading += "】" + link
             let body = rest.prefix(12).joined(separator: " ")
-            return body.isEmpty ? heading : heading + "\n" + body
+            return body.isEmpty ? heading : heading + " " + body
         }
         return nil
     }

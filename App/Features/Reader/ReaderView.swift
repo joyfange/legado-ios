@@ -55,6 +55,10 @@ struct ReaderView: View {
     @AppStorage("showsReviewBubbles") private var showsReviewBubbles = true
     @AppStorage("reviewBubbleStyle") private var reviewBubbleStyle = 0
     @AppStorage("reviewBubbleAccent") private var reviewBubbleAccent = false
+    @AppStorage("reviewBubbleImageRevision") private var reviewBubbleImageRevision = 0
+    @State private var showsBubbleImageImporter = false
+    @State private var reviewError: String?
+    @State private var isResolvingReview = false
     @State private var chapterTurnDirection = 0
     @State private var isWaitingForPreviousChapter = false
     @State private var httpTTSEngines: [HttpTTS] = []
@@ -281,6 +285,11 @@ struct ReaderView: View {
         .sheet(isPresented: $showsBookmarks) { bookmarksSheet }
         .sheet(item: $reviewPage) { page in
             ReaderReviewSheet(url: page.url)
+        }
+        .alert("打不开段评", isPresented: Binding(get: { reviewError != nil }, set: { if !$0 { reviewError = nil } })) {
+            Button("好", role: .cancel) { reviewError = nil }
+        } message: {
+            Text(reviewError ?? "")
         }
         .sheet(item: $illustrationChapter) { chapter in
             EPUBIllustrationsView(book: book, chapter: chapter)
@@ -665,10 +674,11 @@ struct ReaderView: View {
             titleBold: titleBold,
             chapterTurnToken: chapterTurnToken,
             chapterTurnDirection: chapterTurnDirection,
-            onOpenLink: { url in reviewPage = ReaderReviewPage(url: url) },
+            onOpenLink: { url in openReviewLink(url) },
             showsReviewBubbles: showsReviewBubbles,
             reviewBubbleStyle: reviewBubbleStyle,
-            reviewBubbleAccent: reviewBubbleAccent
+            reviewBubbleAccent: reviewBubbleAccent,
+            reviewBubbleImageRevision: reviewBubbleImageRevision
         )
     }
 
@@ -1357,6 +1367,14 @@ struct ReaderView: View {
                             }
                         }
                         Toggle("气泡使用强调色", isOn: $reviewBubbleAccent)
+                        if reviewBubbleStyle == 4 {
+                            Button(UserDefaults.standard.data(forKey: ReaderInlineMarkup.customBubbleImageKey) == nil ? "选择气泡图片" : "更换气泡图片") {
+                                showsBubbleImageImporter = true
+                            }
+                            .fileImporter(isPresented: $showsBubbleImageImporter, allowedContentTypes: [.png, .jpeg, .image]) { result in
+                                importBubbleImage(result)
+                            }
+                        }
                     }
                 } header: {
                     Text("段评")
@@ -1537,6 +1555,38 @@ struct ReaderView: View {
     }
 
     /// Binds a stored "RRGGBB" string to a ColorPicker.
+    /// 段评气泡 / 插图点击：网址直接半屏打开；书源回调先在后台执行拿到网址。
+    private func openReviewLink(_ url: URL) {
+        guard let script = ReaderInlineMarkup.script(from: url) else {
+            reviewPage = ReaderReviewPage(url: url)
+            return
+        }
+        guard !isResolvingReview else { return }
+        isResolvingReview = true
+        Task {
+            let resolution = await model.resolveReviewClick(script)
+            isResolvingReview = false
+            if let target = resolution.url.flatMap(URL.init(string:)) {
+                reviewPage = ReaderReviewPage(url: target)
+            } else {
+                reviewError = resolution.error ?? "书源没有给出段评页地址"
+            }
+        }
+    }
+
+    private func importBubbleImage(_ result: Result<URL, Error>) {
+        guard case .success(let url) = result else { return }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url),
+              let normalized = ReaderInlineMarkup.normalizedBubbleImageData(data) else {
+            reviewError = "无法读取这张图片"
+            return
+        }
+        UserDefaults.standard.set(normalized, forKey: ReaderInlineMarkup.customBubbleImageKey)
+        reviewBubbleImageRevision += 1
+    }
+
     private func hexColorBinding(_ hex: Binding<String>, fallback: String) -> Binding<Color> {
         Binding(
             get: { Color(uiColor: UIColor(readerHex: hex.wrappedValue) ?? UIColor(readerHex: fallback) ?? .label) },

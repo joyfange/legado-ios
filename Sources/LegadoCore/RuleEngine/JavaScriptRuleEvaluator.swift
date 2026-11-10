@@ -181,6 +181,40 @@ private final class JavaScriptRedirectBlocker: NSObject, URLSessionTaskDelegate,
 }
 
 public struct JavaScriptRuleEvaluator: Sendable {
+    static let browserURLKey = "__legadoBrowserURL"
+    static let browserTitleKey = "__legadoBrowserTitle"
+
+    public struct ClickResolution: Sendable, Equatable {
+        public var url: String?
+        public var title: String?
+        public var error: String?
+
+        public init(url: String?, title: String?, error: String?) {
+            self.url = url
+            self.title = title
+            self.error = error
+        }
+    }
+
+    /// 执行书源的点击回调（如段评气泡的 `showCmt('1','2','3','4')`），
+    /// 返回它通过 java.startBrowser 打开的网址，或脚本直接返回的网址。
+    public func resolveClick(_ script: String, executionContext: RuleExecutionContext) async -> ClickResolution {
+        var context = executionContext
+        context.variables[Self.browserURLKey] = nil
+        do {
+            let result = try await evaluateAsync(script: script, result: .string(""), executionContext: context)
+            if let url = result.variables[Self.browserURLKey], !url.isEmpty {
+                let title = result.variables[Self.browserTitleKey]
+                return .init(url: url, title: title?.isEmpty == false && title != "null" ? title : nil, error: nil)
+            }
+            let value = result.value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if value.lowercased().hasPrefix("http") { return .init(url: value, title: nil, error: nil) }
+            return .init(url: nil, title: nil, error: "书源脚本没有返回段评页地址")
+        } catch {
+            return .init(url: nil, title: nil, error: error.localizedDescription)
+        }
+    }
+
     public var maximumScriptLength: Int
     public var maximumResultLength: Int
     private let networkLoader: any JavaScriptNetworkLoading
@@ -681,6 +715,17 @@ public struct JavaScriptRuleEvaluator: Sendable {
         java?.setObject(ajaxAll, forKeyedSubscript: "ajaxAll" as NSString)
         java?.setObject(connect, forKeyedSubscript: "connect" as NSString)
         java?.setObject(directRequest, forKeyedSubscript: "__directRequest" as NSString)
+        // 段评等点击回调：书源调用 java.startBrowser(url, title) 打开网页；
+        // 这里只记下地址，由阅读器在半屏网页里打开。
+        let startBrowser: @convention(block) (Any?, Any?) -> String = { value, title in
+            let url = Self.stringify(value)
+            _ = put(Self.browserURLKey, url)
+            _ = put(Self.browserTitleKey, Self.stringify(title))
+            return url
+        }
+        for name in ["startBrowser", "startBrowserAwait", "showBrowser", "showReadingBrowser", "startBrowserDp", "openUrl"] {
+            java?.setObject(startBrowser, forKeyedSubscript: name as NSString)
+        }
         context.setObject(java, forKeyedSubscript: "java" as NSString)
         context.evaluateScript("""
             (function () {

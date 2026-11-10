@@ -513,7 +513,8 @@ final class ReaderScrollChapterLayout {
                 accent: .systemOrange,
                 showsBubbles: configuration.showsReviewBubbles,
                 bubbleStyle: configuration.reviewBubbleStyle,
-                bubbleAccent: configuration.reviewBubbleAccent
+                bubbleAccent: configuration.reviewBubbleAccent,
+                customBubbleRevision: configuration.reviewBubbleImageRevision
             )
         }
         storage = NSTextStorage(attributedString: attributed)
@@ -620,6 +621,6 @@ struct ReaderTypography {
 
 extension ReaderTextView {
     var scrollTypographyKey: String {
-        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)"
+        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)|\(reviewBubbleImageRevision)"
     }
 }

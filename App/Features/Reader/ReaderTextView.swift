@@ -162,6 +162,7 @@ struct ReaderTextView: UIViewRepresentable {
     var showsReviewBubbles: Bool = true
     var reviewBubbleStyle: Int = 0
     var reviewBubbleAccent: Bool = false
+    var reviewBubbleImageRevision: Int = 0
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -237,7 +238,7 @@ struct ReaderTextView: UIViewRepresentable {
         let adjacentContentKey = "\(showsPrevious)|\(previousTitle ?? "")|\(previousText)|\(showsContinuation)|\(continuationTitle ?? "")|\(continuationText)".hashValue
         let displaysTitle = titleMode != 2 || isVolume
         let titlePrefix = displaysTitle && !title.isEmpty ? title + "\n" : ""
-        let styleKey = "\(contentKey)|\(adjacentContentKey)|\(title)|\(isVolume)|\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(headerInset)|\(footerInset)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(isSelectable)|\(fullJustify)|\(effectivePageAnimation)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)"
+        let styleKey = "\(contentKey)|\(adjacentContentKey)|\(title)|\(isVolume)|\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(headerInset)|\(footerInset)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(isSelectable)|\(fullJustify)|\(effectivePageAnimation)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)|\(reviewBubbleImageRevision)"
         if context.coordinator.styleKey != styleKey {
             if context.coordinator.shouldDeferRender(in: view) {
                 context.coordinator.needsDeferredRender = true
@@ -304,7 +305,8 @@ struct ReaderTextView: UIViewRepresentable {
                     accent: .systemOrange,
                     showsBubbles: showsReviewBubbles,
                     bubbleStyle: reviewBubbleStyle,
-                    bubbleAccent: reviewBubbleAccent
+                    bubbleAccent: reviewBubbleAccent,
+                    customBubbleRevision: reviewBubbleImageRevision
                 )
             }
             context.coordinator.updatePageBreaker(in: view, invalidate: false)

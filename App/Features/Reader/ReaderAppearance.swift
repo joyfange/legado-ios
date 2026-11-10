@@ -377,7 +377,7 @@ enum ReaderInlineMarkup {
                 text: displayCount(query["displayText"] ?? query["num"] ?? ""),
                 color: query["displayColor"].flatMap { UIColor(readerHex: $0) },
                 emphasis: query["status"] == "emphasis",
-                url: query["url"].flatMap { URL(string: $0) }
+                url: query["url"].flatMap { URL(string: $0) } ?? query["js"].flatMap(scriptURL)
             ))
         }
         let (head, options) = splitOptions(source)
@@ -405,6 +405,21 @@ enum ReaderInlineMarkup {
         return .image(url.flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil })
     }
 
+    static let scriptScheme = "legado-review-js"
+
+    /// A source click callback (`showCmt(...)`) carried as a tappable link;
+    /// the reader runs it with the book source to find the review page.
+    static func scriptURL(_ script: String) -> URL? {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+        guard !script.isEmpty, let encoded = script.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return URL(string: "\(scriptScheme)://run?code=\(encoded)")
+    }
+
+    static func script(from url: URL) -> String? {
+        guard url.scheme == scriptScheme else { return nil }
+        return URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "code" }?.value
+    }
+
     private static func splitOptions(_ value: String) -> (String, [String: Any]) {
         guard let comma = value.range(of: ",{") else { return (value, [:]) }
         let head = String(value[..<comma.lowerBound])
@@ -423,8 +438,11 @@ enum ReaderInlineMarkup {
     }
 
     /// Replaces each marker inside `range` without changing the text length.
-    static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor, showsBubbles: Bool = true, bubbleStyle: Int = 0, bubbleAccent: Bool = false) {
-        guard let expression = tagExpression, range.length > 0,
+    static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor, showsBubbles: Bool = true, bubbleStyle: Int = 0, bubbleAccent: Bool = false, customBubbleRevision: Int = 0) {
+        guard range.length > 0 else { return }
+        if bubbleStyle == 4 { _ = customBubbleImage(revision: customBubbleRevision) }
+        styleCommentCards(text, in: range, font: font, foreground: foreground, accent: accent)
+        guard let expression = tagExpression,
               containsMarkup((text.string as NSString).substring(with: range)) else { return }
         let matches = expression.matches(in: text.string, range: range)
         for match in matches where match.range.length > 1 && match.numberOfRanges > 1 {
@@ -466,8 +484,61 @@ enum ReaderInlineMarkup {
         }
     }
 
-    /// 0 描边胶囊（默认）· 1 实心糖果 · 2 方角标签 · 3 对话气泡
-    static let bubbleStyleNames = ["描边胶囊", "实心糖果", "方角标签", "对话气泡"]
+    /// 0 描边胶囊（默认）· 1 实心糖果 · 2 方角标签 · 3 对话气泡 · 4 自定义图片
+    static let bubbleStyleNames = ["描边胶囊", "实心糖果", "方角标签", "对话气泡", "自定义图片"]
+
+    private static let cardExpression = try? NSRegularExpression(
+        pattern: "(?m)^【(?:热评|神评论|精选评论|精彩评论|本章说|本章讨论|本书讨论|本章评论|本书评论)[^】\\n]*】[^\\n]*"
+    )
+
+    /// 热评 / 本章说 卡片：标签用强调色加粗，正文缩小、浅色衬底，与正文区分开。
+    static func styleCommentCards(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor) {
+        let substring = (text.string as NSString).substring(with: range)
+        guard substring.contains("【"), let expression = cardExpression else { return }
+        let small = font.withSize(max(11, font.pointSize * 0.86))
+        for match in expression.matches(in: text.string, range: range) {
+            text.addAttributes([
+                .font: small,
+                .foregroundColor: foreground.withAlphaComponent(0.75),
+                .backgroundColor: foreground.withAlphaComponent(0.06)
+            ], range: match.range)
+            let line = (text.string as NSString).substring(with: match.range)
+            if let close = line.firstIndex(of: "】") {
+                let labelLength = (String(line[...close]) as NSString).length
+                text.addAttributes([
+                    .font: UIFont.systemFont(ofSize: small.pointSize, weight: .bold),
+                    .foregroundColor: accent
+                ], range: NSRange(location: match.range.location, length: labelLength))
+            }
+        }
+    }
+
+    /// 用户导入的自定义气泡底图（PNG / JPEG），保存在 UserDefaults。
+    static let customBubbleImageKey = "reviewBubbleCustomImage"
+    nonisolated(unsafe) private static var customImageRevision = -1
+    nonisolated(unsafe) private static var customImage: UIImage?
+
+    static func customBubbleImage(revision: Int) -> UIImage? {
+        if revision != customImageRevision {
+            customImageRevision = revision
+            customImage = UserDefaults.standard.data(forKey: customBubbleImageKey).flatMap { UIImage(data: $0) }
+            imageCache.removeAllObjects()
+        }
+        return customImage
+    }
+
+    /// 缩到 96 像素高再存，避免大图拖慢排版。
+    static func normalizedBubbleImageData(_ data: Data) -> Data? {
+        guard data.count <= 10_000_000, let image = UIImage(data: data), image.size.height > 0 else { return nil }
+        let height: CGFloat = 96
+        let width = min(max(image.size.width * height / image.size.height, 24), 384)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let resized = UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        return resized.pngData()
+    }
 
     nonisolated(unsafe) private static let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
@@ -483,8 +554,28 @@ enum ReaderInlineMarkup {
         return image
     }
 
+    private static func renderCustomBubble(text: String, font: UIFont, color: UIColor, image: UIImage) -> UIImage {
+        let labelFont = UIFont.systemFont(ofSize: max(9, font.pointSize * 0.55), weight: .bold)
+        let attributes: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: color]
+        let textSize = (text as NSString).size(withAttributes: attributes)
+        let height = ceil(labelFont.lineHeight + 6)
+        let imageWidth = image.size.width * height / max(image.size.height, 1)
+        let width = ceil(max(imageWidth, textSize.width + 10)) + 4
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { _ in
+            let box = CGRect(x: 4, y: 0, width: width - 4, height: height)
+            image.draw(in: box)
+            (text as NSString).draw(
+                at: CGPoint(x: box.midX - textSize.width / 2, y: (height - textSize.height) / 2),
+                withAttributes: attributes
+            )
+        }
+    }
+
     private static func renderBubble(text: String, font: UIFont, color: UIColor, style: Int) -> UIImage {
         let labelFont = UIFont.systemFont(ofSize: max(9, font.pointSize * 0.58), weight: .semibold)
+        if style == 4, let custom = customImage {
+            return renderCustomBubble(text: text, font: font, color: color, image: custom)
+        }
         let textColor = style == 1 ? UIColor.white : color
         let attributes: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: textColor]
         let textSize = (text as NSString).size(withAttributes: attributes)

@@ -40,4 +40,20 @@ struct ParagraphReviewMarkupTests {
         #expect(lines.contains("【热评】写得真好"))
         #expect(lines.contains("乙段"))
     }
+
+    @Test func sourceCallbackIsKeptForTheReaderToRun() throws {
+        let base = try #require(URL(string: "https://example.com/c/1"))
+        let html = "<p>丙段<img src=\"data:image/svg+xml;base64,,{\"style\":\"text\",\"click\":\"showCmt('1','2','3','4')\"}\"></p>"
+        let output = ChapterHTMLFormatter().format(html, baseURL: base)
+        #expect(output.hasPrefix("丙段<img src=\"bubble://paragraph?num=4&amp;js=showCmt%28"))
+    }
+
+    @Test func clickResolutionCapturesStartBrowser() async throws {
+        let resolution = await JavaScriptRuleEvaluator().resolveClick(
+            "java.startBrowser('https://r.example.com/p?id=' + (2 + 3), '段评')",
+            executionContext: RuleExecutionContext()
+        )
+        #expect(resolution.url == "https://r.example.com/p?id=5")
+        #expect(resolution.title == "段评")
+    }
 }

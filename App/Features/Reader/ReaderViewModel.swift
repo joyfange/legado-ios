@@ -232,6 +232,21 @@ final class ReaderViewModel: ObservableObject {
     var canGoNext: Bool { navigationIndex(direction: 1) != nil }
     var hasPreviousWindow: Bool { previousLoadedIndex != nil }
     var hasContinuationWindow: Bool { continuationLoadedIndex != nil }
+    /// 执行书源的段评点击回调（如 showCmt(...)），拿到段评页地址。
+    func resolveReviewClick(_ script: String) async -> JavaScriptRuleEvaluator.ClickResolution {
+        guard let source else {
+            return .init(url: nil, title: nil, error: "这本书没有关联书源，无法执行段评回调")
+        }
+        let chapter = currentChapter
+        let context = RuleExecutionContext(
+            baseURL: chapter?.url ?? book.bookUrl,
+            source: source,
+            book: book,
+            chapter: chapter
+        )
+        return await JavaScriptRuleEvaluator().resolveClick(script, executionContext: context)
+    }
+
     var canEditContent: Bool { source != nil }
     var usesReplaceRules: Bool { book.readConfig?.useReplaceRule ?? true }
     var currentChapterError: String? {
