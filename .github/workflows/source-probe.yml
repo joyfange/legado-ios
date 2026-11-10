@@ -1,11 +1,13 @@
 name: 书源探测
 
 on:
+  push:
+    paths: ["scripts/probe-sources.txt", ".github/workflows/source-probe.yml"]
   workflow_dispatch:
     inputs:
       source_url:
-        description: 书源 JSON 地址
-        required: true
+        description: 书源 JSON 地址（留空用 scripts/probe-sources.txt）
+        required: false
       keyword:
         description: 搜索关键词
         required: false
@@ -29,11 +31,22 @@ jobs:
       - name: 下载书源
         env:
           SRC: ${{ inputs.source_url }}
-        run: curl -sSL --compressed -o "$RUNNER_TEMP/source.json" "$SRC" && ls -l "$RUNNER_TEMP/source.json"
+        run: |
+          if [ -n "$SRC" ]; then echo "$SRC" > urls.txt; else grep -v '^#' scripts/probe-sources.txt > urls.txt; fi
+          i=0; while read -r u; do [ -z "$u" ] && continue; i=$((i+1)); curl -sSL --compressed -m 60 -o "$RUNNER_TEMP/s$i.json" "$u"; done < urls.txt
+          python3 - <<'PY'
+          import json, glob, os
+          out = []
+          for f in sorted(glob.glob(os.environ["RUNNER_TEMP"] + "/s*.json")):
+              d = json.load(open(f, encoding="utf-8-sig"))
+              out += d if isinstance(d, list) else [d]
+          json.dump(out, open(os.environ["RUNNER_TEMP"] + "/source.json", "w"), ensure_ascii=False)
+          print("sources:", [s.get("bookSourceName") for s in out])
+          PY
       - name: 探测发现与搜索
         env:
           LEGADO_EXPLORE_PROBE_FILE: ${{ runner.temp }}/source.json
-          LEGADO_SOURCE_PROBE_KEYWORD: ${{ inputs.keyword }}
+          LEGADO_SOURCE_PROBE_KEYWORD: ${{ inputs.keyword || '斗罗大陆' }}
           LEGADO_JS_TRACE: "1"
         run: |
           swift build --build-tests --disable-sandbox > build.log 2>&1 || { grep -n "error:" build.log | head -50; exit 1; }
