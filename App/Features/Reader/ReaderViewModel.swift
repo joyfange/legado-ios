@@ -247,6 +247,19 @@ final class ReaderViewModel: ObservableObject {
         return await JavaScriptRuleEvaluator().resolveClick(script, executionContext: context)
     }
 
+    /// 书源网页（showBrowser 打开的段评页）通过 run 桥接回调书源 JS。
+    func runSourceBridge(_ script: String) async -> String {
+        guard let source else { return #"{"ok":false,"error":"这本书没有关联书源"}"# }
+        let chapter = currentChapter
+        let context = RuleExecutionContext(
+            baseURL: chapter?.url ?? book.bookUrl,
+            source: source,
+            book: book,
+            chapter: chapter
+        )
+        return await JavaScriptRuleEvaluator().runBridgeCall(script, executionContext: context)
+    }
+
     var canEditContent: Bool { source != nil }
     var usesReplaceRules: Bool { book.readConfig?.useReplaceRule ?? true }
     var currentChapterError: String? {

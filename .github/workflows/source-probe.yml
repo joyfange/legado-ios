@@ -46,8 +46,9 @@ jobs:
       - name: 探测发现与搜索
         env:
           LEGADO_EXPLORE_PROBE_FILE: ${{ runner.temp }}/source.json
+          LEGADO_SOURCE_CHAIN_FILE: ${{ runner.temp }}/source.json
           LEGADO_SOURCE_PROBE_KEYWORD: ${{ inputs.keyword || '斗罗大陆' }}
           LEGADO_JS_TRACE: "1"
         run: |
           swift build --build-tests --disable-sandbox > build.log 2>&1 || { grep -n "error:" build.log | head -50; exit 1; }
-          swift test --skip-build --disable-sandbox --filter "BookSourceRemoteProbe/sampleExplore" 2>&1 | grep -E "EXPLORE|SEARCH|JS_TRACE|error|✘|passed|failed" | cut -c1-900
+          swift test --skip-build --disable-sandbox --filter "BookSourceRemoteProbe" 2>&1 | grep -E "EXPLORE|SEARCH|SOURCE_CHAIN|JS_TRACE|error|✘|passed|failed" | cut -c1-4000

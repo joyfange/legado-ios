@@ -617,15 +617,25 @@ enum ReaderInlineMarkup {
 
 struct ReaderReviewPage: Identifiable {
     let url: URL
-    var id: String { url.absoluteString }
+    var html: String?
+    var bridge: (@MainActor (String) async -> String)?
+    let id = UUID()
+
+    init(url: URL, html: String? = nil, bridge: (@MainActor (String) async -> String)? = nil) {
+        self.url = url
+        self.html = html
+        self.bridge = bridge
+    }
 }
 
 /// 段评 / 插图页：半屏打开，可上划展开到全屏。
 struct ReaderReviewSheet: View {
     let url: URL
+    var html: String?
+    var bridge: (@MainActor (String) async -> String)?
 
     var body: some View {
-        ReaderReviewWebView(url: url)
+        ReaderReviewWebView(url: url, html: html, bridge: bridge)
             .ignoresSafeArea(edges: .bottom)
             .readingPresentationDetents([.medium, .large])
     }
@@ -633,25 +643,65 @@ struct ReaderReviewSheet: View {
 
 private struct ReaderReviewWebView: UIViewRepresentable {
     let url: URL
+    var html: String?
+    var bridge: (@MainActor (String) async -> String)?
 
     func makeUIView(context: Context) -> WKWebView {
-        let web = WKWebView(frame: .zero)
+        let configuration = WKWebViewConfiguration()
+        if bridge != nil {
+            // 安卓 showBrowser 页面用 window.run / qmRun 回调书源 JS，返回 Promise。
+            let controller = configuration.userContentController
+            controller.addScriptMessageHandler(context.coordinator, contentWorld: .page, name: "legadoRun")
+            controller.addUserScript(WKUserScript(source: """
+                (function(){
+                  function run(code){ return window.webkit.messageHandlers.legadoRun.postMessage(String(code)); }
+                  window.run = run; window.qmRun = run; window.qmLocalCommentPage = true;
+                })();
+                """, injectionTime: .atDocumentStart, forMainFrameOnly: false, in: .page))
+        }
+        let web = WKWebView(frame: .zero, configuration: configuration)
         web.customUserAgent = ApplicationSettingsStore.shared.settings.effectiveUserAgent
         web.allowsBackForwardNavigationGestures = true
         web.navigationDelegate = context.coordinator
-        web.load(URLRequest(url: url))
+        if let html {
+            web.loadHTMLString(html, baseURL: url)
+        } else {
+            web.load(URLRequest(url: url))
+        }
         return web
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 
-    func makeCoordinator() -> Coordinator { Coordinator(host: url.host) }
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.configuration.userContentController.removeAllScriptMessageHandlers()
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(host: url.host, bridge: bridge) }
 
     /// 不少段评接口的证书已过期，书源阅读里会直接空白。只对段评页自己的域名、
     /// 且仅在“证书过期”这一个错误时放行；其他证书问题照常拦下。
-    @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandlerWithReply {
         let host: String?
-        init(host: String?) { self.host = host }
+        let bridge: (@MainActor (String) async -> String)?
+        init(host: String?, bridge: (@MainActor (String) async -> String)? = nil) {
+            self.host = host
+            self.bridge = bridge
+        }
+
+        func userContentController(
+            _ userContentController: WKUserContentController,
+            didReceive message: WKScriptMessage,
+            replyHandler: @escaping @MainActor @Sendable (Any?, String?) -> Void
+        ) {
+            guard let bridge, let code = message.body as? String else {
+                replyHandler(nil, "阅读端没有注入 run 桥接")
+                return
+            }
+            Task { @MainActor in
+                replyHandler(await bridge(code), nil)
+            }
+        }
 
         func webView(
             _ webView: WKWebView,

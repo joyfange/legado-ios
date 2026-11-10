@@ -9,6 +9,15 @@ struct SourceLoginView: View {
     @State private var isChecking = false
 
     var body: some View {
+        let rows = SourceLoginUIRow.parse(source.loginUi)
+        if !rows.isEmpty || !(source.loginUrl ?? "").trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("http") {
+            SourceLoginFormView(source: source, rows: rows)
+        } else {
+            webLogin
+        }
+    }
+
+    private var webLogin: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "lock.shield.fill").foregroundStyle(ReadingTheme.accent)
@@ -324,5 +333,205 @@ private extension WKHTTPCookieStore {
         await withCheckedContinuation { continuation in
             getAllCookies { continuation.resume(returning: $0) }
         }
+    }
+}
+
+// MARK: - loginUi 表单（安卓「阅读」书源登录界面）
+
+struct SourceLoginUIRow: Identifiable, Equatable {
+    var name: String
+    var type: String
+    var action: String?
+    var chars: [String]
+    var defaultValue: String
+    var viewName: String?
+    var fullWidth: Bool
+    var id: String { type + "|" + name }
+
+    var title: String {
+        guard var text = viewName?.trimmingCharacters(in: .whitespaces), !text.isEmpty else { return name }
+        if text.count >= 2, let first = text.first, first == text.last, first == "'" || first == "\"" {
+            text = String(text.dropFirst().dropLast())
+        }
+        return text.trimmingCharacters(in: .whitespaces)
+    }
+
+    static func parse(_ raw: String?) -> [SourceLoginUIRow] {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), raw.hasPrefix("["),
+              let data = raw.data(using: .utf8),
+              let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            guard let name = item["name"].map({ String(describing: $0) }), !name.isEmpty else { return nil }
+            let chars = (item["chars"] as? [Any])?.map { String(describing: $0) } ?? []
+            let basis = ((item["style"] as? [String: Any])?["layout_flexBasisPercent"] as? NSNumber)?.doubleValue ?? 1
+            return SourceLoginUIRow(
+                name: name,
+                type: (item["type"] as? String ?? "text").lowercased(),
+                action: (item["action"] as? String).flatMap { $0.isEmpty ? nil : $0 },
+                chars: chars,
+                defaultValue: item["default"].map { String(describing: $0) } ?? "",
+                viewName: item["viewName"] as? String,
+                fullWidth: basis >= 0.99
+            )
+        }
+    }
+}
+
+struct SourceLoginFormView: View {
+    let source: BookSource
+    let rows: [SourceLoginUIRow]
+    @State private var values: [String: String] = [:]
+    @State private var status: String?
+    @State private var isRunning = false
+
+    var body: some View {
+        Form {
+            if let status {
+                Section {
+                    Text(status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
+            ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
+                Section(section.0) {
+                    ForEach(section.1) { row in rowView(row) }
+                }
+            }
+        }
+        .disabled(isRunning)
+        .overlay { if isRunning { ProgressView().controlSize(.large) } }
+        .navigationTitle("登录 · \(source.bookSourceName)")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("保存") { Task { await saveAndLogin() } }
+            }
+        }
+        .onAppear(perform: loadValues)
+    }
+
+    /// 没有 action 的 button 在安卓上通常是分组标题。
+    private var sections: [(String, [SourceLoginUIRow])] {
+        var result: [(String, [SourceLoginUIRow])] = []
+        var header = ""
+        var current: [SourceLoginUIRow] = []
+        for row in rows {
+            if row.type == "button", row.action == nil {
+                if !current.isEmpty || !header.isEmpty { result.append((header, current)) }
+                header = row.title
+                current = []
+            } else {
+                current.append(row)
+            }
+        }
+        if !current.isEmpty || !header.isEmpty { result.append((header, current)) }
+        return result
+    }
+
+    @ViewBuilder private func rowView(_ row: SourceLoginUIRow) -> some View {
+        switch row.type {
+        case "password":
+            LabeledContent(row.title) {
+                SecureField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
+            }
+        case "toggle":
+            Button {
+                let options = row.chars.isEmpty ? ["🔳", "✅"] : row.chars
+                let current = values[row.name] ?? row.defaultValue
+                let index = options.firstIndex(of: current) ?? -1
+                values[row.name] = options[(index + 1) % options.count]
+                persist()
+                if let action = row.action { Task { await run(action) } }
+            } label: {
+                HStack {
+                    Text(row.title).foregroundStyle(.primary)
+                    Spacer()
+                    Text(values[row.name] ?? row.defaultValue)
+                }
+            }
+        case "select":
+            Picker(row.title, selection: Binding(
+                get: { values[row.name] ?? row.defaultValue },
+                set: {
+                    values[row.name] = $0
+                    persist()
+                    if let action = row.action { Task { await run(action) } }
+                }
+            )) {
+                ForEach(row.chars, id: \.self) { Text($0).tag($0) }
+            }
+        case "button":
+            Button(row.title) {
+                if let action = row.action { Task { await run(action) } }
+            }
+        default:
+            LabeledContent(row.title) {
+                TextField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
+            }
+        }
+    }
+
+    private func binding(_ row: SourceLoginUIRow) -> Binding<String> {
+        Binding(get: { values[row.name] ?? row.defaultValue }, set: { values[row.name] = $0 })
+    }
+
+    private func loadValues() {
+        var stored: [String: String] = [:]
+        let raw = BookSourceRuntimeStore.shared.get(sourceID: source.id, key: "loginInfo")
+        if let data = raw.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            stored = object.mapValues { String(describing: $0) }
+        }
+        for row in rows where row.type != "button" {
+            stored[row.name] = stored[row.name] ?? row.defaultValue
+        }
+        values = stored
+    }
+
+    private func persist() {
+        var info: [String: String] = [:]
+        for row in rows where row.type != "button" { info[row.name] = values[row.name] ?? row.defaultValue }
+        if let data = try? JSONSerialization.data(withJSONObject: info),
+           let text = String(data: data, encoding: .utf8) {
+            BookSourceRuntimeStore.shared.put(sourceID: source.id, key: "loginInfo", value: text)
+        }
+    }
+
+    private var loginScript: String {
+        var script = (source.loginUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if script.lowercased().hasPrefix("http") { return "" }
+        if script.lowercased().hasPrefix("@js:") { script = String(script.dropFirst(4)) }
+        if script.lowercased().hasPrefix("<js>") {
+            script = String(script.dropFirst(4))
+            if let end = script.range(of: "</js>", options: [.caseInsensitive, .backwards]) {
+                script = String(script[..<end.lowerBound])
+            }
+        }
+        return script
+    }
+
+    private func run(_ action: String) async {
+        persist()
+        isRunning = true
+        defer { isRunning = false }
+        let script = loginScript + "\n" + action
+        do {
+            let result = try await JavaScriptRuleEvaluator(maximumScriptLength: 8 * 1_024 * 1_024)
+                .evaluateAsync(script: script, result: .string(""), executionContext: .init(baseURL: source.bookSourceUrl, source: source))
+            loadValues()
+            if let toast = result.variables[JavaScriptRuleEvaluator.toastKey], !toast.isEmpty {
+                status = toast
+            } else {
+                let value = result.value.stringValue
+                status = value.isEmpty || value == "null" || value == "undefined" ? "已执行" : String(value.prefix(400))
+            }
+        } catch {
+            status = "执行失败：\(error.localizedDescription)"
+        }
+    }
+
+    private func saveAndLogin() async {
+        persist()
+        await run("typeof login === 'function' ? login() : ''")
+        if status == "已执行" { status = "已保存" }
     }
 }

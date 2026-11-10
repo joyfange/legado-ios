@@ -183,16 +183,35 @@ private final class JavaScriptRedirectBlocker: NSObject, URLSessionTaskDelegate,
 public struct JavaScriptRuleEvaluator: Sendable {
     static let browserURLKey = "__legadoBrowserURL"
     static let browserTitleKey = "__legadoBrowserTitle"
+    static let browserHTMLKey = "__legadoBrowserHTML"
+    public static let toastKey = "__legadoToast"
 
     public struct ClickResolution: Sendable, Equatable {
         public var url: String?
         public var title: String?
         public var error: String?
+        /// `java.showBrowser(url, html, ...)`: the page to render with `url` as base.
+        public var html: String?
 
-        public init(url: String?, title: String?, error: String?) {
+        public init(url: String?, title: String?, error: String?, html: String? = nil) {
             self.url = url
             self.title = title
             self.error = error
+            self.html = html
+        }
+    }
+
+    /// Runs code a source's own web page sends back through its `run` bridge
+    /// (Android `showBrowser` pages call `run("fn.call(this, …)")`) and returns
+    /// the value as text, objects as JSON.
+    public func runBridgeCall(_ script: String, executionContext: RuleExecutionContext) async -> String {
+        do {
+            let result = try await evaluateAsync(script: script, result: .string(""), executionContext: executionContext)
+            if case .string(let text) = result.value { return text }
+            if result.value == .null { return "" }
+            return (try? String(decoding: JSONEncoder().encode(result.value), as: UTF8.self)) ?? result.value.stringValue
+        } catch {
+            return #"{"ok":false,"error":"# + String(reflecting: error.localizedDescription) + "}"
         }
     }
 
@@ -203,6 +222,9 @@ public struct JavaScriptRuleEvaluator: Sendable {
         context.variables[Self.browserURLKey] = nil
         do {
             let result = try await evaluateAsync(script: script, result: .string(""), executionContext: context)
+            if let html = result.variables[Self.browserHTMLKey], !html.isEmpty {
+                return .init(url: result.variables[Self.browserURLKey], title: nil, error: nil, html: html)
+            }
             if let url = result.variables[Self.browserURLKey], !url.isEmpty {
                 let title = result.variables[Self.browserTitleKey]
                 return .init(url: url, title: title?.isEmpty == false && title != "null" ? title : nil, error: nil)
@@ -758,13 +780,28 @@ public struct JavaScriptRuleEvaluator: Sendable {
         // 这里只记下地址，由阅读器在半屏网页里打开。
         let startBrowser: @convention(block) (Any?, Any?) -> String = { value, title in
             let url = Self.stringify(value)
+            let second = Self.stringify(title)
             _ = put(Self.browserURLKey, url)
-            _ = put(Self.browserTitleKey, Self.stringify(title))
+            // showBrowser(url, html, preloadJs, config): the 2nd arg is a page.
+            if second.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") {
+                _ = put(Self.browserHTMLKey, second)
+            } else {
+                _ = put(Self.browserTitleKey, second)
+            }
             return url
         }
         for name in ["startBrowser", "startBrowserAwait", "showBrowser", "showReadingBrowser", "startBrowserDp", "openUrl"] {
             java?.setObject(startBrowser, forKeyedSubscript: name as NSString)
         }
+        // toast / longToast：记录最后一条，书源登录页等界面会显示给用户。
+        let toast: @convention(block) (Any?) -> Any? = { value in
+            let text = Self.stringify(value)
+            DiagnosticLog.shared.record(category: "JS", message: text)
+            _ = put(Self.toastKey, text)
+            return value
+        }
+        java?.setObject(toast, forKeyedSubscript: "toast" as NSString)
+        java?.setObject(toast, forKeyedSubscript: "longToast" as NSString)
         context.setObject(java, forKeyedSubscript: "java" as NSString)
         context.evaluateScript("""
             (function () {

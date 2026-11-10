@@ -286,7 +286,7 @@ struct ReaderView: View {
         .sheet(isPresented: $showsTableOfContents) { tableOfContents }
         .sheet(isPresented: $showsBookmarks) { bookmarksSheet }
         .sheet(item: $reviewPage) { page in
-            ReaderReviewSheet(url: page.url)
+            ReaderReviewSheet(url: page.url, html: page.html, bridge: page.bridge)
         }
         .alert("打不开段评", isPresented: Binding(get: { reviewError != nil }, set: { if !$0 { reviewError = nil } })) {
             Button("好", role: .cancel) { reviewError = nil }
@@ -1598,7 +1598,11 @@ struct ReaderView: View {
         Task {
             let resolution = await model.resolveReviewClick(script)
             isResolvingReview = false
-            if let target = resolution.url.flatMap(URL.init(string:)) {
+            if let html = resolution.html {
+                let base = resolution.url.flatMap(URL.init(string:)) ?? URL(string: "about:blank")!
+                let model = model
+                reviewPage = ReaderReviewPage(url: base, html: html, bridge: { await model.runSourceBridge($0) })
+            } else if let target = resolution.url.flatMap(URL.init(string:)) {
                 reviewPage = ReaderReviewPage(url: target)
             } else {
                 reviewError = resolution.error ?? "书源没有给出段评页地址"
