@@ -1753,6 +1753,7 @@ struct ReaderView: View {
 
     private var tableOfContents: some View {
         ReadingNavigationStack {
+            ScrollViewReader { tocProxy in
             List {
                 Section {
                     ForEach(tocChapters) { chapter in
@@ -1830,6 +1831,13 @@ struct ReaderView: View {
             .navigationTitle("目录")
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $tocSearch, prompt: "搜索章节")
+            .onAppear { ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id) }
+            .onChange(of: tocDescending) { _ in
+                ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id)
+            }
+            .onChange(of: tocSearch) { value in
+                if value.isEmpty { ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id) }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("关闭") { showsTableOfContents = false } }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -1837,6 +1845,20 @@ struct ReaderView: View {
                         tocDescending.toggle()
                     }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("定位当前章节", systemImage: "scope") {
+                        if !tocSearch.isEmpty { tocSearch = "" }
+                        ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id, animated: true)
+                    }
+                    .accessibilityIdentifier("reader.toc.locate")
+                }
+                if !tocSearch.isEmpty {
+                    ToolbarItem(placement: .bottomBar) {
+                        Button("清除搜索", systemImage: "xmark.circle") { tocSearch = "" }
+                            .accessibilityIdentifier("reader.toc.clearSearch")
+                    }
+                }
+            }
             }
         }
         .readingPresentationDetents([.medium, .large])

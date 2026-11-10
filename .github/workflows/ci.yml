@@ -30,8 +30,16 @@ jobs:
             DerivedData/SourcePackages
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Legado.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
       - name: 核心与页面模型测试（swift test）
-        run: swift test --disable-sandbox 2>&1 | tail -n 200
-        shell: bash -o pipefail {0}
+        run: |
+          set +e
+          swift test --disable-sandbox > swift-test.log 2>&1
+          status=$?
+          echo "::group::失败与错误摘要"
+          grep -nE "error:|✘|failed|[Ff]atal|Crash|signal" swift-test.log | grep -v "warning:" | head -n 150
+          echo "::endgroup::"
+          tail -n 120 swift-test.log
+          exit $status
+        shell: bash {0}
       - name: 选择模拟器
         id: sim
         run: |
@@ -50,7 +58,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-logs
-          path: reader-tests.log
+          path: |
+            swift-test.log
+            reader-tests.log
 
   build:
     name: 构建 iPhone 安装包

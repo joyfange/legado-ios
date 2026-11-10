@@ -147,6 +147,20 @@ final class EPUBReaderModel: ObservableObject, EPUBNavigatorDelegate {
         return ReadiumShared.Link(href: url.string, mediaType: .xhtml, title: chapter.title)
     }
 
+    /// The table-of-contents entry for the current reading location: the
+    /// last entry in the same resource whose fragment (if any) has been
+    /// reached, otherwise the first entry for that resource.
+    var currentTOCEntryID: Int? {
+        guard let location else { return tableOfContents.first?.id }
+        let path = Self.path(location.href.string)
+        let sameResource = tableOfContents.filter { Self.path(String(describing: $0.link.href)) == path }
+        if let fragmentMatch = sameResource.last(where: { entry in
+            guard let fragment = URLComponents(string: String(describing: entry.link.href))?.fragment else { return false }
+            return location.locations.fragments.contains(fragment)
+        }) { return fragmentMatch.id }
+        return sameResource.first?.id
+    }
+
     static func path(_ href: String) -> String {
         (URLComponents(string: href)?.path ?? href).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
     }
@@ -298,17 +312,39 @@ struct EPUBReaderView: View {
 
     private var tocSheet: some View {
         ReadingNavigationStack {
-            List(model.tableOfContents) { entry in
-                Button {
-                    showsTOC = false
-                    Task { await model.go(to: entry.link) }
-                } label: {
-                    Text(entry.link.title ?? "未命名章节")
-                        .foregroundStyle(.primary).padding(.leading, CGFloat(min(entry.depth, 6)) * 14)
+            ScrollViewReader { proxy in
+                let currentID = model.currentTOCEntryID
+                List(model.tableOfContents) { entry in
+                    Button {
+                        showsTOC = false
+                        Task { await model.go(to: entry.link) }
+                    } label: {
+                        HStack {
+                            Text(entry.link.title ?? "未命名章节")
+                                .foregroundStyle(entry.id == currentID ? ReadingTheme.accent : .primary)
+                                .padding(.leading, CGFloat(min(entry.depth, 6)) * 14)
+                            Spacer(minLength: 8)
+                            if entry.id == currentID {
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(ReadingTheme.accent)
+                            }
+                        }
+                    }
+                    .id(entry.id)
+                    .listRowBackground(entry.id == currentID ? ReadingTheme.accent.opacity(0.08) : nil)
+                    .accessibilityAddTraits(entry.id == currentID ? .isSelected : [])
+                }
+                .onAppear { ReaderTOCLocator.scroll(proxy, to: currentID) }
+                .navigationTitle("目录").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("完成") { showsTOC = false } }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("定位当前章节", systemImage: "scope") {
+                            ReaderTOCLocator.scroll(proxy, to: currentID, animated: true)
+                        }
+                        .accessibilityIdentifier("epub.toc.locate")
+                    }
                 }
             }
-            .navigationTitle("目录").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("完成") { showsTOC = false } } }
         }
     }
 

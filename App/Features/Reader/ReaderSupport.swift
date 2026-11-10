@@ -86,3 +86,19 @@ struct ReaderMenuDismissShape: Shape {
 
     static func restoreApplicationDefault() { apply("0") }
 }
+
+/// Scrolls a table of contents to the chapter being read. The delay lets a
+/// freshly presented List build its rows before scrolling.
+enum ReaderTOCLocator {
+    @MainActor
+    static func scroll<ID: Hashable>(_ proxy: ScrollViewProxy, to id: ID?, animated: Bool = false) {
+        guard let id else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (animated ? 0 : 0.2)) {
+            if animated {
+                withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .center) }
+            } else {
+                proxy.scrollTo(id, anchor: .center)
+            }
+        }
+    }
+}
