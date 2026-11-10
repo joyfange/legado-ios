@@ -1,0 +1,40 @@
+name: 书源探测
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: 书源 JSON 地址
+        required: true
+      keyword:
+        description: 搜索关键词
+        required: false
+        default: 斗罗大陆
+
+jobs:
+  probe:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: 选择 Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] && sudo xcode-select -s "$XC"
+      - name: 缓存 SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved', 'Legado.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+      - name: 下载书源
+        env:
+          SRC: ${{ inputs.source_url }}
+        run: curl -sSL --compressed -o "$RUNNER_TEMP/source.json" "$SRC" && ls -l "$RUNNER_TEMP/source.json"
+      - name: 探测发现与搜索
+        env:
+          LEGADO_EXPLORE_PROBE_FILE: ${{ runner.temp }}/source.json
+          LEGADO_SOURCE_PROBE_KEYWORD: ${{ inputs.keyword }}
+          LEGADO_JS_TRACE: "1"
+        run: |
+          swift build --build-tests --disable-sandbox > build.log 2>&1 || { grep -n "error:" build.log | head -50; exit 1; }
+          swift test --skip-build --disable-sandbox --filter "BookSourceRemoteProbe/sampleExplore" 2>&1 | grep -E "EXPLORE|SEARCH|JS_TRACE|error|✘|passed|failed" | cut -c1-900

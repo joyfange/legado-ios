@@ -25,6 +25,30 @@ struct BookSourceRemoteProbe {
         #expect(reports.count == sources.count)
     }
 
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LEGADO_EXPLORE_PROBE_FILE"] != nil))
+    func sampleExplore() async throws {
+        let path = try #require(ProcessInfo.processInfo.environment["LEGADO_EXPLORE_PROBE_FILE"])
+        let sources = try BookSourceImporter().decode(Data(contentsOf: URL(fileURLWithPath: path)))
+        let transport = ProbeTransport()
+        let service = BookExploreService(transport: transport)
+        for source in sources {
+            let kinds = await service.kinds(for: source)
+            print("EXPLORE_KINDS \(source.bookSourceName) count=\(kinds.kinds.count) diag=\(kinds.diagnostics.map { "\($0.code): \($0.message)" })")
+            for kind in kinds.kinds.filter({ !($0.url ?? "").isEmpty }).prefix(2) {
+                let outcome = await service.explore(source: source, kind: kind, page: 1)
+                print("EXPLORE \(source.bookSourceName) [\(kind.title)] url=\((kind.url ?? "").prefix(200)) books=\(outcome.books.count) first=\(outcome.books.first.map { "\($0.name)/\($0.author)/\($0.bookURL)" } ?? "-")")
+                for diagnostic in outcome.diagnostics { print("EXPLORE_DIAG \(diagnostic.code): \(diagnostic.message.prefix(400)) rule=\(diagnostic.rule.prefix(160))") }
+            }
+        }
+        for record in await transport.records() { print("EXPLORE_REQ " + record.stringValue.prefix(600)) }
+        let search = BookSearchService(transport: transport, networkPolicy: .init(), history: .init())
+        let keyword = ProcessInfo.processInfo.environment["LEGADO_SOURCE_PROBE_KEYWORD"] ?? "斗罗大陆"
+        for await outcome in search.searchOutcomes(keyword: keyword, page: 1, sources: sources, maximumConcurrentSources: 3, includeDisabled: true) {
+            print("SEARCH \(outcome.sourceID) books=\(outcome.books.count) first=\(outcome.books.first.map { "\($0.name)/\($0.bookURL)" } ?? "-")")
+            for diagnostic in outcome.diagnostics { print("SEARCH_DIAG \(diagnostic.code): \(diagnostic.message.prefix(400))") }
+        }
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["LEGADO_SOURCE_PROBE_FILE"] != nil))
     func sampleSearches() async throws {
         guard let path = ProcessInfo.processInfo.environment["LEGADO_SOURCE_PROBE_FILE"] else { return }

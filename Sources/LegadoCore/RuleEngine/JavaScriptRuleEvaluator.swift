@@ -632,11 +632,14 @@ public struct JavaScriptRuleEvaluator: Sendable {
                     timeoutValue: timeoutValue,
                     executionContext: executionContext
                 )
+                Self.trace("ajax \(response.statusCode) \(rawURL.prefix(160)) => \(response.decodedText.prefix(200))")
                 return response.decodedText
             } catch HTTPClientError.statusResponse(let response) {
                 // Android Legado returns the body for 4xx/5xx too.
+                Self.trace("ajax \(response.statusCode) \(rawURL.prefix(160)) => \(response.decodedText.prefix(200))")
                 return response.decodedText
             } catch {
+                Self.trace("ajax ERROR \(rawURL.prefix(160)) => \(error)")
                 return error.localizedDescription
             }
         }
@@ -1276,6 +1279,12 @@ public struct JavaScriptRuleEvaluator: Sendable {
         return stride(from: 0, to: characters.count, by: 2).compactMap { index in
             UInt8(String(characters[index ... index + 1]), radix: 16)
         }
+    }
+
+    static let traceEnabled = ProcessInfo.processInfo.environment["LEGADO_JS_TRACE"] != nil
+    static func trace(_ message: @autoclosure () -> String) {
+        guard traceEnabled else { return }
+        print("JS_TRACE " + message())
     }
 
     static func stringEncoding(_ name: String) -> String.Encoding? {
