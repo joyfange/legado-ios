@@ -10,7 +10,9 @@ struct SourceLoginView: View {
 
     var body: some View {
         let rows = SourceLoginUIRow.parse(source.loginUi)
-        if !rows.isEmpty || !(source.loginUrl ?? "").trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("http") {
+        let login = (source.loginUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let isWebAddress = !login.contains("\n") && (login.hasPrefix("http") || login.hasPrefix("about:") || login.contains("://"))
+        if !rows.isEmpty || !isWebAddress {
             SourceLoginFormView(source: source, rows: rows)
         } else {
             webLogin
