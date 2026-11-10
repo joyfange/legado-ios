@@ -1852,8 +1852,8 @@ struct ReaderView: View {
                     }
                     .accessibilityIdentifier("reader.toc.locate")
                 }
-                if !tocSearch.isEmpty {
-                    ToolbarItem(placement: .bottomBar) {
+                ToolbarItem(placement: .bottomBar) {
+                    if !tocSearch.isEmpty {
                         Button("清除搜索", systemImage: "xmark.circle") { tocSearch = "" }
                             .accessibilityIdentifier("reader.toc.clearSearch")
                     }
