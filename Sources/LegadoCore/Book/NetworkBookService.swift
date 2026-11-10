@@ -431,6 +431,11 @@ public struct NetworkBookService: Sendable {
                 context: context
             )
         }
+        // Android Legado hands a leading <js>/@js: the raw response text as
+        // `result`, even when the page is JSON.
+        if let raw = document.rawText, rule.startsWithJavaScriptRule {
+            return await engine.evaluate(rule, in: .string(raw), listMode: listMode, context: context)
+        }
         return await engine.evaluate(rule, in: document.value, listMode: listMode, context: context)
     }
 
@@ -479,11 +484,13 @@ public struct NetworkBookService: Sendable {
         var isHTML: Bool
         var baseURL: String
         var isFragment = false
+        var rawText: String?
 
         init(response: HTTPResponse) {
             if let json = response.decodedJSON {
                 value = json
                 isHTML = false
+                rawText = response.decodedText
             } else {
                 value = .string(response.decodedText)
                 isHTML = true

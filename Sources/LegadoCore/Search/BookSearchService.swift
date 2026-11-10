@@ -266,7 +266,7 @@ public struct BookSearchService: Sendable {
             let listEvaluation = if let root {
                 await engine.evaluate(
                     listRule.trimmingListPrefix,
-                    in: root,
+                    in: listRule.trimmingListPrefix.startsWithJavaScriptRule ? .string(body) : root,
                     listMode: true,
                     context: .init(variables: response.requestVariables, baseURL: response.finalURL.absoluteString, key: keyword, page: page, source: source)
                 )
