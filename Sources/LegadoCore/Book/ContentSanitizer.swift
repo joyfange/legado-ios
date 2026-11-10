@@ -102,7 +102,7 @@ struct ChapterHTMLFormatter {
         let svg = Self.svgText(clean)
         if options["style"]?.lowercased() == "text" || Self.isParagraphReviewMarker(src) {
             let svgCount = svg.flatMap { Self.svgTexts($0).compactMap { Int($0) }.first }
-            let count = Self.commentCount(svgCount: svgCount, click: click, payloadIsSVG: svg?.contains("<svg") == true)
+            let count = Self.commentCount(svgCount: svgCount, click: Self.clickScript(tag: tag, options: options) ?? click, payloadIsSVG: svg?.contains("<svg") == true)
             return (Self.bubbleMarker(count: count, url: click, script: Self.clickScript(tag: tag, options: options)), true)
         }
         if let svg, let card = Self.commentCardText(fromSVG: svg, click: click, script: Self.clickScript(tag: tag, options: options)) {
