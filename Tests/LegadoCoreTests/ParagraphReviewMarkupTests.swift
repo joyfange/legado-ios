@@ -94,7 +94,7 @@ struct ParagraphReviewMarkupTests {
         let json = #"[{"bookSourceName":"速读谷","bookSourceUrl":"https://www.sudugu.org","ruleExplore":[],"exploreUrl":[{"title":"玄幻","url":"/x/{{page}}.html"}],"ruleSearch":{"bookList":".item","name":"h3@text"}}]"#
         let sources = try BookSourceImporter().decode(Data(json.utf8))
         #expect(sources.count == 1)
-        #expect(sources[0].ruleExplore == nil || sources[0].ruleExplore?.bookList == nil)
+        #expect(sources[0].ruleExplore?.bookList == nil)
         #expect(sources[0].exploreUrl?.contains("玄幻") == true)
     }
 }
