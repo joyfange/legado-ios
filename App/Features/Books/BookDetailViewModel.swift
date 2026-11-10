@@ -113,7 +113,14 @@ final class BookDetailViewModel: ObservableObject {
             book.variable = details.variable ?? book.variable
             diagnostics += detail.diagnostics
         }
-        let toc = await updateCoordinator.refresh(book: book, source: source)
+        var toc = await updateCoordinator.refresh(book: book, source: source)
+        if toc.chapters.isEmpty && chapters.isEmpty {
+            // 首次请求常因游客令牌刚下发、接口偶发超时而为空；先在原书源重试一次，
+            // 仍为空再自动换源，避免一闪“当前源不可用”。
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            diagnostics += toc.diagnostics
+            toc = await updateCoordinator.refresh(book: toc.book, source: source)
+        }
         if !toc.chapters.isEmpty { chapters = toc.chapters }
         diagnostics += toc.diagnostics
         book = toc.book
