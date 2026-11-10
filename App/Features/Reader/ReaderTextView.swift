@@ -368,10 +368,14 @@ struct ReaderTextView: UIViewRepresentable {
         var lastChapterTurnToken: Int?
         private weak var chapterTurnSnapshot: UIView?
 
-        /// Covers the reader with a picture of the page being left (its
-        /// background included) and slides it away once the next chapter's
-        /// first or last page is laid out underneath, so a chapter change
-        /// looks like an ordinary page turn with no blank or loading frame.
+        private var pendingChapterTurnDirection = 0
+        private var chapterTurnGeneration = 0
+
+        /// Freezes the page being left on screen (background included) while
+        /// the next chapter's first or last page is laid out underneath. Once
+        /// that page is in place, `finishChapterTurnTransition` animates it in
+        /// with the same effect as an in-chapter page turn, so crossing a
+        /// chapter never shows a blank, half-positioned or loading frame.
         func beginChapterTurnTransition(in view: UITextView, direction: Int) {
             guard let window = view.window, let container = view.superview,
                   view.bounds.width > 1, view.bounds.height > 1 else { return }
@@ -380,23 +384,78 @@ struct ReaderTextView: UIViewRepresentable {
                 from: frameInWindow, afterScreenUpdates: false, withCapInsets: .zero
             ) else { return }
             chapterTurnSnapshot?.removeFromSuperview()
+            view.layer.removeAllAnimations()
+            view.transform = .identity
             snapshot.frame = view.frame
             snapshot.isUserInteractionEnabled = false
-            snapshot.layer.shadowColor = UIColor.black.cgColor
-            snapshot.layer.shadowOpacity = 0.18
-            snapshot.layer.shadowRadius = 8
-            snapshot.layer.shadowOffset = CGSize(width: direction > 0 ? 3 : -3, height: 0)
             container.insertSubview(snapshot, aboveSubview: view)
             chapterTurnSnapshot = snapshot
-            let distance = view.bounds.width + 12
-            DispatchQueue.main.async {
-                UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
-                    snapshot.transform = CGAffineTransform(translationX: direction > 0 ? -distance : distance, y: 0)
-                } completion: { _ in
-                    snapshot.removeFromSuperview()
-                }
+            pendingChapterTurnDirection = direction
+            isTurningPage = true
+            chapterTurnGeneration &+= 1
+            let generation = chapterTurnGeneration
+            // Safety net: never leave the frozen page up if layout stalls.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self, weak view] in
+                guard let self, let view, self.chapterTurnGeneration == generation,
+                      self.pendingChapterTurnDirection != 0 else { return }
+                self.finishChapterTurnTransition(in: view)
             }
         }
+
+        func finishChapterTurnTransition(in view: UITextView) {
+            let direction = pendingChapterTurnDirection
+            guard direction != 0, let snapshot = chapterTurnSnapshot else {
+                pendingChapterTurnDirection = 0
+                return
+            }
+            pendingChapterTurnDirection = 0
+            let done: () -> Void = { [weak self] in
+                view.transform = .identity
+                snapshot.removeFromSuperview()
+                self?.isTurningPage = false
+            }
+            let width = view.bounds.width
+            switch parent.pageAnimation {
+            case 0:
+                // Cover: forward reveals the next page from under the old one;
+                // backward slides the previous page in over it.
+                if direction > 0 {
+                    snapshot.layer.shadowColor = UIColor.black.cgColor
+                    snapshot.layer.shadowOpacity = 0.18
+                    snapshot.layer.shadowRadius = 8
+                    snapshot.layer.shadowOffset = CGSize(width: 3, height: 0)
+                    UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut]) {
+                        snapshot.transform = CGAffineTransform(translationX: -width, y: 0)
+                    } completion: { _ in done() }
+                } else {
+                    view.superview?.insertSubview(snapshot, belowSubview: view)
+                    view.transform = CGAffineTransform(translationX: -width, y: 0)
+                    UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut]) {
+                        view.transform = .identity
+                    } completion: { _ in done() }
+                }
+            case 1:
+                // Slide: both pages move together.
+                let offset = CGFloat(direction) * width
+                view.transform = CGAffineTransform(translationX: offset, y: 0)
+                UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut]) {
+                    view.transform = .identity
+                    snapshot.transform = CGAffineTransform(translationX: -offset, y: 0)
+                } completion: { _ in done() }
+            case 2:
+                guard let container = view.superview else { done(); return }
+                UIView.transition(
+                    with: container,
+                    duration: 0.38,
+                    options: direction > 0 ? .transitionCurlUp : .transitionCurlDown,
+                    animations: { snapshot.removeFromSuperview() },
+                    completion: { _ in done() }
+                )
+            default:
+                done()
+            }
+        }
+
         var contentKey = 0
         var primaryContentKey = 0
         var styleKey = ""
@@ -666,6 +725,7 @@ struct ReaderTextView: UIViewRepresentable {
                     view.setContentOffset(CGPoint(x: 0, y: target), animated: false)
                     self.pendingRestorePosition = nil
                     self.reportRestoredPosition(in: view)
+                    self.finishChapterTurnTransition(in: view)
                     return
                 }
                 point.y += view.textContainerInset.top
@@ -676,6 +736,7 @@ struct ReaderTextView: UIViewRepresentable {
                 view.setContentOffset(CGPoint(x: 0, y: target), animated: false)
                 self.pendingRestorePosition = nil
                 self.reportRestoredPosition(in: view)
+                self.finishChapterTurnTransition(in: view)
             }
         }
 

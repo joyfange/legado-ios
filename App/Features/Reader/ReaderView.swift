@@ -50,6 +50,8 @@ struct ReaderView: View {
     @State private var totalPages = 1
     @State private var readerRenderRevision = 0
     @State private var isWaitingForNextChapter = false
+    @State private var chapterTurnWait: Task<Void, Never>?
+    @State private var isWaitingForChapterTurn = false
     @State private var chapterTurnToken = 0
     @State private var reviewPage: ReaderReviewPage?
     @AppStorage("showsReviewBubbles") private var showsReviewBubbles = true
@@ -615,7 +617,7 @@ struct ReaderView: View {
             totalPages: $totalPages,
             isAutoReading: isAutoReading,
             isAutoReadPaused: pausesAutoReading,
-            isLoadingNextChapter: isWaitingForNextChapter,
+            isLoadingNextChapter: isWaitingForNextChapter || isWaitingForChapterTurn,
             secondsPerScreen: Double(autoReadSpeed),
             onReachedEnd: { boundaryPosition in
                 if pageAnimation == 3 {
@@ -623,17 +625,7 @@ struct ReaderView: View {
                     return
                 }
                 if model.canGoNext {
-                    showsReaderMenu = false
-                    readerPosition = boundaryPosition
-                    saveProgress(immediate: true)
-                    readerJumpPosition = nil
-                    // Keep every chapter in its own TextKit document. Appending
-                    // text here makes the absolute UTF-16 offset belong to the
-                    // previous chapter while progress is saved under the next.
-                    chapterTurnDirection = 1
-                    chapterTurnToken &+= 1
-                    model.goNext()
-                    readerPosition = model.requestedPosition
+                    turnChapterWhenReady(direction: 1, boundaryPosition: boundaryPosition)
                 } else {
                     isAutoReading = false
                 }
@@ -644,13 +636,7 @@ struct ReaderView: View {
                     return
                 }
                 guard model.canGoPrevious else { return }
-                showsReaderMenu = false
-                readerPosition = boundaryPosition
-                saveProgress(immediate: true)
-                readerJumpPosition = nil
-                chapterTurnDirection = -1
-                chapterTurnToken &+= 1
-                model.goPrevious(position: Int.max)
+                turnChapterWhenReady(direction: -1, boundaryPosition: boundaryPosition)
             },
             onEnteredPrevious: { position in
                 guard pageAnimation == 3, model.canGoPrevious, model.hasPreviousWindow else { return }
@@ -667,7 +653,12 @@ struct ReaderView: View {
                 model.promoteContinuation(position: readerPosition)
             },
             onDeferredRender: { readerRenderRevision &+= 1 },
-            onCancelNextLoading: { isWaitingForNextChapter = false },
+            onCancelNextLoading: {
+                isWaitingForNextChapter = false
+                chapterTurnWait?.cancel()
+                chapterTurnWait = nil
+                isWaitingForChapterTurn = false
+            },
             onPageChanged: pageDidChange,
             onTapAction: handleTapAction,
             titleColor: titleColorHex.isEmpty ? nil : UIColor(readerHex: titleColorHex),
@@ -752,6 +743,7 @@ struct ReaderView: View {
     private var pausesAutoReading: Bool {
         isWaitingForNextChapter
             || isWaitingForPreviousChapter
+            || isWaitingForChapterTurn
             || showsReaderMenu
             || showsTableOfContents
             || showsBookmarks
@@ -1069,6 +1061,46 @@ struct ReaderView: View {
             readerRenderRevision &+= 1
         } else {
             isWaitingForNextChapter = true
+        }
+    }
+
+    /// Paged chapter turn. When the neighbouring chapter is already in memory
+    /// it swaps in the same frame and animates like an in-chapter page turn;
+    /// otherwise the page stays put with a small loading footer until it is
+    /// ready, instead of flashing a full-screen loading page.
+    private func turnChapterWhenReady(direction: Int, boundaryPosition: Int) {
+        guard chapterTurnWait == nil else { return }
+        if model.isNeighborReady(direction: direction) {
+            performChapterTurn(direction: direction, boundaryPosition: boundaryPosition)
+            return
+        }
+        isWaitingForChapterTurn = true
+        let generation = model.chapterLoadGeneration
+        chapterTurnWait = Task { @MainActor in
+            _ = await model.waitForNeighbor(direction: direction)
+            let cancelled = Task.isCancelled
+            chapterTurnWait = nil
+            isWaitingForChapterTurn = false
+            guard !cancelled, generation == model.chapterLoadGeneration else { return }
+            performChapterTurn(direction: direction, boundaryPosition: boundaryPosition)
+        }
+    }
+
+    private func performChapterTurn(direction: Int, boundaryPosition: Int) {
+        showsReaderMenu = false
+        readerPosition = boundaryPosition
+        saveProgress(immediate: true)
+        readerJumpPosition = nil
+        // Keep every chapter in its own TextKit document. Appending text here
+        // makes the absolute UTF-16 offset belong to the previous chapter
+        // while progress is saved under the next.
+        chapterTurnDirection = direction
+        chapterTurnToken &+= 1
+        if direction > 0 {
+            model.goNext()
+            readerPosition = model.requestedPosition
+        } else {
+            model.goPrevious(position: Int.max)
         }
     }
 

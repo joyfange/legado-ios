@@ -655,7 +655,21 @@ final class ReaderViewModel: ObservableObject {
 
     func select(index: Int, position: Int = 0) {
         guard chapters.indices.contains(index), !chapters[index].isVolume else { return }
-        if index != currentIndex { cancelPreload() }
+        if index != currentIndex {
+            cancelPreload()
+            // Keep the chapter being left in memory so turning straight back
+            // is an instant, animated page turn rather than a reload.
+            if hasLoadedCurrentChapter, !content.isEmpty, pendingSourceContent == nil,
+               chapters.indices.contains(currentIndex) {
+                readyChapters[currentIndex] = ReadyChapter(
+                    url: chapters[currentIndex].url,
+                    title: title,
+                    content: content,
+                    usesReplaceRules: usesReplaceRules,
+                    fromCache: loadedFromCache
+                )
+            }
+        }
         let ready = isChapterReady(index) && pendingSourceContent == nil ? readyChapters[index] : nil
         currentIndex = index
         pendingSourceContent = nil
@@ -698,6 +712,26 @@ final class ReaderViewModel: ObservableObject {
 
     func paragraphID(at position: Int) -> Int? {
         paragraphs.last(where: { $0.id <= position })?.id ?? paragraphs.first?.id
+    }
+
+    /// Whether the chapter a page turn in `direction` lands on is in memory.
+    func isNeighborReady(direction: Int) -> Bool {
+        navigationIndex(direction: direction).map(isChapterReady) ?? false
+    }
+
+    /// Waits (briefly) for the neighbouring chapter to be prepared, so the
+    /// chapter change can animate like any other page turn.
+    func waitForNeighbor(direction: Int, timeout: TimeInterval = 4) async -> Bool {
+        guard let index = navigationIndex(direction: direction) else { return false }
+        if isChapterReady(index) { return true }
+        if neighborTask == nil || readyChapters[index] == nil { prepareNeighborChapters() }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 40_000_000)
+            if Task.isCancelled { return false }
+            if isChapterReady(index) { return true }
+        }
+        return false
     }
 
     private func navigationIndex(direction: Int) -> Int? {
