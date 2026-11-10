@@ -249,8 +249,7 @@ struct ReaderTextView: UIViewRepresentable {
                let lastTurn = context.coordinator.lastChapterTurnToken,
                lastTurn != chapterTurnToken,
                chapterTurnDirection != 0,
-               effectivePageAnimation != 3,
-               effectivePageAnimation != 4 {
+               effectivePageAnimation != 3 {
                 context.coordinator.beginChapterTurnTransition(in: view, direction: chapterTurnDirection)
             }
             context.coordinator.lastChapterTurnToken = chapterTurnToken
@@ -415,7 +414,7 @@ struct ReaderTextView: UIViewRepresentable {
                 self?.isTurningPage = false
             }
             let width = view.bounds.width
-            switch parent.pageAnimation {
+            switch parent.isEInkMode ? 4 : parent.pageAnimation {
             case 0:
                 // Cover: forward reveals the next page from under the old one;
                 // backward slides the previous page in over it.

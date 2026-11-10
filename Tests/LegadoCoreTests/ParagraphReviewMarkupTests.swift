@@ -56,4 +56,16 @@ struct ParagraphReviewMarkupTests {
         #expect(resolution.url == "https://r.example.com/p?id=5")
         #expect(resolution.title == "段评")
     }
+
+    @Test func largeSourceLibraryStillRuns() throws {
+        var source = BookSource(bookSourceUrl: "https://lib.example.com", bookSourceName: "大库")
+        let padding = "var pad = '" + String(repeating: "x", count: 200_000) + "';\n"
+        source.jsLib = padding + "function showCmt(a){ return 'https://lib.example.com/c?id=' + a; } var e = eval('1+1');"
+        let result = try JavaScriptRuleEvaluator().evaluate(
+            script: "showCmt(7)",
+            result: .string(""),
+            executionContext: RuleExecutionContext(source: source)
+        )
+        #expect(result.value.stringValue == "https://lib.example.com/c?id=7")
+    }
 }

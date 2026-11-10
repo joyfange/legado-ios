@@ -312,10 +312,12 @@ public struct JavaScriptRuleEvaluator: Sendable {
 
         if let library = executionContext.source?.jsLib?.trimmingCharacters(in: .whitespacesAndNewlines),
            !library.isEmpty {
-            guard library.utf8.count <= maximumScriptLength else {
-                throw RuleEngineError.resourceLimit(rule: library, detail: "书源 jsLib 超过长度上限")
+            // Shared libraries (often bundled or obfuscated) are far larger
+            // than a single rule; Android Legado places no limit on them.
+            guard library.utf8.count <= Self.maximumLibraryLength else {
+                throw RuleEngineError.resourceLimit(rule: String(library.prefix(200)), detail: "书源 jsLib 超过 8 MB 上限")
             }
-            try rejectUnboundedExecution(library)
+            try rejectUnboundedExecution(library, allowsEval: true)
             context.evaluateScript(library)
             if let exceptionMessage {
                 throw RuleEngineError.malformedRule(rule: library, detail: "书源 jsLib 执行失败：\(exceptionMessage)")
@@ -1144,9 +1146,13 @@ public struct JavaScriptRuleEvaluator: Sendable {
         return absolute.absoluteString
     }
 
-    private func rejectUnboundedExecution(_ script: String) throws {
+    static let maximumLibraryLength = 8 * 1_024 * 1_024
+
+    private func rejectUnboundedExecution(_ script: String, allowsEval: Bool = false) throws {
         let compact = script.replacingOccurrences(of: #"\s+"#, with: "", options: .regularExpression).lowercased()
-        let rejected = ["while(true)", "while(1)", "for(;;)", "eval(", "functionconstructor("]
+        let rejected = allowsEval
+            ? ["while(true){}", "while(1){}", "for(;;){}"]
+            : ["while(true)", "while(1)", "for(;;)", "eval(", "functionconstructor("]
         if let token = rejected.first(where: compact.contains) {
             throw RuleEngineError.resourceLimit(rule: script, detail: "JavaScript 包含未受控执行结构：\(token)")
         }
