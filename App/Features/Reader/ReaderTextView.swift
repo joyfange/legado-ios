@@ -24,6 +24,8 @@ private final class ReaderLayoutTextView: UITextView {
 final class ReaderPageBreaker: NSObject, @unchecked Sendable {
     var stride: CGFloat = 0
     var band: CGFloat = 0
+    /// Test hook: final line origin -> line bottom the breaker measured.
+    var trace: [CGFloat: CGFloat]?
 
     var isEnabled: Bool { stride > 1 && band > 1 }
 
@@ -63,20 +65,28 @@ extension ReaderPageBreaker: NSLayoutManagerDelegate {
         // fonts included), plus a small safety margin for rounding in the
         // final glyph placement, decides where the line really ends.
         var descent: CGFloat = 0
+        var lineSpacing: CGFloat = 0
         if let storage = layoutManager.textStorage, storage.length > 0 {
             let characters = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
             let range = NSIntersectionRange(characters, NSRange(location: 0, length: storage.length))
             storage.enumerateAttribute(.font, in: range, options: []) { value, _, _ in
                 if let font = value as? UIFont { descent = max(descent, abs(font.descender)) }
             }
+            if range.length > 0,
+               let style = storage.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle {
+                lineSpacing = style.lineSpacing
+            }
         }
+        // Take the deeper of the baseline-based and used-rect-based bottoms
+        // so a line is never cut whichever metric TextKit applies later.
         let safetyMargin: CGFloat = 2
-        let glyphBottom = descent > 0
-            ? rect.minY + baselineOffset.pointee + descent + safetyMargin
-            : rect.minY + lineFragmentUsedRect.pointee.height + safetyMargin
+        let usedBottom = max(0, lineFragmentUsedRect.pointee.height - lineSpacing)
+        let baselineBottom = descent > 0 ? baselineOffset.pointee + descent : 0
+        let glyphBottom = rect.minY + max(usedBottom, baselineBottom) + safetyMargin
         let origin = ReaderPageBreaker.adjustedLineOrigin(
             minY: rect.minY, glyphBottom: glyphBottom, stride: stride, band: band
         )
+        trace?[origin] = origin + (glyphBottom - rect.minY)
         guard origin != rect.minY else { return false }
         let delta = origin - rect.minY
         lineFragmentRect.pointee.origin.y += delta

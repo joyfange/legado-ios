@@ -370,6 +370,7 @@ final class ReaderPageBreakTests: XCTestCase {
                     let stride: CGFloat = 703
                     breaker.stride = stride
                     breaker.band = stride - CGFloat(top) - CGFloat(bottom)
+                    breaker.trace = [:]
                     manager.delegate = breaker
                     let style = NSMutableParagraphStyle()
                     style.lineSpacing = CGFloat(lineSpacing)
@@ -387,7 +388,7 @@ final class ReaderPageBreakTests: XCTestCase {
                         let bandEnd = page * stride + breaker.band
                         XCTAssertLessThanOrEqual(
                             glyphBottom, bandEnd + 0.5,
-                            "font \(fontSize) spacing \(lineSpacing) padding \(top)/\(bottom): line \(lines) crosses page \(Int(page))"
+                            "font \(fontSize) spacing \(lineSpacing) padding \(top)/\(bottom): line \(lines) crosses page \(Int(page)); minY \(rect.minY) h \(rect.height) loc \(manager.location(forGlyphAt: glyph).y) used \(manager.lineFragmentUsedRect(forGlyphAt: glyph, effectiveRange: nil).height) measured \(breaker.trace?[rect.minY].map { String(describing: $0) } ?? "nil")"
                         )
                         glyph = NSMaxRange(range)
                         lines += 1
