@@ -13,7 +13,7 @@ concurrency:
 jobs:
   test:
     name: 测试（核心 + 阅读器）
-    runs-on: macos-26
+    runs-on: macos-15-intel
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -86,7 +86,7 @@ jobs:
   build:
     name: 构建 iPhone 安装包
     needs: test
-    runs-on: macos-26
+    runs-on: macos-15-intel
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
