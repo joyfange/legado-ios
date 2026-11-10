@@ -110,4 +110,44 @@ private actor ProbeTransport: HTTPTransport {
     }
 
     func records() -> [JSONValue] { values }
+    /// 段评全链路：打开书源的评论开关，取一章正文，统计气泡标记并执行第一个气泡的点击回调。
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["LEGADO_REVIEW_PROBE_FILE"] != nil))
+    func sampleParagraphReviews() async throws {
+        let path = try #require(ProcessInfo.processInfo.environment["LEGADO_REVIEW_PROBE_FILE"])
+        let sources = try BookSourceImporter().decode(Data(contentsOf: URL(fileURLWithPath: path)))
+        let transport = ProbeTransport()
+        let keyword = ProcessInfo.processInfo.environment["LEGADO_SOURCE_PROBE_KEYWORD"] ?? "斗罗大陆"
+        let service = NetworkBookService(transport: transport)
+        for source in sources {
+            let on = ["段评开关", "神评开关", "本章说", "书评开关", "热门评论"].reduce(into: [String: String]()) { $0[$1] = "✅" }
+            let info = String(decoding: try JSONSerialization.data(withJSONObject: on), as: UTF8.self)
+            BookSourceRuntimeStore.shared.put(sourceID: source.id, key: "loginInfo", value: info)
+            let search = await BookSearchService(transport: transport).search(keyword: keyword, page: 1, source: source)
+            guard let first = search.books.first else { print("REVIEW \(source.bookSourceName) no search"); continue }
+            let detail = await service.loadDetail(searchBook: first, source: source)
+            let toc = await service.loadChapters(book: detail.book, source: source, maxPages: 3)
+            print("REVIEW_TOC \(toc.chapters.count) diag=\(toc.diagnostics.map { "\($0.severity):\($0.code):\($0.message.prefix(160))" })")
+            let readable = toc.chapters.filter { !$0.isVolume }
+            guard readable.count > 3 else { continue }
+            let chapter = readable[3]
+            let content = await service.loadContent(book: detail.book, chapter: chapter, source: source, maxPages: 2)
+            let text = content.content
+            let markers = text.components(separatedBy: "<img").count - 1
+            print("REVIEW_CONTENT \(chapter.title) len=\(text.count) imgs=\(markers) diag=\(content.diagnostics.map { "\($0.code):\($0.message.prefix(160))" })")
+            let tags = text.components(separatedBy: "<img").dropFirst().prefix(3).map { String($0.prefix(400)) }
+            for tag in tags { print("REVIEW_TAG <img" + tag) }
+            if let tag = tags.first, let range = tag.range(of: "js=") {
+                let encoded = tag[range.upperBound...].prefix { $0 != "\"" && $0 != "&" }
+                let script = String(encoded).removingPercentEncoding ?? ""
+                print("REVIEW_SCRIPT \(script.prefix(300))")
+                let started = Date()
+                let resolution = await JavaScriptRuleEvaluator().resolveClick(script, executionContext: .init(baseURL: chapter.url, source: source, book: detail.book, chapter: chapter))
+                print("REVIEW_CLICK \(Date().timeIntervalSince(started))s url=\(resolution.url ?? "-") html=\(resolution.html?.count ?? 0) error=\(resolution.error ?? "-")")
+                if let html = resolution.html, let state = html.range(of: "var state=") {
+                    print("REVIEW_STATE " + String(html[state.upperBound...].prefix(600)))
+                }
+            }
+        }
+    }
+
 }

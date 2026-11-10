@@ -108,8 +108,9 @@ public actor BookUpdateCoordinator {
     public func refresh(book: Book, source: BookSource, now: Int64? = nil, maxPages: Int = 20) async -> BookUpdateReport {
         let old = (try? await repository.load(bookURL: book.bookUrl)) ?? []
         let loaded = await loader.loadChapters(book: book, source: source, maxPages: maxPages)
-        guard !Task.isCancelled, !loaded.chapters.isEmpty,
-              !loaded.diagnostics.contains(where: { $0.severity == .error }) else {
+        // 和安卓一致：只要解析到章节就采用，个别字段/翻页的报错只作为诊断保留，
+        // 不能因此丢掉整份目录（否则详情页会先显示“当前源不可用”再换回同一源）。
+        guard !Task.isCancelled, !loaded.chapters.isEmpty else {
             return .init(
                 book: book,
                 chapters: old,
