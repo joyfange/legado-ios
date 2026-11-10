@@ -430,7 +430,8 @@ struct SourceLoginFormView: View {
     @ViewBuilder private func rowView(_ row: SourceLoginUIRow) -> some View {
         switch row.type {
         case "password":
-            LabeledContent(row.title) {
+            HStack {
+                Text(row.title)
                 SecureField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
             }
         case "toggle":
@@ -464,7 +465,8 @@ struct SourceLoginFormView: View {
                 if let action = row.action { Task { await run(action) } }
             }
         default:
-            LabeledContent(row.title) {
+            HStack {
+                Text(row.title)
                 TextField(row.defaultValue, text: binding(row)).multilineTextAlignment(.trailing)
             }
         }
