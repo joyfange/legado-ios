@@ -649,7 +649,7 @@ private struct ReaderReviewWebView: UIViewRepresentable {
 
     /// 不少段评接口的证书已过期，书源阅读里会直接空白。只对段评页自己的域名、
     /// 且仅在“证书过期”这一个错误时放行；其他证书问题照常拦下。
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate {
         let host: String?
         init(host: String?) { self.host = host }
 
@@ -674,7 +674,7 @@ private struct ReaderReviewWebView: UIViewRepresentable {
             }
         }
 
-        static func sameSite(_ a: String, _ b: String) -> Bool {
+        nonisolated static func sameSite(_ a: String, _ b: String) -> Bool {
             func root(_ h: String) -> String { h.lowercased().split(separator: ".").suffix(2).joined(separator: ".") }
             return root(a) == root(b)
         }
