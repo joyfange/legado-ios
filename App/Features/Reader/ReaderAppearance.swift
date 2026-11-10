@@ -469,7 +469,7 @@ enum ReaderInlineMarkup {
     /// 0 描边胶囊（默认）· 1 实心糖果 · 2 方角标签 · 3 对话气泡
     static let bubbleStyleNames = ["描边胶囊", "实心糖果", "方角标签", "对话气泡"]
 
-    private static let imageCache: NSCache<NSString, UIImage> = {
+    nonisolated(unsafe) private static let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 300
         return cache
