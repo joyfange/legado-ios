@@ -27,19 +27,13 @@ public struct BookExploreService: Sendable {
         var diagnostics: [RuleDiagnostic] = []
         let rendered: String
         if rule.lowercased().hasPrefix("@js:") || rule.lowercased().hasPrefix("<js>") {
-            // The explore JS builds URLs containing {{page}}; Android runs it
-            // verbatim, so shield templates from substitution (page 0) here.
-            let shielded = rule.replacingOccurrences(of: "{{", with: "\u{E000}\u{E000}")
-                .replacingOccurrences(of: "}}", with: "\u{E001}\u{E001}")
             let result = await engine.evaluate(
-                shielded,
+                rule,
                 in: .null,
                 context: .init(source: source)
             )
             diagnostics += result.diagnostics
-            rendered = (result.firstString ?? "")
-                .replacingOccurrences(of: "\u{E000}\u{E000}", with: "{{")
-                .replacingOccurrences(of: "\u{E001}\u{E001}", with: "}}")
+            rendered = result.firstString ?? ""
         } else {
             rendered = rule
         }

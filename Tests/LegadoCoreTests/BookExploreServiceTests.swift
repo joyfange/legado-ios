@@ -29,6 +29,7 @@ struct BookExploreServiceTests {
         let scriptedReport = await service.kinds(for: scripted)
 
         #expect(scriptedReport.kinds.map(\.title) == ["科幻", "文学"])
+        #expect(scriptedReport.kinds.first?.url == "/sci?page={{page}}")
         #expect(scriptedReport.diagnostics.isEmpty)
     }
 

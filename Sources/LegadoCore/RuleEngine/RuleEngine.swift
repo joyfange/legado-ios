@@ -375,7 +375,11 @@ public struct RuleEngine: Sendable {
             scriptInput = .string(initial.strings.joined(separator: "\n"))
         }
         do {
-            let rendered = try await renderDynamicRule(pipeline.script, result: scriptInput, context: execution)
+            // Android Legado runs JS code verbatim: `{{page}}` inside a script is
+            // data (e.g. an explore URL template), not a template to expand.
+            let rendered = pipeline.script.contains("{{")
+                ? (rule: pipeline.script, context: execution, captureLiteral: false)
+                : try await renderDynamicRule(pipeline.script, result: scriptInput, context: execution)
             let result = try await javaScript.evaluateAsync(
                 script: rendered.rule, result: scriptInput, executionContext: rendered.context
             )
