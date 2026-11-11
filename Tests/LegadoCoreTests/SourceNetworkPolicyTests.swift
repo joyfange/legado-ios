@@ -32,6 +32,17 @@ struct SourceNetworkPolicyTests {
         #expect(window.reserve(now: 1_100, limit: limit) == 0)
     }
 
+    @Test func hugeConcurrentRateIsClampedInsteadOfOverflowing() {
+        let limit = SourceRateLimit(rawValue: "1/9223372036854775807")!
+        #expect(limit.intervalMilliseconds == SourceRateLimit.maximumIntervalMilliseconds)
+        #expect(SourceRateLimit(rawValue: "99999999999999999")?.intervalMilliseconds == SourceRateLimit.maximumIntervalMilliseconds)
+        var window = SourceRateWindow()
+        let now = Int64(1_800_000_000_000)
+        #expect(window.reserve(now: now, limit: limit) == 0)
+        let wait = window.reserve(now: now + 1, limit: limit)
+        #expect(wait > 0 && wait <= SourceRateLimit.maximumIntervalMilliseconds)
+    }
+
     @Test func cookiesAreIsolatedBySourceAndExplicitValuesWin() async throws {
         let policy = SourceNetworkPolicy()
         let url = URL(string: "https://same.example/path")!

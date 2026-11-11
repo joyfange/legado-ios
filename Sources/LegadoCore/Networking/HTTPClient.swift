@@ -600,6 +600,10 @@ public final class SourceWebViewExecutorRegistry: @unchecked Sendable {
 }
 
 public struct SourceRateLimit: Sendable, Equatable {
+    /// 书源可随意填写 concurrentRate；过大的间隔会让 `startedAt + interval` 或
+    /// 等待时长换算纳秒时整数溢出而崩溃，故限制在 1 小时内。
+    public static let maximumIntervalMilliseconds: Int64 = 3_600_000
+
     public var accessLimit: Int
     public var intervalMilliseconds: Int64
 
@@ -612,10 +616,10 @@ public struct SourceRateLimit: Sendable, Equatable {
            let interval = Int64(value[value.index(after: slash)...]),
            count > 0, interval > 0 {
             accessLimit = count
-            intervalMilliseconds = interval
+            intervalMilliseconds = min(interval, Self.maximumIntervalMilliseconds)
         } else if let interval = Int64(value), interval > 0 {
             accessLimit = 1
-            intervalMilliseconds = interval
+            intervalMilliseconds = min(interval, Self.maximumIntervalMilliseconds)
         } else {
             return nil
         }
