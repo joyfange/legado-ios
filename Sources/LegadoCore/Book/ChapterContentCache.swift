@@ -9,6 +9,8 @@ public struct CachedChapterContent: Codable, Equatable, Sendable {
     public var supplementalContent: String?
     public var savedAt: Int64
     public var sourceID: String?
+    /// 保存时书源配置（loginInfo，如段评开关）的指纹；配置改了就重新取正文。
+    public var loginStamp: String?
 
     public init(
         bookURL: String,
@@ -17,7 +19,8 @@ public struct CachedChapterContent: Codable, Equatable, Sendable {
         content: String,
         supplementalContent: String? = nil,
         savedAt: Int64 = Int64(Date().timeIntervalSince1970 * 1_000),
-        sourceID: String? = nil
+        sourceID: String? = nil,
+        loginStamp: String? = nil
     ) {
         self.bookURL = bookURL
         self.chapterURL = chapterURL
@@ -26,6 +29,15 @@ public struct CachedChapterContent: Codable, Equatable, Sendable {
         self.supplementalContent = supplementalContent
         self.savedAt = savedAt
         self.sourceID = sourceID
+        self.loginStamp = loginStamp
+    }
+
+    /// 带登录界面（loginUi）的书源，其正文会随配置变化（段评、神评等开关）。
+    public static func loginStamp(for source: BookSource) -> String? {
+        guard !(source.loginUi ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let info = BookSourceRuntimeStore.shared.get(sourceID: source.id, key: "loginInfo")
+        let digest = SHA256.hash(data: Data(info.utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -234,7 +246,8 @@ public actor ChapterContentCoordinator {
         isPrefetch: Bool
     ) async -> CoordinatedChapterContent {
         if !forceRefresh, let cached = try? await cache.load(bookURL: book.bookUrl, chapterURL: chapter.url),
-                  cached.sourceID == nil || cached.sourceID == source.id {
+                  cached.sourceID == nil || cached.sourceID == source.id,
+                  cached.loginStamp == CachedChapterContent.loginStamp(for: source) || cached.sourceID == nil {
             return .init(report: .init(
                 title: cached.title,
                 content: cached.content,
@@ -278,7 +291,8 @@ public actor ChapterContentCoordinator {
                 title: report.title,
                 content: report.content,
                 supplementalContent: report.supplementalContent,
-                sourceID: source.id
+                sourceID: source.id,
+                loginStamp: CachedChapterContent.loginStamp(for: source)
             ))
         }
     }
