@@ -307,7 +307,19 @@ enum CommentBubble {
     }
 
     static func image(label: String, fontSize: CGFloat, color: UIColor) -> UIImage {
-        if let style = BubbleStyleRuntime.snapshot() { return BubbleStyleRenderer.image(style: style, label: label, fontSize: fontSize, color: color) }
+        if let style = BubbleStyleRuntime.snapshot() {
+            // 自定义样式（尤其 SVG）每次绘制都要解析，按样式版本缓存，避免长章节排版卡顿。
+            let key = "custom|\(BubbleStyleRuntime.revision)|\(style.id)|\(label)|\(fontSize)|\(color.readerHex)"
+            lock.lock()
+            if let hit = cache[key] { lock.unlock(); return hit }
+            lock.unlock()
+            let img = BubbleStyleRenderer.image(style: style, label: label, fontSize: fontSize, color: color)
+            lock.lock()
+            if cache.count >= 256 { cache.removeAll(keepingCapacity: true) }
+            cache[key] = img
+            lock.unlock()
+            return img
+        }
         let scale = max(fontSize, 1) / 23
         let format = UIGraphicsImageRendererFormat.default()
         format.opaque = false
