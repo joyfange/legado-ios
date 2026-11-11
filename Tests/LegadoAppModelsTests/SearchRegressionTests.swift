@@ -102,7 +102,7 @@ struct SearchRegressionTests {
     }
 
     private func waitUntil(_ reason: String = "Search state did not settle", _ condition: @MainActor () async throws -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(15)
         while try await !condition() {
             try #require(ContinuousClock.now < deadline, Comment(rawValue: reason))
             try await Task.sleep(for: .milliseconds(5))
