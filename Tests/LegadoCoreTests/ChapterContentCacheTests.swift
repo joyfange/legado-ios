@@ -124,6 +124,26 @@ struct ChapterContentCacheTests {
         #expect(await loader.calls() == 1)
     }
 
+    @Test func prefetchRefetchesEntryWithStaleLoginStamp() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let cache = ChapterContentCache(directory: directory)
+        var source = BookSource(bookSourceUrl: "https://stamp-\(UUID().uuidString).test", bookSourceName: "源")
+        source.loginUi = "[{\"name\":\"段评\",\"type\":\"toggle\"}]"
+        let book = Book(bookUrl: "book", name: "书", origin: source.bookSourceUrl)
+        let chapter = BookChapter(url: "c", title: "章", bookUrl: book.bookUrl, index: 0)
+        try await cache.save(.init(bookURL: book.bookUrl, chapterURL: chapter.url, content: "旧配置正文",
+                                   sourceID: source.id, loginStamp: "stale"))
+        let loader = StubChapterLoader(content: "新配置正文")
+        let coordinator = ChapterContentCoordinator(loader: loader, cache: cache)
+
+        #expect(await coordinator.prefetch(book: book, chapter: chapter, source: source))
+        #expect(await loader.calls() == 1)
+        let reopened = await coordinator.load(book: book, chapter: chapter, source: source)
+        #expect(reopened.loadedFromCache)
+        #expect(reopened.report.content == "新配置正文")
+    }
+
     @Test func cachePlannerSelectsRangeAndSkipsVolumeRows() {
         var chapters = (0..<5).map { BookChapter(url: "c\($0)", title: "第 \($0) 章", bookUrl: "book", index: $0) }
         chapters[2].isVolume = true

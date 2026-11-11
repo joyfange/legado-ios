@@ -246,8 +246,7 @@ public actor ChapterContentCoordinator {
         isPrefetch: Bool
     ) async -> CoordinatedChapterContent {
         if !forceRefresh, let cached = try? await cache.load(bookURL: book.bookUrl, chapterURL: chapter.url),
-                  cached.sourceID == nil || cached.sourceID == source.id,
-                  cached.loginStamp == CachedChapterContent.loginStamp(for: source) || cached.sourceID == nil {
+           Self.isUsable(cached, for: source) {
             return .init(report: .init(
                 title: cached.title,
                 content: cached.content,
@@ -316,12 +315,19 @@ public actor ChapterContentCoordinator {
         source: BookSource,
         nextChapterURL: String? = nil
     ) async -> Bool {
+        // 与 load() 同一判定：配置指纹已过期的缓存不能算“已缓存”，否则离线缓存会跳过它，
+        // 阅读时却因指纹不符而重新走网络。
         if let cached = try? await cache.load(bookURL: book.bookUrl, chapterURL: chapter.url),
-           cached.sourceID == nil || cached.sourceID == source.id { return false }
+           Self.isUsable(cached, for: source) { return false }
         let result = await load(book: book, chapter: chapter, source: source, nextChapterURL: nextChapterURL,
                                 maxPages: 20, forceRefresh: false, isPrefetch: true)
         return !Task.isCancelled && !result.report.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !result.report.diagnostics.contains(where: { $0.severity == .error })
+    }
+
+    static func isUsable(_ cached: CachedChapterContent, for source: BookSource) -> Bool {
+        guard let sourceID = cached.sourceID else { return true }
+        return sourceID == source.id && cached.loginStamp == CachedChapterContent.loginStamp(for: source)
     }
 
     public func invalidate(bookURL: String) async {
