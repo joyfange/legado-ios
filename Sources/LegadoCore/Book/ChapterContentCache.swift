@@ -11,6 +11,8 @@ public struct CachedChapterContent: Codable, Equatable, Sendable {
     public var sourceID: String?
     /// 保存时书源配置（loginInfo，如段评开关）的指纹；配置改了就重新取正文。
     public var loginStamp: String?
+    /// 用户在阅读器里手动编辑过的正文：不随书源配置指纹失效，否则编辑会被网络正文覆盖。
+    public var isUserEdited: Bool?
 
     public init(
         bookURL: String,
@@ -20,7 +22,8 @@ public struct CachedChapterContent: Codable, Equatable, Sendable {
         supplementalContent: String? = nil,
         savedAt: Int64 = Int64(Date().timeIntervalSince1970 * 1_000),
         sourceID: String? = nil,
-        loginStamp: String? = nil
+        loginStamp: String? = nil,
+        isUserEdited: Bool? = nil
     ) {
         self.bookURL = bookURL
         self.chapterURL = chapterURL
@@ -30,6 +33,7 @@ public struct CachedChapterContent: Codable, Equatable, Sendable {
         self.savedAt = savedAt
         self.sourceID = sourceID
         self.loginStamp = loginStamp
+        self.isUserEdited = isUserEdited
     }
 
     /// 带登录界面（loginUi）的书源，其正文会随配置变化（段评、神评等开关）。
@@ -304,7 +308,8 @@ public actor ChapterContentCoordinator {
             chapterURL: chapter.url,
             title: title,
             content: content,
-            sourceID: book.origin
+            sourceID: book.origin,
+            isUserEdited: true
         ))
     }
 
@@ -327,7 +332,8 @@ public actor ChapterContentCoordinator {
 
     static func isUsable(_ cached: CachedChapterContent, for source: BookSource) -> Bool {
         guard let sourceID = cached.sourceID else { return true }
-        return sourceID == source.id && cached.loginStamp == CachedChapterContent.loginStamp(for: source)
+        return sourceID == source.id
+            && (cached.isUserEdited == true || cached.loginStamp == CachedChapterContent.loginStamp(for: source))
     }
 
     public func invalidate(bookURL: String) async {

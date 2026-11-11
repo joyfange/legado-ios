@@ -144,6 +144,24 @@ struct ChapterContentCacheTests {
         #expect(reopened.report.content == "新配置正文")
     }
 
+    @Test func editedContentSurvivesForSourceWithLoginUi() async throws {
+        let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString, directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var source = BookSource(bookSourceUrl: "https://edit-\(UUID().uuidString).test", bookSourceName: "源")
+        source.loginUi = "[{\"name\":\"段评\",\"type\":\"toggle\"}]"
+        let book = Book(bookUrl: "book", name: "书", origin: source.bookSourceUrl)
+        let chapter = BookChapter(url: "c", title: "章", bookUrl: book.bookUrl, index: 0)
+        let loader = StubChapterLoader(content: "网络正文")
+        let coordinator = ChapterContentCoordinator(loader: loader, cache: .init(directory: directory))
+
+        try await coordinator.saveEditedContent(book: book, chapter: chapter, title: "章", content: "手动修改的正文")
+        let reopened = await coordinator.load(book: book, chapter: chapter, source: source)
+
+        #expect(reopened.loadedFromCache)
+        #expect(reopened.report.content == "手动修改的正文")
+        #expect(await loader.calls() == 0)
+    }
+
     @Test func cachePlannerSelectsRangeAndSkipsVolumeRows() {
         var chapters = (0..<5).map { BookChapter(url: "c\($0)", title: "第 \($0) 章", bookUrl: "book", index: $0) }
         chapters[2].isVolume = true
