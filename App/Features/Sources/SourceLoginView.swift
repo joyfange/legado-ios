@@ -286,11 +286,11 @@ private final class BackgroundWebViewRequest: NSObject, WKNavigationDelegate {
             }
             guard !Task.isCancelled, !completed else { return }
             if let script = prepared.webJavaScript, !script.isEmpty {
-                do { _ = try await webView.evaluateJavaScript(script) }
+                do { _ = try await evaluateString(script) }
                 catch { finish(.failure(error)); return }
             }
             do {
-                let html = try await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String ?? ""
+                let html = try await evaluateString("document.documentElement.outerHTML") ?? ""
                 let cookies = await webView.configuration.websiteDataStore.httpCookieStore.allCookies()
                 cookies.forEach(HTTPCookieStorage.shared.setCookie)
                 let cookieHeader = HTTPCookie.requestHeaderFields(with: cookies)["Cookie"] ?? ""
@@ -318,6 +318,24 @@ private final class BackgroundWebViewRequest: NSObject, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation?, withError error: Error) {
         finish(.failure(error))
+    }
+
+    /// 不用 `async evaluateJavaScript`：脚本结果为 undefined/null 时它会因隐式解包 nil 直接崩溃
+    /// （书源 webJs 常以 `xxx.click()` 结尾）。返回 DOM 节点等不支持的类型也不应让整个请求失败。
+    private func evaluateString(_ script: String) async throws -> String? {
+        try await withCheckedThrowingContinuation { continuation in
+            webView.evaluateJavaScript(script) { value, error in
+                if let error {
+                    if let wkError = error as? WKError, wkError.code == .javaScriptResultTypeIsUnsupported {
+                        continuation.resume(returning: nil)
+                    } else {
+                        continuation.resume(throwing: error)
+                    }
+                } else {
+                    continuation.resume(returning: value as? String)
+                }
+            }
+        }
     }
 
     private func finish(_ result: Result<HTTPResponse, Error>) {
