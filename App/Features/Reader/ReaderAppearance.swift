@@ -443,7 +443,6 @@ enum ReaderInlineMarkup {
     /// Replaces each marker inside `range` without changing the text length.
     static func decorate(_ text: NSMutableAttributedString, in range: NSRange, font: UIFont, foreground: UIColor, accent: UIColor, showsBubbles: Bool = true, bubbleStyle: Int = 0, bubbleAccent: Bool = false, customBubbleRevision: Int = 0) {
         guard range.length > 0 else { return }
-        if bubbleStyle == 4 { _ = customBubbleImage(revision: customBubbleRevision) }
         styleCommentCards(text, in: range, font: font, foreground: foreground, accent: accent)
         guard let expression = tagExpression,
               containsMarkup((text.string as NSString).substring(with: range)) else { return }
@@ -459,7 +458,9 @@ enum ReaderInlineMarkup {
                 text.removeAttribute(.underlineStyle, range: match.range)
                 continue
             case .bubble(let bubble):
-                image = bubbleImage(text: bubble.text, font: font, color: bubble.color ?? (bubble.emphasis || bubbleAccent ? accent : foreground), style: bubbleStyle)
+                // 气泡形状与数字格式跟随「段评气泡」样式；颜色优先用书源给的 displayColor，
+                // 其次强调状态用强调色，否则跟随正文（自定义样式可改为固定颜色）。
+                image = CommentBubble.image(label: bubble.text, fontSize: font.pointSize, color: bubble.color ?? (bubble.emphasis ? accent : foreground))
                 link = bubble.url
             case .image(let url):
                 image = bubbleImage(text: "插图", font: font, color: foreground, style: 0)
@@ -468,7 +469,12 @@ enum ReaderInlineMarkup {
             let attachment = NSTextAttachment()
             attachment.image = image
             let capHeight = font.capHeight
-            attachment.bounds = CGRect(x: 0, y: (capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
+            if case .bubble = item {
+                let bounds = CommentBubble.attachmentBounds(fontSize: font.pointSize)
+                attachment.bounds = CGRect(x: 0, y: bounds.minY, width: image.size.width, height: image.size.height)
+            } else {
+                attachment.bounds = CGRect(x: 0, y: (capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
+            }
             let existing = text.attributes(at: match.range.location, effectiveRange: nil)
             let replacement = NSMutableAttributedString(attachment: attachment)
             var attributes = existing

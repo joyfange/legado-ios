@@ -27,6 +27,8 @@
 		A10000000000000000000022 /* ReaderSpeechController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000029 /* ReaderSpeechController.swift */; };
 		A10000000000000000000023 /* ReaderTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002A /* ReaderTextView.swift */; };
 		A10000000000000000000024 /* ReaderSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002B /* ReaderSupport.swift */; };
+		A100000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift */; };
+		A100000000000000000000B1 /* ReviewBubbleStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B1 /* ReviewBubbleStyle.swift */; };
 		A10000000000000000000025 /* ReaderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002C /* ReaderViewModel.swift */; };
 		A10000000000000000000026 /* ReadingStatisticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002D /* ReadingStatisticsView.swift */; };
 		CC1500000000000000000001 /* Compatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC1500000000000000000002 /* Compatibility.swift */; };
@@ -158,6 +160,8 @@
 		A20000000000000000000029 /* ReaderSpeechController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSpeechController.swift; sourceTree = "<group>"; };
 		A2000000000000000000002A /* ReaderTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderTextView.swift; sourceTree = "<group>"; };
 		A2000000000000000000002B /* ReaderSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSupport.swift; sourceTree = "<group>"; };
+		A200000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewBubbleStyleSettingsView.swift; sourceTree = "<group>"; };
+		A200000000000000000000B1 /* ReviewBubbleStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewBubbleStyle.swift; sourceTree = "<group>"; };
 		A2000000000000000000002C /* ReaderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderViewModel.swift; sourceTree = "<group>"; };
 		A2000000000000000000002D /* ReadingStatisticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingStatisticsView.swift; sourceTree = "<group>"; };
 		CC1500000000000000000002 /* Compatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Compatibility.swift; sourceTree = "<group>"; };
@@ -376,6 +380,8 @@
 				A20000000000000000000029 /* ReaderSpeechController.swift */,
 				A20000000000000000000028 /* ReaderAppearance.swift */,
 				A2000000000000000000002B /* ReaderSupport.swift */,
+				A200000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift */,
+				A200000000000000000000B1 /* ReviewBubbleStyle.swift */,
 				EB2000000000000000000003 /* EPUBIllustrationsView.swift */,
 			);
 			path = Features/Reader;
@@ -755,6 +761,8 @@
 				A10000000000000000000023 /* ReaderTextView.swift in Sources */,
 				B10000000000000000000029 /* ReaderScrollView.swift in Sources */,
 				A10000000000000000000024 /* ReaderSupport.swift in Sources */,
+				A100000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift in Sources */,
+				A100000000000000000000B1 /* ReviewBubbleStyle.swift in Sources */,
 				A10000000000000000000025 /* ReaderViewModel.swift in Sources */,
 				A10000000000000000000026 /* ReadingStatisticsView.swift in Sources */,
 				CC1500000000000000000001 /* Compatibility.swift in Sources */,

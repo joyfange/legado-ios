@@ -55,10 +55,7 @@ struct ReaderView: View {
     @State private var chapterTurnToken = 0
     @State private var reviewPage: ReaderReviewPage?
     @AppStorage("showsReviewBubbles") private var showsReviewBubbles = true
-    @AppStorage("reviewBubbleStyle") private var reviewBubbleStyle = 0
-    @AppStorage("reviewBubbleAccent") private var reviewBubbleAccent = false
-    @AppStorage("reviewBubbleImageRevision") private var reviewBubbleImageRevision = 0
-    @State private var showsBubbleImageImporter = false
+    @ObservedObject private var bubbleStyles = BubbleStyleStore.shared
     @State private var reviewError: String?
     @State private var chapterTurnDirection = 0
     @State private var isWaitingForPreviousChapter = false
@@ -666,9 +663,9 @@ struct ReaderView: View {
             chapterTurnDirection: chapterTurnDirection,
             onOpenLink: { url in openReviewLink(url) },
             showsReviewBubbles: showsReviewBubbles,
-            reviewBubbleStyle: reviewBubbleStyle,
-            reviewBubbleAccent: reviewBubbleAccent,
-            reviewBubbleImageRevision: reviewBubbleImageRevision
+            reviewBubbleStyle: 0,
+            reviewBubbleAccent: false,
+            reviewBubbleImageRevision: bubbleStyles.revision
         )
     }
 
@@ -1392,25 +1389,21 @@ struct ReaderView: View {
                 Section {
                     Toggle("显示段评气泡", isOn: $showsReviewBubbles)
                     if showsReviewBubbles {
-                        Picker("气泡样式", selection: $reviewBubbleStyle) {
-                            ForEach(ReaderInlineMarkup.bubbleStyleNames.indices, id: \.self) { index in
-                                Text(ReaderInlineMarkup.bubbleStyleNames[index]).tag(index)
-                            }
-                        }
-                        Toggle("气泡使用强调色", isOn: $reviewBubbleAccent)
-                        if reviewBubbleStyle == 4 {
-                            Button(UserDefaults.standard.data(forKey: ReaderInlineMarkup.customBubbleImageKey) == nil ? "选择气泡图片" : "更换气泡图片") {
-                                showsBubbleImageImporter = true
-                            }
-                            .fileImporter(isPresented: $showsBubbleImageImporter, allowedContentTypes: [.png, .jpeg, .image]) { result in
-                                importBubbleImage(result)
+                        NavigationLink {
+                            BubbleStyleSettingsView()
+                        } label: {
+                            HStack {
+                                Text("段评气泡")
+                                Spacer()
+                                Text(bubbleStyles.styles.first { $0.id == bubbleStyles.selectedID }?.name ?? "默认气泡")
+                                    .foregroundStyle(.secondary)
                             }
                         }
                     }
                 } header: {
                     Text("段评")
                 } footer: {
-                    Text("书源提供段评时，气泡显示在段落末尾，轻点打开段评页。")
+                    Text("书源提供段评时，气泡显示在段落末尾，轻点打开段评页。气泡样式应用到所有书源；书源指定的气泡颜色优先。")
                 }
 
                 Section("翻页动画") {
@@ -1599,19 +1592,6 @@ struct ReaderView: View {
             bridge: { await model.runSourceBridge($0) },
             loader: { await model.resolveReviewClick(script) }
         )
-    }
-
-    private func importBubbleImage(_ result: Result<URL, Error>) {
-        guard case .success(let url) = result else { return }
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        guard let data = try? Data(contentsOf: url),
-              let normalized = ReaderInlineMarkup.normalizedBubbleImageData(data) else {
-            reviewError = "无法读取这张图片"
-            return
-        }
-        UserDefaults.standard.set(normalized, forKey: ReaderInlineMarkup.customBubbleImageKey)
-        reviewBubbleImageRevision += 1
     }
 
     private func hexColorBinding(_ hex: Binding<String>, fallback: String) -> Binding<Color> {
