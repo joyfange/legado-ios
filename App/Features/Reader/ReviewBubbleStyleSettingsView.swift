@@ -60,7 +60,9 @@ struct BubbleStyleEditor: View {
         Binding(get: { Color(uiColor: BubbleStyleRenderer.hex(draft.colorHex)) }, set: { value in
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             if UIColor(value).getRed(&r, green: &g, blue: &b, alpha: &a) {
-                draft.colorHex = String(format: "#%02X%02X%02X", Int(r * 255), Int(g * 255), Int(b * 255))
+                // ColorPicker 可能给出扩展 sRGB（<0 或 >1），不夹紧会生成 "#FFFFFFFF…" 之类非法值，导致无法保存。
+                func channel(_ v: CGFloat) -> Int { Int((min(max(v.isFinite ? v : 0, 0), 1) * 255).rounded()) }
+                draft.colorHex = String(format: "#%02X%02X%02X", channel(r), channel(g), channel(b))
             }
         })
     }
