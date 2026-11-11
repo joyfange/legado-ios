@@ -41,6 +41,13 @@ struct LegadoURLBuilderTests {
         #expect(prepared.retry == 2)
     }
 
+    @Test func clampsUnboundedRetryOption() throws {
+        let prepared = try builder.prepare(#"https://example.test/a,{"retry":1000000000}"#)
+        #expect(prepared.retry == 10)
+        let negative = try builder.prepare(#"https://example.test/a,{"retry":-3}"#)
+        #expect(negative.retry == 0)
+    }
+
     @Test func evaluatesInlineJavaScriptWithSearchBindings() throws {
         let prepared = try builder.prepare(
             "https://example.test/{{key.toUpperCase()}}?page={{page + 1}}",

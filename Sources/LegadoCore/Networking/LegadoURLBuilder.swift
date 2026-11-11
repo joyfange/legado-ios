@@ -461,7 +461,8 @@ public struct LegadoURLBuilder: Sendable {
             options.method = HTTPMethod(rawValue: method) ?? .get
         }
         options.charset = object["charset"]?.stringValue.nilIfEmpty
-        options.retry = Int(object["retry"]?.stringValue ?? "") ?? 0
+        // 书源可写任意 retry；对持续返回非 2xx 的页面，过大的值等于无限重试请求，限制在 10 次内。
+        options.retry = min(max(Int(object["retry"]?.stringValue ?? "") ?? 0, 0), 10)
         options.useWebView = object["webView"].map { value in
             switch value {
             case .bool(let enabled): enabled
