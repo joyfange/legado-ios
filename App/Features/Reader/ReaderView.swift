@@ -1389,14 +1389,16 @@ struct ReaderView: View {
                 Section {
                     Toggle("显示段评气泡", isOn: $showsReviewBubbles)
                     if showsReviewBubbles {
-                        NavigationLink {
-                            BubbleStyleSettingsView()
-                        } label: {
-                            HStack {
-                                Text("段评气泡")
-                                Spacer()
-                                Text(bubbleStyles.styles.first { $0.id == bubbleStyles.selectedID }?.name ?? "默认气泡")
-                                    .foregroundStyle(.secondary)
+                        if #available(iOS 16.0, *) {
+                            NavigationLink {
+                                BubbleStyleSettingsView()
+                            } label: {
+                                HStack {
+                                    Text("段评气泡")
+                                    Spacer()
+                                    Text(bubbleStyles.styles.first { $0.id == bubbleStyles.selectedID }?.name ?? "默认气泡")
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }

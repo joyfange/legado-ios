@@ -4,6 +4,8 @@ import ImageIO
 import UIKit
 
 /// 段评气泡样式管理（移植自 bookon）。
+/// PhotosPicker / NavigationStack 需要 iOS 16；工程最低支持 iOS 15，入口处按版本隐藏。
+@available(iOS 16.0, *)
 struct BubbleStyleSettingsView: View {
     @ObservedObject var store = BubbleStyleStore.shared
     @State private var draft: BubbleStyle?
@@ -46,6 +48,7 @@ struct BubbleStyleSettingsView: View {
     private func perform(_ work: () throws -> Void) { do { try work(); error = nil } catch { self.error = error.localizedDescription } }
 }
 
+@available(iOS 16.0, *)
 struct BubbleStyleEditor: View {
     @ObservedObject var store: BubbleStyleStore
     @State var draft: BubbleStyle
