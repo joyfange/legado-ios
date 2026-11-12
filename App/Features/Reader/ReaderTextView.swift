@@ -1334,7 +1334,7 @@ struct ReaderTextPick: Identifiable, Equatable {
         }
         var word = unit
         let tokenizer = CFStringTokenizerCreate(nil, ns as CFString, CFRange(location: paragraphRange.location, length: paragraphRange.length),
-                                                kCFStringTokenizerUnitWord, CFLocaleCreate(nil, "zh_Hans" as CFString))
+                                                kCFStringTokenizerUnitWord, Locale(identifier: "zh_Hans") as CFLocale)
         if CFStringTokenizerGoToTokenAtIndex(tokenizer, index) != [] {
             let range = CFStringTokenizerGetCurrentTokenRange(tokenizer)
             if range.location != kCFNotFound, range.length > 0, range.length <= 40 {
