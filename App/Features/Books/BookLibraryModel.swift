@@ -35,6 +35,8 @@ enum AppBookChapterRepository {
 @MainActor
 final class BookLibraryModel: ObservableObject {
     @Published private(set) var books: [Book] = []
+    /// 首次从数据库读完书架后为 true。读完之前书架不显示「空书架」占位，避免启动时闪一下。
+    @Published private(set) var hasLoaded = false
     @Published private(set) var groups: [BookGroup] = []
     @Published private(set) var errorMessage: String?
     @Published private(set) var updateMessage: String?
@@ -114,6 +116,7 @@ final class BookLibraryModel: ObservableObject {
             async let storedGroups = groupRepository.load()
             books = try await storedBooks
             persistedBooks = books
+            hasLoaded = true
             groups = try await storedGroups
             persistedGroups = groups
             if groups.isEmpty {
@@ -129,6 +132,7 @@ final class BookLibraryModel: ObservableObject {
                 }
             }
         } catch {
+            hasLoaded = true
             errorMessage = error.localizedDescription
         }
     }

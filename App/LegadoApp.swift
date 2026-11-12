@@ -40,6 +40,8 @@ struct LegadoApp: App {
                 .environmentObject(rssLibrary)
                 .environmentObject(ruleSubscriptions)
                 .task {
+                    // 先读书架，首屏尽快显示书籍；书源较多时读取较慢，放在后面。
+                    await bookLibrary.load()
                     await sourceLibrary.load()
                     if let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-uiAutomationImportURL"),
                        ProcessInfo.processInfo.arguments.indices.contains(index + 1),
@@ -49,7 +51,6 @@ struct LegadoApp: App {
                             sourceLibrary.notice = nil
                         }
                     }
-                    await bookLibrary.load()
                     await replaceRuleLibrary.load()
                     await readingActivity.load()
                     await rssLibrary.load()

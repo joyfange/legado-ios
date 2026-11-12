@@ -705,7 +705,8 @@ struct ReaderView: View {
             return String(repeating: "\n", count: 80)
         }
         if model.isLoading || !model.hasLoadedCurrentChapter {
-            return "正文正在后台加载…\n\n你可以继续向下滚动，下一章已经提前生成。"
+            // 正文加载中保持空白页，避免打开书时先闪一下提示文字再换成正文。
+            return " "
         }
         let reason = model.diagnostics.first?.message ?? "当前书源没有返回正文。"
         return "本章加载失败\n\n\(reason)\n\n本章位置会保留，请继续向下进入下一章。"

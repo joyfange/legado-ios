@@ -307,12 +307,8 @@ struct BookCoverArtwork: View {
                let image = UIImage(data: data) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                AsyncImage(url: remoteURL.flatMap(URL.init(string:))) { phase in
-                    if case .success(let image) = phase {
-                        image.resizable().scaledToFill()
-                    } else {
-                        placeholder
-                    }
+                CachedCoverImage(url: remoteURL.flatMap(URL.init(string:))) {
+                    placeholder
                 }
             }
         }
@@ -412,5 +408,79 @@ struct StatusPill: View {
         }
         .font(.caption.weight(.medium))
         .foregroundStyle(color)
+    }
+}
+
+
+/// 封面图缓存：内存 + 磁盘。视图重建（启动、从阅读页返回）时同步取到图片，不再先闪一下占位封面。
+@MainActor
+final class CoverImageCache {
+    static let shared = CoverImageCache()
+    private let memory = NSCache<NSString, UIImage>()
+    private let directory: URL
+
+    private init() {
+        memory.countLimit = 300
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        directory = base.appendingPathComponent("BookCovers", isDirectory: true)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    private func fileURL(for url: URL) -> URL {
+        let key = url.absoluteString.utf8.reduce(UInt64(14_695_981_039_346_656_037)) { ($0 ^ UInt64($1)) &* 1_099_511_628_211 }
+        return directory.appendingPathComponent(String(key, radix: 16))
+    }
+
+    /// 只查内存和本地磁盘，不发网络请求。
+    func cachedImage(for url: URL) -> UIImage? {
+        let key = url.absoluteString as NSString
+        if let image = memory.object(forKey: key) { return image }
+        guard let data = try? Data(contentsOf: fileURL(for: url)), let image = UIImage(data: data) else { return nil }
+        memory.setObject(image, forKey: key)
+        return image
+    }
+
+    func image(for url: URL) async -> UIImage? {
+        if let image = cachedImage(for: url) { return image }
+        guard let (data, response) = try? await URLSession.shared.data(from: url) else { return nil }
+        if let image = memory.object(forKey: url.absoluteString as NSString) { return image }
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
+        guard let image = UIImage(data: data) else { return nil }
+        memory.setObject(image, forKey: url.absoluteString as NSString)
+        try? data.write(to: fileURL(for: url), options: .atomic)
+        return image
+    }
+}
+
+/// 带缓存的远程封面。已缓存的图片在第一帧就显示。
+struct CachedCoverImage<Placeholder: View>: View {
+    let url: URL?
+    let placeholder: () -> Placeholder
+    @State private var image: UIImage?
+
+    init(url: URL?, @ViewBuilder placeholder: @escaping () -> Placeholder) {
+        self.url = url
+        self.placeholder = placeholder
+        _image = State(initialValue: url.flatMap { CoverImageCache.shared.cachedImage(for: $0) })
+    }
+
+    var body: some View {
+        Group {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFill()
+            } else {
+                placeholder()
+            }
+        }
+        .task(id: url) {
+            guard let url else { image = nil; return }
+            if let cached = CoverImageCache.shared.cachedImage(for: url) {
+                if image !== cached { image = cached }
+                return
+            }
+            let loaded = await CoverImageCache.shared.image(for: url)
+            if !Task.isCancelled, let loaded { image = loaded }
+        }
     }
 }

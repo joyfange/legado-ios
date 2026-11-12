@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import PhotosUI
 
 struct RootTabView: View {
     @EnvironmentObject private var sourceLibrary: SourceLibraryModel
@@ -154,6 +155,7 @@ private struct BookshelfView: View {
     @State private var pendingLocalFiles: [LocalBookImportFile] = []
     @State private var selectedGroupID = BookGroup.idAll
     @State private var showsGroupManager = false
+    @State private var showsOrnamentManager = false
     @AppStorage("bookshelfLayout") private var bookshelfLayout = "grid3"
     @State private var shelfDestination: BookshelfShelfDestination?
 
@@ -179,13 +181,22 @@ private struct BookshelfView: View {
                         ReadingToolbarIcon(systemName: "magnifyingglass")
                     }
                     .accessibilityLabel("搜索")
+                    if bookshelfLayout == "shelf" {
+                        Button { showsOrnamentManager = true } label: {
+                            ReadingToolbarIcon(systemName: "leaf")
+                        }
+                        .accessibilityLabel("书架摆件")
+                    }
                     bookshelfMenu
                 }
                 if library.visibleGroups.count > 1 {
                     bookshelfGroups.padding(.bottom, 24)
                 }
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    if displayedBooks.isEmpty {
+                    if !library.hasLoaded {
+                        // 书架还没读完：保持空白，不闪「空书架」占位。
+                        Color.clear.frame(height: 1)
+                    } else if displayedBooks.isEmpty {
                         EmptyBookshelfHero { showsLocalImporter = true }
                     } else {
                         if let book = recentBook {
@@ -261,6 +272,9 @@ private struct BookshelfView: View {
                 pendingLocalFiles = []
             }
             .environmentObject(library)
+        }
+        .sheet(isPresented: $showsOrnamentManager) {
+            ShelfOrnamentManagerSheet()
         }
         .sheet(isPresented: $showsGroupManager) {
             BookGroupManagerView()
@@ -341,6 +355,11 @@ private struct BookshelfView: View {
                         layoutButton("\(count) 列宫格", value: "grid\(count)")
                     }
                     layoutButton("仿真书架", value: "shelf")
+                }
+                if bookshelfLayout == "shelf" {
+                    Button { showsOrnamentManager = true } label: {
+                        Label("书架摆件", systemImage: "leaf")
+                    }
                 }
                 NavigationLink {
                     FileManagementView()
@@ -780,15 +799,72 @@ struct BookshelfReadView: View {
                 } else {
                     ReaderView(book: resolvedBook, chapters: model.chapters, initialIndex: resolvedBook.durChapterIndex)
                 }
-            } else if model.isLoading {
-                ProgressView("正在打开…")
             } else if let errorMessage = model.errorMessage {
                 ReadingUnavailableView("无法打开书籍", systemImage: "book.closed", description: Text(errorMessage))
             } else {
-                ProgressView("正在打开…")
+                ReaderOpeningPlaceholder()
             }
         }
         .task { await model.load(book: book, source: source) }
+    }
+}
+
+/// 打开书籍时、目录还没读完的过渡页：直接用阅读背景，不出现白底和返回栏，
+/// 读得快时用户看不到任何过渡；超过半秒才显示一个小的加载圈。
+private struct ReaderOpeningPlaceholder: View {
+    @AppStorage("readerTheme") private var theme = "wechat"
+    @AppStorage("themeMode") private var themeMode = "0"
+    @AppStorage("readerUseBackgroundImage") private var useBackgroundImage = false
+    @Environment(\.dismiss) private var dismiss
+    @State private var showsSpinner = false
+    @State private var backgroundImage: UIImage?
+
+    private var style: ReaderStylePreset {
+        themeMode == "3" ? .eInk : ReaderStylePreset.resolve(theme)
+    }
+
+    init() {
+        let defaults = UserDefaults.standard
+        let usesImage = defaults.bool(forKey: "readerUseBackgroundImage") && defaults.string(forKey: "themeMode") != "3"
+        _backgroundImage = State(initialValue: usesImage ? ReaderBackgroundStore.load() : nil)
+    }
+
+    var body: some View {
+        ZStack {
+            Color(uiColor: style.background)
+            if let backgroundImage {
+                Image(uiImage: backgroundImage).resizable().scaledToFill()
+            }
+            if showsSpinner {
+                ProgressView()
+                    .tint(Color(uiColor: style.foreground))
+                    .transition(.opacity)
+            }
+        }
+        .clipped()
+        .ignoresSafeArea()
+        .overlay(alignment: .topLeading) {
+            // 加载较慢（需要联网刷新目录）时给出返回按钮，避免被卡在过渡页。
+            if showsSpinner {
+                Button { dismiss() } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color(uiColor: style.foreground))
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .padding(.leading, 6)
+                .accessibilityLabel("返回")
+                .transition(.opacity)
+            }
+        }
+        .preferredColorScheme(style.id == "night" ? .dark : .light)
+        .navigationBarBackButtonHidden(true)
+        .readingTabBarHidden()
+        .task {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            withAnimation(.easeIn(duration: 0.2)) { showsSpinner = true }
+        }
     }
 }
 
@@ -2165,18 +2241,36 @@ private struct BookshelfShelfView: View {
     let books: [Book]
     let onOpen: (BookshelfShelfDestination) -> Void
 
+    @ObservedObject private var ornamentStore = ShelfOrnamentStore.shared
     @State private var poses: [String: Int] = BookshelfShelfPose.load()
     @State private var selectedURL: String?
     @State private var showsPicker = false
+    @State private var editingOrnament: ShelfOrnament?
 
     private let spacing: CGFloat = 4
     private let rowSpacing: CGFloat = 30
-    private let frogSize = CGSize(width: 46, height: 67)
     private static let pickerWidth: CGFloat = 176
 
     /// 书架内容宽度：书架页左右各留 24pt 边距，宽度在布局前就能确定，避免首帧高度跳动。
     private var contentWidth: CGFloat { max(UIScreen.main.bounds.width - 48, 120) }
     private var rowHeight: CGFloat { BookshelfSpine.maxHeight + 10 }
+
+    /// 第一层左侧摆放的摆件及其尺寸（放不下的不显示）。
+    private var placedOrnaments: [PlacedShelfOrnament] {
+        var result: [PlacedShelfOrnament] = []
+        var used: CGFloat = 0
+        for ornament in ornamentStore.placed {
+            let size = ornamentStore.displaySize(for: ornament, maxWidth: contentWidth * 0.5)
+            guard used + size.width <= contentWidth else { break }
+            result.append(PlacedShelfOrnament(ornament: ornament, size: size))
+            used += size.width + spacing
+        }
+        return result
+    }
+
+    private var ornamentsWidth: CGFloat {
+        placedOrnaments.reduce(0) { $0 + $1.size.width + spacing }
+    }
 
     private func pose(_ book: Book) -> BookshelfShelfPose {
         BookshelfShelfPose(rawValue: poses[book.bookUrl] ?? 0) ?? .upright
@@ -2189,8 +2283,8 @@ private struct BookshelfShelfView: View {
     private func rows(width: CGFloat) -> [[Book]] {
         var result: [[Book]] = []
         var current: [Book] = []
-        // 第一层左边放青蛙摆件。
-        var available = width - frogSize.width - spacing
+        // 第一层左边放摆件。
+        var available = width - ornamentsWidth
         var used: CGFloat = 0
         for book in books {
             let item = footprint(book)
@@ -2222,6 +2316,9 @@ private struct BookshelfShelfView: View {
         .onChange(of: books.map(\.bookUrl)) { urls in
             if let selectedURL, !urls.contains(selectedURL) { deselect() }
         }
+        .sheet(item: $editingOrnament) { ornament in
+            ShelfOrnamentSettingsSheet(ornamentID: ornament.id)
+        }
     }
 
     private func deselect() {
@@ -2235,11 +2332,9 @@ private struct BookshelfShelfView: View {
         VStack(spacing: 0) {
             HStack(alignment: .bottom, spacing: spacing) {
                 if first {
-                    Image("ShelfFrog")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: frogSize.width, height: frogSize.height)
-                        .accessibilityHidden(true)
+                    ForEach(placedOrnaments) { item in
+                        ornamentView(item.ornament, size: item.size)
+                    }
                 }
                 ForEach(row) { book in
                     spine(book)
@@ -2265,13 +2360,31 @@ private struct BookshelfShelfView: View {
     }
 
     private func pickerX(for book: Book, in row: [Book], first: Bool) -> CGFloat {
-        var x: CGFloat = first ? frogSize.width + spacing : 0
+        var x: CGFloat = first ? ornamentsWidth : 0
         for item in row {
             if item.bookUrl == book.bookUrl { break }
             x += footprint(item) + spacing
         }
         let target = x + footprint(book) / 2 - Self.pickerWidth / 2
         return min(max(target, -4), contentWidth - Self.pickerWidth + 4)
+    }
+
+    private func ornamentView(_ ornament: ShelfOrnament, size: CGSize) -> some View {
+        Group {
+            if let image = ornamentStore.image(for: ornament) {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else {
+                Color.clear
+            }
+        }
+        .frame(width: size.width, height: size.height)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if selectedURL != nil { deselect() } else { editingOrnament = ornament }
+        }
+        .accessibilityLabel("书架摆件")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("轻点调整大小或移出书架")
     }
 
     private func spine(_ book: Book) -> some View {
@@ -2359,8 +2472,10 @@ private struct BookshelfFace: Shape {
     }
 }
 
-/// 书脊的排版：根据书名长短决定字号、列数和书的高度，尽量完整显示书名。
+/// 书脊的排版：书脊宽度固定，书名越长字号越小；单列放不下时在同样宽度里分两列小字，
+/// 尽量完整显示书名，不把书加厚。
 private struct BookshelfSpineLayout {
+    static let spineWidth: CGFloat = 26
     let width: CGFloat
     let height: CGFloat
     let fontSize: CGFloat
@@ -2370,25 +2485,30 @@ private struct BookshelfSpineLayout {
     static let maxHeight: CGFloat = 176
     private static let verticalPadding: CGFloat = 22
     private static let lineFactor: CGFloat = 1.2
+    private static let singleColumnMinFont: CGFloat = 7
+    private static let doubleColumnMaxFont: CGFloat = 8.5
+    private static let doubleColumnMinFont: CGFloat = 5.5
 
     init(title: String) {
         var chars = Array(title).filter { !$0.isWhitespace }
         if chars.isEmpty { chars = Array("未命名") }
         let usable = Self.maxHeight - Self.verticalPadding
-        // 一列放得下（字号不小于 10）就用一列；否则分两列，书相应加厚。
-        let oneColumnFont = min(12, usable / (CGFloat(chars.count) * Self.lineFactor))
-        var columnCount = oneColumnFont >= 10 ? 1 : 2
-        if chars.count > 40 { columnCount = 3 }
-        let perColumn = Int((Double(chars.count) / Double(columnCount)).rounded(.up))
-        var font = min(12, usable / (CGFloat(perColumn) * Self.lineFactor))
+        var columnCount = 1
+        var font = min(12, usable / (CGFloat(chars.count) * Self.lineFactor))
         var shown = chars
-        if font < 7 {
-            // 极长书名：字号最小 7，放不下的部分以省略号结尾。
-            font = 7
-            let capacity = Int(usable / (font * Self.lineFactor)) * columnCount
-            shown = Array(chars.prefix(max(capacity - 1, 1))) + ["…"]
+        if font < Self.singleColumnMinFont {
+            // 单列字太小：同样宽度里排两列。
+            columnCount = 2
+            let perColumn = (chars.count + 1) / 2
+            font = min(Self.doubleColumnMaxFont, usable / (CGFloat(perColumn) * Self.lineFactor))
+            if font < Self.doubleColumnMinFont {
+                // 极长书名（约 48 字以上）：最小字号仍放不下，末尾用省略号。
+                font = Self.doubleColumnMinFont
+                let capacity = Int(usable / (font * Self.lineFactor)) * 2
+                if chars.count > capacity { shown = Array(chars.prefix(max(capacity - 1, 1))) + ["…"] }
+            }
         }
-        let per = Int((Double(shown.count) / Double(columnCount)).rounded(.up))
+        let per = (shown.count + columnCount - 1) / columnCount
         var columns: [String] = []
         var index = 0
         while index < shown.count {
@@ -2398,7 +2518,7 @@ private struct BookshelfSpineLayout {
         }
         fontSize = font
         self.columns = columns
-        width = 20 + CGFloat(columns.count - 1) * (font + 3)
+        width = Self.spineWidth
         let textHeight = CGFloat(per) * font * Self.lineFactor + Self.verticalPadding
         height = min(max(textHeight, Self.minHeight), Self.maxHeight)
     }
@@ -2461,7 +2581,7 @@ private struct BookshelfSpine: View {
         return RoundedRectangle(cornerRadius: 2, style: .continuous)
             .fill(color)
             .overlay(alignment: .top) {
-                HStack(alignment: .top, spacing: 2) {
+                HStack(alignment: .top, spacing: 1) {
                     // 竖排从右往左读，第一列放在最右边。
                     ForEach(Array(layout.columns.enumerated().reversed()), id: \.offset) { _, column in
                         Text(column)
@@ -2564,5 +2684,410 @@ private struct BookshelfSpine: View {
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(book.name)，\(pose.title)")
+    }
+}
+
+// MARK: - 书架摆件
+
+/// 仿真书架上的一个摆件。fileName 为 nil 表示内置的青蛙。
+struct ShelfOrnament: Codable, Identifiable, Equatable {
+    var id: String
+    var fileName: String?
+    /// 等比缩放后的高度（pt）。
+    var size: Double
+    var onShelf: Bool
+}
+
+/// 书架第一层上实际显示的摆件和尺寸。
+private struct PlacedShelfOrnament: Identifiable {
+    let ornament: ShelfOrnament
+    let size: CGSize
+    var id: String { ornament.id }
+}
+
+/// 保存「我的摆件」：图片存在 Application Support，列表存在 UserDefaults。
+@MainActor
+final class ShelfOrnamentStore: ObservableObject {
+    static let shared = ShelfOrnamentStore()
+    static let builtinFrogID = "builtin.frog"
+    static let sizeRange: ClosedRange<Double> = 32...120
+    private static let defaultsKey = "shelfOrnaments"
+
+    @Published private(set) var ornaments: [ShelfOrnament]
+    private var images: [String: UIImage] = [:]
+
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
+           let saved = try? JSONDecoder().decode([ShelfOrnament].self, from: data) {
+            ornaments = saved
+        } else {
+            ornaments = [ShelfOrnament(id: Self.builtinFrogID, fileName: nil, size: 64, onShelf: true)]
+        }
+    }
+
+    var placed: [ShelfOrnament] { ornaments.filter(\.onShelf) }
+
+    private static var directory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Legado/ShelfOrnaments", isDirectory: true)
+    }
+
+    func ornament(id: String) -> ShelfOrnament? { ornaments.first { $0.id == id } }
+
+    func image(for ornament: ShelfOrnament) -> UIImage? {
+        if let cached = images[ornament.id] { return cached }
+        let image: UIImage?
+        if let fileName = ornament.fileName {
+            image = UIImage(contentsOfFile: Self.directory.appendingPathComponent(fileName).path)
+        } else {
+            image = UIImage(named: "ShelfFrog")
+        }
+        if let image { images[ornament.id] = image }
+        return image
+    }
+
+    /// 按图片比例算出显示尺寸；过宽的图片再整体缩小到 maxWidth 以内。
+    func displaySize(for ornament: ShelfOrnament, maxWidth: CGFloat) -> CGSize {
+        var height = CGFloat(ornament.size)
+        var aspect: CGFloat = 0.69
+        if let image = image(for: ornament), image.size.height > 0 {
+            aspect = image.size.width / image.size.height
+        }
+        var width = height * aspect
+        if width > maxWidth, width > 0 {
+            height *= maxWidth / width
+            width = maxWidth
+        }
+        return CGSize(width: width.rounded(), height: height.rounded())
+    }
+
+    func setSize(_ size: Double, for id: String) {
+        guard let index = ornaments.firstIndex(where: { $0.id == id }) else { return }
+        ornaments[index].size = min(max(size, Self.sizeRange.lowerBound), Self.sizeRange.upperBound)
+        save()
+    }
+
+    func setOnShelf(_ onShelf: Bool, for id: String) {
+        guard let index = ornaments.firstIndex(where: { $0.id == id }) else { return }
+        ornaments[index].onShelf = onShelf
+        save()
+    }
+
+    func delete(_ id: String) {
+        guard let index = ornaments.firstIndex(where: { $0.id == id }) else { return }
+        if let fileName = ornaments[index].fileName {
+            try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(fileName))
+        }
+        images[id] = nil
+        ornaments.remove(at: index)
+        save()
+    }
+
+    /// 添加一张图片为新摆件，并直接摆到书架上。
+    @discardableResult
+    func add(imageData data: Data) -> Bool {
+        guard let source = UIImage(data: data), source.size.width > 0, source.size.height > 0 else { return false }
+        let maxSide: CGFloat = 600
+        let scale = min(1, maxSide / max(source.size.width, source.size.height))
+        let target = CGSize(width: (source.size.width * scale).rounded(), height: (source.size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat.default()
+        format.opaque = false
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: target, format: format).image { _ in
+            source.draw(in: CGRect(origin: .zero, size: target))
+        }
+        guard let png = image.pngData() else { return false }
+        let id = UUID().uuidString
+        let fileName = "\(id).png"
+        do {
+            try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+            try png.write(to: Self.directory.appendingPathComponent(fileName), options: .atomic)
+        } catch {
+            return false
+        }
+        images[id] = image
+        ornaments.append(ShelfOrnament(id: id, fileName: fileName, size: 64, onShelf: true))
+        save()
+        return true
+    }
+
+    private func save() {
+        if let data = try? JSONEncoder().encode(ornaments) {
+            UserDefaults.standard.set(data, forKey: Self.defaultsKey)
+        }
+    }
+}
+
+/// 轻点书架上的摆件弹出：等比大小、移出书架。
+private struct ShelfOrnamentSettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var store = ShelfOrnamentStore.shared
+    let ornamentID: String
+    @State private var size: Double = 64
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack {
+                Label("摆件设置", systemImage: "leaf")
+                    .font(.headline)
+                Spacer()
+                Button(role: .destructive) {
+                    store.setOnShelf(false, for: ornamentID)
+                    dismiss()
+                } label: {
+                    Label("移出书架", systemImage: "trash")
+                        .font(.subheadline)
+                        .foregroundStyle(ReadingTheme.coral)
+                }
+            }
+            HStack(spacing: 12) {
+                Text("等比大小")
+                    .font(.subheadline)
+                Slider(value: $size, in: ShelfOrnamentStore.sizeRange, step: 1)
+                    .tint(ReadingTheme.ink)
+                Text("\(Int(size))pt")
+                    .font(.subheadline.monospacedDigit())
+                    .frame(width: 48, alignment: .trailing)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 28)
+        .onAppear { size = store.ornament(id: ornamentID)?.size ?? 64 }
+        .onChange(of: size) { store.setSize($0, for: ornamentID) }
+        .readingLivePreviewSheet()
+        .readingPresentationDragIndicator()
+    }
+}
+
+/// 书架摆件管理：我的摆件（轻点放上/取下书架，长按删除）与添加新摆件（本地图片多选、网络链接）。
+struct ShelfOrnamentManagerSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var store = ShelfOrnamentStore.shared
+    @State private var tab = 0
+    @State private var addSource = 0
+    @State private var linkText = ""
+    @State private var showsPhotoPicker = false
+    @State private var isDownloading = false
+    @State private var message: String?
+
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: 4)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Text("书架摆件").font(.title3.weight(.semibold))
+                Spacer()
+                Picker("", selection: $tab) {
+                    Text("我的摆件 \(store.ornaments.count)").tag(0)
+                    Text("添加新摆件").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 210)
+            }
+            if tab == 0 { myOrnaments } else { addOrnament }
+            if let message {
+                Text(message).font(.footnote).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 28)
+        .sheet(isPresented: $showsPhotoPicker) {
+            ShelfOrnamentPhotoPicker { dataList in
+                showsPhotoPicker = false
+                guard !dataList.isEmpty else { return }
+                let added = dataList.filter { store.add(imageData: $0) }.count
+                message = added == dataList.count ? "已添加 \(added) 个摆件并放到书架上" : "已添加 \(added) 个，\(dataList.count - added) 张图片无法读取"
+                if added > 0 { tab = 0 }
+            }
+            .ignoresSafeArea()
+        }
+        .readingPresentationDetents([.medium, .large])
+        .readingPresentationDragIndicator()
+    }
+
+    private var myOrnaments: some View {
+        ScrollView {
+            if store.ornaments.isEmpty {
+                Text("还没有摆件，去「添加新摆件」里添加吧")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity).padding(.top, 40)
+            }
+            LazyVGrid(columns: columns, spacing: 12) {
+                ForEach(store.ornaments) { ornament in
+                    Button {
+                        store.setOnShelf(!ornament.onShelf, for: ornament.id)
+                    } label: {
+                        ZStack(alignment: .topTrailing) {
+                            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                                .fill(ReadingTheme.groupedCanvas)
+                            if let image = store.image(for: ornament) {
+                                Image(uiImage: image).resizable().scaledToFit().padding(10)
+                            }
+                            if ornament.onShelf {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .font(.system(size: 16))
+                                    .foregroundStyle(ReadingTheme.ink, ReadingTheme.canvas)
+                                    .padding(6)
+                            }
+                        }
+                        .aspectRatio(1, contentMode: .fit)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button {
+                            store.setOnShelf(!ornament.onShelf, for: ornament.id)
+                        } label: {
+                            Label(ornament.onShelf ? "移出书架" : "放到书架",
+                                  systemImage: ornament.onShelf ? "tray.and.arrow.up" : "tray.and.arrow.down")
+                        }
+                        Button(role: .destructive) {
+                            store.delete(ornament.id)
+                        } label: {
+                            Label("删除摆件", systemImage: "trash")
+                        }
+                    }
+                    .accessibilityLabel(ornament.onShelf ? "摆件，已在书架上" : "摆件，未放到书架")
+                    .accessibilityHint("轻点放到书架或取下，长按可删除")
+                }
+            }
+            Text("轻点摆件放上或取下书架，长按可删除。轻点书架上的摆件可调整大小。")
+                .font(.caption).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 12)
+        }
+    }
+
+    private var addOrnament: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Picker("", selection: $addSource) {
+                Text("本地图片").tag(0)
+                Text("网络链接").tag(1)
+            }
+            .pickerStyle(.segmented)
+            if addSource == 0 {
+                Button { showsPhotoPicker = true } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "photo.badge.plus")
+                        Text("点击选取本地图片（支持多选）")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(ReadingTheme.ink)
+                    .frame(maxWidth: .infinity, minHeight: 96)
+                    .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                Text("建议使用透明背景的 PNG 图片，摆在书架上更自然。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                TextField("https://…/图片.png", text: $linkText)
+                    .keyboardType(.URL)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .padding(12)
+                    .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                Button {
+                    Task { await addFromLink() }
+                } label: {
+                    HStack {
+                        if isDownloading { ProgressView().controlSize(.small) }
+                        Text(isDownloading ? "正在下载…" : "添加")
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(ReadingTheme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(ReadingTheme.accentFill, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isDownloading || linkText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func addFromLink() async {
+        let text = linkText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            message = "请输入以 http 或 https 开头的图片链接"
+            return
+        }
+        isDownloading = true
+        defer { isDownloading = false }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+                message = "下载失败（HTTP \(http.statusCode)）"
+                return
+            }
+            if store.add(imageData: data) {
+                message = "已添加并放到书架上"
+                linkText = ""
+                tab = 0
+            } else {
+                message = "这个链接不是可用的图片"
+            }
+        } catch {
+            message = "下载失败：\(error.localizedDescription)"
+        }
+    }
+}
+
+/// 系统相册多选。
+private struct ShelfOrnamentPhotoPicker: UIViewControllerRepresentable {
+    let onFinish: @MainActor ([Data]) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onFinish: onFinish) }
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var configuration = PHPickerConfiguration()
+        configuration.filter = .images
+        configuration.selectionLimit = 0
+        let picker = PHPickerViewController(configuration: configuration)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
+
+    @MainActor
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let onFinish: @MainActor ([Data]) -> Void
+        private var collected: [Int: Data] = [:]
+        private var remaining = 0
+
+        init(onFinish: @escaping @MainActor ([Data]) -> Void) {
+            self.onFinish = onFinish
+        }
+
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            guard !results.isEmpty else { onFinish([]); return }
+            collected = [:]
+            remaining = results.count
+            for (index, result) in results.enumerated() {
+                let provider = result.itemProvider
+                let identifier = provider.registeredTypeIdentifiers.first {
+                    UTType($0)?.conforms(to: .image) == true
+                } ?? UTType.image.identifier
+                let handler = Self.makeHandler(index: index, coordinator: self)
+                provider.loadDataRepresentation(forTypeIdentifier: identifier, completionHandler: handler)
+            }
+        }
+
+        // 相册在后台队列回调；用非隔离的静态方法生成回调，再切回主线程。
+        nonisolated private static func makeHandler(index: Int, coordinator: Coordinator) -> @Sendable (Data?, (any Error)?) -> Void {
+            { data, _ in
+                Task { @MainActor in
+                    coordinator.received(data, at: index)
+                }
+            }
+        }
+
+        private func received(_ data: Data?, at index: Int) {
+            if let data { collected[index] = data }
+            remaining -= 1
+            if remaining == 0 {
+                onFinish(collected.keys.sorted().compactMap { collected[$0] })
+            }
+        }
     }
 }
