@@ -577,8 +577,10 @@ struct ReaderTextView: UIViewRepresentable {
         /// 长按后进入选字：先选中按住处的词，拖动选择柄可以改选范围，菜单里点「替换」。
         private(set) var isSelectingText = false
         private var isChangingSelection = false
+        private var selectionLockedOffset: CGPoint?
 
         private func beginTextSelection(in view: UITextView, range: NSRange, at point: CGPoint) {
+            selectionLockedOffset = isPagedMode ? view.contentOffset : nil
             isSelectingText = true
             isChangingSelection = true
             nextSwipe?.isEnabled = false
@@ -620,6 +622,10 @@ struct ReaderTextView: UIViewRepresentable {
             view.selectedRange = NSRange(location: 0, length: 0)
             view.isSelectable = false
             view.resignFirstResponder()
+            if let locked = selectionLockedOffset, view.contentOffset != locked {
+                view.setContentOffset(locked, animated: false)
+            }
+            selectionLockedOffset = nil
             isChangingSelection = false
             let isScrollMode = (parent.isEInkMode ? 4 : parent.pageAnimation) == 3
             nextSwipe?.isEnabled = !isScrollMode
@@ -828,6 +834,21 @@ struct ReaderTextView: UIViewRepresentable {
                 prefixLength: prefix,
                 renderedLength: view.text.utf16.count
             )
+            // 先同步定位一次，避免新内容第一帧停在章节开头、下一帧再跳到阅读位置（打开书时的残影）。
+            if isPagedMode, pageBreaker.isEnabled, pageBreaker.stride > 0 {
+                alignPagedContent(in: view)
+                let glyph = view.layoutManager.glyphIndexForCharacter(at: location)
+                let y = view.layoutManager.boundingRect(
+                    forGlyphRange: NSRange(location: glyph, length: 1),
+                    in: view.textContainer
+                ).origin.y
+                let limits = scrollLimits(for: view)
+                let page = floor(max(y + 1, 0) / pageBreaker.stride)
+                let target = min(max(limits.minimum + page * pageBreaker.stride, limits.minimum), limits.maximum)
+                if abs(view.contentOffset.y - target) > 0.5 {
+                    view.setContentOffset(CGPoint(x: 0, y: target), animated: false)
+                }
+            }
             DispatchQueue.main.async { [weak self] in
                 guard let self, self.layoutGeneration == generation else { return }
                 view.layoutManager.ensureLayout(for: view.textContainer)
@@ -952,6 +973,11 @@ struct ReaderTextView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // 选字时固定当前页：拖动选择柄不能把正文拖上拖下（否则页面会错位截断）。
+            if isSelectingText, let locked = selectionLockedOffset, scrollView.contentOffset != locked {
+                scrollView.contentOffset = locked
+                return
+            }
             guard !isRenderingAutoPage, !isApplyingContent else { return }
             guard let view = scrollView as? UITextView, !view.text.isEmpty else { return }
             if parent.isLoadingNextChapter, !didRequestLoadingCancellation {

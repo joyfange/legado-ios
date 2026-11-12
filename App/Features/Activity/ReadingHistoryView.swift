@@ -36,12 +36,13 @@ struct ReadingHistoryView: View {
                                 destination(for: record)
                             } label: {
                                 HStack(spacing: 13) {
-                                    // 有书架记录时显示书籍封面，没有时按书名生成封面。
+                                    // 书在书架上用书架封面；已移出书架时用之前记下的封面。
                                     let shelfBook = books.books.first(where: { $0.name == record.bookName })
+                                    let savedCover = ReadRecordCoverStore.cover(for: record.bookName)
                                     BookCoverArtwork(
                                         title: record.bookName,
-                                        author: shelfBook?.author ?? "",
-                                        remoteURL: shelfBook?.coverUrl,
+                                        author: shelfBook?.author ?? savedCover?.author ?? "",
+                                        remoteURL: shelfBook?.coverUrl ?? savedCover?.url,
                                         width: 38,
                                         height: 54
                                     )
@@ -141,5 +142,31 @@ struct ReadingHistoryView: View {
         formatter.locale = .current
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: Date(timeIntervalSince1970: Double(milliseconds) / 1_000))
+    }
+}
+
+
+/// 记住书架上每本书的封面地址（按书名），书移出书架后阅读记录仍能显示原封面。
+enum ReadRecordCoverStore {
+    private static let key = "readRecordCovers"
+
+    static func cover(for bookName: String) -> (url: String, author: String)? {
+        guard let all = UserDefaults.standard.dictionary(forKey: key) as? [String: [String: String]],
+              let entry = all[bookName], let url = entry["url"], !url.isEmpty else { return nil }
+        return (url, entry["author"] ?? "")
+    }
+
+    static func remember(_ books: [Book]) {
+        var all = UserDefaults.standard.dictionary(forKey: key) as? [String: [String: String]] ?? [:]
+        var changed = false
+        for book in books {
+            guard let url = book.coverUrl, !url.isEmpty else { continue }
+            let entry = ["url": url, "author": book.author]
+            if all[book.name] != entry {
+                all[book.name] = entry
+                changed = true
+            }
+        }
+        if changed { UserDefaults.standard.set(all, forKey: key) }
     }
 }
