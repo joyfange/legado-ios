@@ -36,10 +36,15 @@ struct ReadingHistoryView: View {
                                 destination(for: record)
                             } label: {
                                 HStack(spacing: 13) {
-                                    Image(systemName: "book.pages.fill")
-                                        .foregroundStyle(ReadingTheme.accent)
-                                        .frame(width: 38, height: 38)
-                                        .background(ReadingTheme.accentSoft.opacity(0.55), in: RoundedRectangle(cornerRadius: 11))
+                                    // 有书架记录时显示书籍封面，没有时按书名生成封面。
+                                    let shelfBook = books.books.first(where: { $0.name == record.bookName })
+                                    BookCoverArtwork(
+                                        title: record.bookName,
+                                        author: shelfBook?.author ?? "",
+                                        remoteURL: shelfBook?.coverUrl,
+                                        width: 38,
+                                        height: 54
+                                    )
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(record.bookName).font(.headline)
                                         Text(duration(record.readTime))

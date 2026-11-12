@@ -3,6 +3,17 @@ import UIKit
 
 private final class ReaderLayoutTextView: UITextView {
     var onLayout: ((UITextView) -> Void)?
+    /// 选中文字后编辑菜单里的「替换」（iOS 15 走 UIMenuController）。
+    var onReplaceSelection: (() -> Void)?
+
+    @objc func readerReplaceSelection(_ sender: Any?) { onReplaceSelection?() }
+
+    override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+        if action == #selector(readerReplaceSelection(_:)) {
+            return onReplaceSelection != nil && selectedRange.length > 0
+        }
+        return super.canPerformAction(action, withSender: sender)
+    }
     private var reportedSize = CGSize.zero
     private var reportedContentSize = CGSize.zero
 
@@ -184,6 +195,10 @@ struct ReaderTextView: UIViewRepresentable {
             coordinator?.reportPage(in: view)
             coordinator?.reportPageRanges(in: view)
         }
+        view.onReplaceSelection = { [weak coordinator = context.coordinator, weak view] in
+            guard let view else { return }
+            coordinator?.replaceSelection(in: view)
+        }
         view.accessibilityIdentifier = "reader.text"
         let effectivePageAnimation = isEInkMode ? 4 : pageAnimation
         view.backgroundColor = backgroundColor
@@ -214,7 +229,8 @@ struct ReaderTextView: UIViewRepresentable {
             context.coordinator.lastViewportSize = view.bounds.size
         }
         let effectivePageAnimation = isEInkMode ? 4 : pageAnimation
-        view.isSelectable = false
+        let isSelectingText = context.coordinator.isSelectingText
+        if !isSelectingText { view.isSelectable = false }
         view.alwaysBounceVertical = effectivePageAnimation == 3
         view.isScrollEnabled = true
         view.panGestureRecognizer.isEnabled = effectivePageAnimation == 3
@@ -224,9 +240,11 @@ struct ReaderTextView: UIViewRepresentable {
         context.coordinator.updateInteractionMode(on: view, isScrollMode: effectivePageAnimation == 3)
         view.backgroundColor = backgroundColor
         view.isOpaque = backgroundColor != .clear
-        view.isSelectable = false
-        view.selectedRange = NSRange(location: 0, length: 0)
-        view.resignFirstResponder()
+        if !isSelectingText {
+            view.isSelectable = false
+            view.selectedRange = NSRange(location: 0, length: 0)
+            view.resignFirstResponder()
+        }
         view.textContainerInset = .init(
             top: CGFloat(paddingTop + headerInset),
             left: CGFloat(paddingLeft),
@@ -541,8 +559,8 @@ struct ReaderTextView: UIViewRepresentable {
         private var lastLongPressTime: CFTimeInterval = 0
 
         @objc private func longPressed(_ gesture: UILongPressGestureRecognizer) {
-            guard gesture.state == .began, let view = textView, let handler = parent.onLongPressText,
-                  view.textStorage.length > 0 else { return }
+            guard gesture.state == .began, !isSelectingText, let view = textView,
+                  parent.onLongPressText != nil, view.textStorage.length > 0 else { return }
             let point = gesture.location(in: view)
             let location = CGPoint(x: point.x - view.textContainerInset.left, y: point.y - view.textContainerInset.top)
             let manager = view.layoutManager
@@ -550,10 +568,93 @@ struct ReaderTextView: UIViewRepresentable {
             let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer)
             guard rect.insetBy(dx: -6, dy: -6).contains(location) else { return }
             let character = manager.characterIndexForGlyph(at: glyph)
-            guard let pick = ReaderTextPick.make(text: view.textStorage.string, at: character) else { return }
+            guard let range = ReaderTextPick.wordRange(in: view.textStorage.string, at: character) else { return }
             lastLongPressTime = CACurrentMediaTime()
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            handler(pick)
+            beginTextSelection(in: view, range: range, at: point)
+        }
+
+        /// 长按后进入选字：先选中按住处的词，拖动选择柄可以改选范围，菜单里点「替换」。
+        private(set) var isSelectingText = false
+        private var isChangingSelection = false
+
+        private func beginTextSelection(in view: UITextView, range: NSRange, at point: CGPoint) {
+            isSelectingText = true
+            isChangingSelection = true
+            nextSwipe?.isEnabled = false
+            previousSwipe?.isEnabled = false
+            if #unavailable(iOS 16.0) {
+                UIMenuController.shared.menuItems = [
+                    UIMenuItem(title: "替换", action: #selector(ReaderLayoutTextView.readerReplaceSelection(_:)))
+                ]
+            }
+            view.isSelectable = true
+            _ = view.becomeFirstResponder()
+            view.selectedRange = range
+            isChangingSelection = false
+            DispatchQueue.main.async { [weak self, weak view] in
+                guard let self, let view, self.isSelectingText else { return }
+                self.presentSelectionMenu(in: view, at: point)
+            }
+        }
+
+        private func presentSelectionMenu(in view: UITextView, at point: CGPoint) {
+            var target = CGRect(origin: point, size: .zero).insetBy(dx: -4, dy: -12)
+            if let start = view.selectedTextRange?.start, let end = view.selectedTextRange?.end,
+               let textRange = view.textRange(from: start, to: end) {
+                let rect = view.firstRect(for: textRange)
+                if !rect.isNull, !rect.isInfinite, rect.width > 0 { target = rect }
+            }
+            if #available(iOS 16.0, *),
+               let interaction = view.interactions.compactMap({ $0 as? UIEditMenuInteraction }).first {
+                interaction.presentEditMenu(with: UIEditMenuConfiguration(identifier: nil, sourcePoint: CGPoint(x: target.midX, y: target.minY)))
+            } else {
+                UIMenuController.shared.showMenu(from: view, rect: target)
+            }
+        }
+
+        func endTextSelection(in view: UITextView) {
+            guard isSelectingText else { return }
+            isSelectingText = false
+            isChangingSelection = true
+            view.selectedRange = NSRange(location: 0, length: 0)
+            view.isSelectable = false
+            view.resignFirstResponder()
+            isChangingSelection = false
+            let isScrollMode = (parent.isEInkMode ? 4 : parent.pageAnimation) == 3
+            nextSwipe?.isEnabled = !isScrollMode
+            previousSwipe?.isEnabled = !isScrollMode
+        }
+
+        /// 菜单「替换」：把选中的文字交给阅读页弹出替换面板。
+        func replaceSelection(in view: UITextView) {
+            let range = view.selectedRange
+            let text = view.textStorage.string
+            guard range.length > 0, NSMaxRange(range) <= (text as NSString).length else { return }
+            let selected = ReaderTextPick.stripMarkup((text as NSString).substring(with: range))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let paragraph = ReaderTextPick.make(text: text, at: range.location)?.paragraph ?? selected
+            endTextSelection(in: view)
+            guard !selected.isEmpty else { return }
+            parent.onLongPressText?(ReaderTextPick(word: selected, paragraph: paragraph))
+        }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            guard isSelectingText, !isChangingSelection, textView.selectedRange.length == 0 else { return }
+            DispatchQueue.main.async { [weak self, weak textView] in
+                guard let self, let textView, self.isSelectingText, textView.selectedRange.length == 0 else { return }
+                self.endTextSelection(in: textView)
+            }
+        }
+
+        @available(iOS 16.0, *)
+        func textView(_ textView: UITextView, editMenuForTextIn range: NSRange, suggestedActions: [UIMenuElement]) -> UIMenu? {
+            guard isSelectingText, range.length > 0 else { return nil }
+            let replace = UIAction(title: "替换", image: UIImage(systemName: "arrow.left.arrow.right")) { [weak self, weak textView] _ in
+                guard let self, let textView else { return }
+                self.replaceSelection(in: textView)
+            }
+            return UIMenu(children: [replace] + suggestedActions)
         }
 
         func gestureRecognizer(
@@ -567,8 +668,8 @@ struct ReaderTextView: UIViewRepresentable {
             // The scroll reader owns the vertical pan gesture. Horizontal
             // swipe recognizers must be disabled there or UIKit can cancel the
             // pan before the user reaches the end of a long chapter.
-            nextSwipe?.isEnabled = !isScrollMode
-            previousSwipe?.isEnabled = !isScrollMode
+            nextSwipe?.isEnabled = !isScrollMode && !isSelectingText
+            previousSwipe?.isEnabled = !isScrollMode && !isSelectingText
             view.panGestureRecognizer.isEnabled = isScrollMode
             view.alwaysBounceVertical = isScrollMode
             view.isPagingEnabled = !isScrollMode
@@ -1093,8 +1194,21 @@ struct ReaderTextView: UIViewRepresentable {
 
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view = textView, gesture.state == .ended else { return }
-            // 长按刚弹出替换面板时，抬手不再当成点按（翻页/呼出菜单）。
-            if CACurrentMediaTime() - lastLongPressTime < 1.2 { return }
+            // 选字状态下点一下只取消选择，不翻页、不呼出菜单。
+            if isSelectingText {
+                // 点在选中的文字上：重新弹出菜单；点在别处：取消选择。
+                let point = gesture.location(in: view)
+                let location = CGPoint(x: point.x - view.textContainerInset.left, y: point.y - view.textContainerInset.top)
+                let glyph = view.layoutManager.glyphIndex(for: location, in: view.textContainer)
+                let character = view.layoutManager.characterIndexForGlyph(at: glyph)
+                if view.selectedRange.length > 0, NSLocationInRange(character, view.selectedRange) {
+                    presentSelectionMenu(in: view, at: point)
+                } else {
+                    endTextSelection(in: view)
+                }
+                return
+            }
+            if CACurrentMediaTime() - lastLongPressTime < 0.6 { return }
             let point = gesture.location(in: view)
             // UIScrollView changes its bounds origin as content scrolls, and
             // gesture locations use that content coordinate space. Convert
@@ -1332,16 +1446,31 @@ struct ReaderTextPick: Identifiable, Equatable {
            expression.matches(in: text, range: paragraphRange).contains(where: { NSLocationInRange(index, $0.range) }) {
             return ReaderTextPick(word: "", paragraph: paragraph)
         }
-        var word = unit
+        let word = wordRange(in: text, at: index).map { ns.substring(with: $0) } ?? unit
+        return ReaderTextPick(word: word.trimmingCharacters(in: .whitespacesAndNewlines), paragraph: paragraph)
+    }
+
+    /// 按住处的词语范围；不在正文字符上（空白、段评/插图标记）时返回 nil。
+    static func wordRange(in text: String, at index: Int) -> NSRange? {
+        let ns = text as NSString
+        guard index >= 0, index < ns.length else { return nil }
+        let unit = ns.substring(with: NSRange(location: index, length: 1))
+        guard !unit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        let paragraphRange = ns.paragraphRange(for: NSRange(location: index, length: 0))
+        if let expression = ReaderInlineMarkup.tagExpression,
+           expression.matches(in: text, range: paragraphRange).contains(where: { NSLocationInRange(index, $0.range) }) {
+            return nil
+        }
         let tokenizer = CFStringTokenizerCreate(nil, ns as CFString, CFRange(location: paragraphRange.location, length: paragraphRange.length),
                                                 kCFStringTokenizerUnitWord, Locale(identifier: "zh_Hans") as CFLocale)
         if CFStringTokenizerGoToTokenAtIndex(tokenizer, index) != [] {
             let range = CFStringTokenizerGetCurrentTokenRange(tokenizer)
-            if range.location != kCFNotFound, range.length > 0, range.length <= 40 {
-                word = ns.substring(with: NSRange(location: range.location, length: range.length))
+            if range.location != kCFNotFound, range.length > 0, range.length <= 40,
+               NSLocationInRange(index, NSRange(location: range.location, length: range.length)) {
+                return NSRange(location: range.location, length: range.length)
             }
         }
-        return ReaderTextPick(word: word.trimmingCharacters(in: .whitespacesAndNewlines), paragraph: paragraph)
+        return NSRange(location: index, length: 1)
     }
 
     static func stripMarkup(_ value: String) -> String {

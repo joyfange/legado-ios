@@ -1499,12 +1499,6 @@ struct ReaderView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                stylePreviewCard
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(.bar)
-            }
             .navigationTitle("阅读样式")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1537,7 +1531,7 @@ struct ReaderView: View {
                 fontError = error.localizedDescription
             }
         }
-        .readingPresentationDetents([.medium, .large])
+        .readingLivePreviewSheet()
         .readingPresentationDragIndicator()
     }
 
@@ -2465,6 +2459,11 @@ private struct ReaderQuickReplaceSheet: View {
 
     private var trimmedPattern: String { pattern.trimmingCharacters(in: .newlines) }
 
+    private var paragraphHeight: CGFloat {
+        let lines = max(1, min(6, pick.paragraph.count / 18 + 1))
+        return CGFloat(lines) * 22 + 12
+    }
+
     private var matchCount: Int {
         guard !trimmedPattern.isEmpty else { return 0 }
         if isRegex {
@@ -2478,14 +2477,12 @@ private struct ReaderQuickReplaceSheet: View {
         ReadingNavigationStack {
             Form {
                 Section {
-                    Text(pick.paragraph)
-                        .font(.callout)
-                        .textSelection(.enabled)
-                        .lineLimit(8)
+                    ReaderParagraphSelectView(text: pick.paragraph, selection: $pattern)
+                        .frame(height: paragraphHeight)
                 } header: {
                     Text("所在段落")
                 } footer: {
-                    Text("长按上面的段落可以拷贝更长的一段，再粘贴到「替换内容」。")
+                    Text("在段落里拖动选择要替换的文字，会自动填到下面。")
                 }
                 Section("替换") {
                     ReadingTextField("要替换的文字", text: $pattern, axis: .vertical)
@@ -2553,6 +2550,48 @@ private struct ReaderQuickReplaceSheet: View {
             let failure = await onSave(rule)
             saving = false
             if let failure { error = failure } else { dismiss() }
+        }
+    }
+}
+
+
+/// 替换面板里可选字的段落：选中的文字实时填入「要替换的文字」。
+private struct ReaderParagraphSelectView: UIViewRepresentable {
+    let text: String
+    @Binding var selection: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    func makeUIView(context: Context) -> UITextView {
+        let view = UITextView()
+        view.isEditable = false
+        view.isSelectable = true
+        view.isScrollEnabled = true
+        view.backgroundColor = .clear
+        view.textContainerInset = UIEdgeInsets(top: 6, left: 0, bottom: 6, right: 0)
+        view.textContainer.lineFragmentPadding = 0
+        view.font = UIFont.preferredFont(forTextStyle: .callout)
+        view.adjustsFontForContentSizeCategory = true
+        view.text = text
+        view.delegate = context.coordinator
+        view.accessibilityIdentifier = "quickReplace.paragraph"
+        return view
+    }
+
+    func updateUIView(_ view: UITextView, context: Context) {
+        context.coordinator.selection = $selection
+        if view.text != text { view.text = text }
+    }
+
+    final class Coordinator: NSObject, UITextViewDelegate {
+        var selection: Binding<String>
+        init(selection: Binding<String>) { self.selection = selection }
+
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            let range = textView.selectedRange
+            guard range.length > 0, NSMaxRange(range) <= (textView.text as NSString).length else { return }
+            let value = (textView.text as NSString).substring(with: range)
+            if selection.wrappedValue != value { selection.wrappedValue = value }
         }
     }
 }

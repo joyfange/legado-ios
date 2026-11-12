@@ -365,7 +365,8 @@ struct ReaderScrollView: UIViewRepresentable {
             guard let pick = ReaderTextPick.make(text: chapter.storage.string, at: character) else { return }
             lastLongPressTime = CACurrentMediaTime()
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            handler(pick)
+            // 滚动模式的正文是自绘的，不能直接选字：打开面板后在段落里自己选。
+            handler(ReaderTextPick(word: "", paragraph: pick.paragraph))
         }
 
         /// 段评气泡 / 插图标记的点击目标。

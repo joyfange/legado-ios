@@ -408,6 +408,56 @@ extension View {
         }
     }
 
+    /// 用绑定控制的导航跳转；iOS 16 起用 navigationDestination，iOS 15 用隐藏的 NavigationLink。
+    @ViewBuilder
+    func readingNavigationDestination<Destination: View>(
+        isPresented: Binding<Bool>,
+        @ViewBuilder destination: @escaping () -> Destination
+    ) -> some View {
+        if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {
+            navigationDestination(isPresented: isPresented, destination: destination)
+        } else {
+            background(
+                NavigationLink(isActive: isPresented, destination: destination) { EmptyView() }
+                    .hidden()
+            )
+        }
+    }
+
+    /// 半屏且不压暗背景的面板：调整阅读样式时能直接看到后面正文的变化。
+    @ViewBuilder
+    func readingLivePreviewSheet() -> some View {
+        if #available(iOS 16.4, *), !ReadingCompatibility.usesLegacyUI {
+            presentationDetents([.medium])
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+                .presentationContentInteraction(.scrolls)
+        } else if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {
+            presentationDetents([.medium])
+                .background(ReadingUIKitConfiguration { controller in
+                    var current: UIViewController? = controller
+                    while let candidate = current {
+                        if let sheet = candidate.presentationController as? UISheetPresentationController {
+                            if sheet.largestUndimmedDetentIdentifier != .medium { sheet.largestUndimmedDetentIdentifier = .medium }
+                            break
+                        }
+                        current = candidate.parent
+                    }
+                })
+        } else {
+            background(ReadingUIKitConfiguration { controller in
+                var current: UIViewController? = controller
+                while let candidate = current {
+                    if let sheet = candidate.presentationController as? UISheetPresentationController {
+                        sheet.detents = [.medium()]
+                        if sheet.largestUndimmedDetentIdentifier != .medium { sheet.largestUndimmedDetentIdentifier = .medium }
+                        break
+                    }
+                    current = candidate.parent
+                }
+            })
+        }
+    }
+
     @ViewBuilder
     func readingPresentationDragIndicator() -> some View {
         if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {
