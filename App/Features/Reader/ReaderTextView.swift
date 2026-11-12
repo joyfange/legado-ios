@@ -163,6 +163,8 @@ struct ReaderTextView: UIViewRepresentable {
     var reviewBubbleStyle: Int = 0
     var reviewBubbleAccent: Bool = false
     var reviewBubbleImageRevision: Int = 0
+    /// 长按正文：回传按住处的词语和所在段落，用于快速新建净化（替换）规则。
+    var onLongPressText: ((ReaderTextPick) -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -531,6 +533,27 @@ struct ReaderTextView: UIViewRepresentable {
             view.addGestureRecognizer(previous)
             nextSwipe = next
             previousSwipe = previous
+            let press = UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:)))
+            press.minimumPressDuration = 0.45
+            view.addGestureRecognizer(press)
+        }
+
+        private var lastLongPressTime: CFTimeInterval = 0
+
+        @objc private func longPressed(_ gesture: UILongPressGestureRecognizer) {
+            guard gesture.state == .began, let view = textView, let handler = parent.onLongPressText,
+                  view.textStorage.length > 0 else { return }
+            let point = gesture.location(in: view)
+            let location = CGPoint(x: point.x - view.textContainerInset.left, y: point.y - view.textContainerInset.top)
+            let manager = view.layoutManager
+            let glyph = manager.glyphIndex(for: location, in: view.textContainer)
+            let rect = manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: view.textContainer)
+            guard rect.insetBy(dx: -6, dy: -6).contains(location) else { return }
+            let character = manager.characterIndexForGlyph(at: glyph)
+            guard let pick = ReaderTextPick.make(text: view.textStorage.string, at: character) else { return }
+            lastLongPressTime = CACurrentMediaTime()
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            handler(pick)
         }
 
         func gestureRecognizer(
@@ -1070,6 +1093,8 @@ struct ReaderTextView: UIViewRepresentable {
 
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view = textView, gesture.state == .ended else { return }
+            // 长按刚弹出替换面板时，抬手不再当成点按（翻页/呼出菜单）。
+            if CACurrentMediaTime() - lastLongPressTime < 1.2 { return }
             let point = gesture.location(in: view)
             // UIScrollView changes its bounds origin as content scrolls, and
             // gesture locations use that content coordinate space. Convert
@@ -1284,4 +1309,45 @@ struct ReaderTextView: UIViewRepresentable {
             }
         }
     }
+}
+
+
+/// 长按选中的文字：按住处的词语，以及所在整段（已去掉段评/插图标记）。
+struct ReaderTextPick: Identifiable, Equatable {
+    let id = UUID()
+    var word: String
+    var paragraph: String
+
+    static func make(text: String, at index: Int) -> ReaderTextPick? {
+        let ns = text as NSString
+        guard index >= 0, index < ns.length else { return nil }
+        let paragraphRange = ns.paragraphRange(for: NSRange(location: index, length: 0))
+        let raw = ns.substring(with: paragraphRange)
+        let paragraph = stripMarkup(raw).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !paragraph.isEmpty else { return nil }
+        let unit = ns.substring(with: NSRange(location: index, length: 1))
+        guard !unit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        // 如果按在段评/插图标记上，只返回段落。
+        if let expression = ReaderInlineMarkup.tagExpression,
+           expression.matches(in: text, range: paragraphRange).contains(where: { NSLocationInRange(index, $0.range) }) {
+            return ReaderTextPick(word: "", paragraph: paragraph)
+        }
+        var word = unit
+        let tokenizer = CFStringTokenizerCreate(nil, ns as CFString, CFRange(location: paragraphRange.location, length: paragraphRange.length),
+                                                kCFStringTokenizerUnitWord, CFLocaleCreate(nil, "zh_Hans" as CFString))
+        if CFStringTokenizerGoToTokenAtIndex(tokenizer, index) != [] {
+            let range = CFStringTokenizerGetCurrentTokenRange(tokenizer)
+            if range.location != kCFNotFound, range.length > 0, range.length <= 40 {
+                word = ns.substring(with: NSRange(location: range.location, length: range.length))
+            }
+        }
+        return ReaderTextPick(word: word.trimmingCharacters(in: .whitespacesAndNewlines), paragraph: paragraph)
+    }
+
+    static func stripMarkup(_ value: String) -> String {
+        guard let expression = ReaderInlineMarkup.tagExpression, ReaderInlineMarkup.containsMarkup(value) else { return value }
+        return expression.stringByReplacingMatches(in: value, range: NSRange(location: 0, length: (value as NSString).length), withTemplate: "")
+    }
+
+    static func == (lhs: ReaderTextPick, rhs: ReaderTextPick) -> Bool { lhs.id == rhs.id }
 }

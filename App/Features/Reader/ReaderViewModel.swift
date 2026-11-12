@@ -368,6 +368,17 @@ final class ReaderViewModel: ObservableObject {
         prepareNeighborChapters()
     }
 
+    /// 净化规则变化后重新处理当前章节：优先用缓存正文，不强制联网。
+    func reapplyReplaceRules(_ rules: [ReplaceRule]) async {
+        guard !isLoading, currentChapter != nil else { return }
+        discardReadyChapters()
+        clearContinuousReading()
+        content = ""
+        paragraphs = []
+        diagnostics = []
+        await load(rules: rules, forceRefresh: false, prefetchNextChapter: true)
+    }
+
     /// Whether the chapter at `index` can be shown without waiting.
     func isChapterReady(_ index: Int) -> Bool {
         guard let ready = readyChapters[index], chapters.indices.contains(index) else { return false }

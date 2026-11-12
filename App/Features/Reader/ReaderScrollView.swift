@@ -73,6 +73,9 @@ struct ReaderScrollView: UIViewRepresentable {
             let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
             tap.delegate = self
             collection.addGestureRecognizer(tap)
+            let press = UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:)))
+            press.minimumPressDuration = 0.45
+            collection.addGestureRecognizer(press)
             collection.viewportChanged = { [weak self, weak collection] in
                 guard let self, let collection else { return }
                 self.update(collection)
@@ -322,6 +325,8 @@ struct ReaderScrollView: UIViewRepresentable {
 
         @objc private func tapped(_ gesture: UITapGestureRecognizer) {
             guard let view, !view.isDragging, !view.isDecelerating else { return }
+            // 长按刚弹出替换面板时，抬手不再当成点按（翻页/呼出菜单）。
+            if CACurrentMediaTime() - lastLongPressTime < 1.2 { return }
             let point = gesture.location(in: view)
             if let url = link(at: point, in: view), let open = parent.configuration.onOpenLink {
                 open(url)
@@ -339,6 +344,28 @@ struct ReaderScrollView: UIViewRepresentable {
             let actions = parent.configuration.clickActions
             let action = index == 4 ? 0 : (actions.indices.contains(index) ? actions[index] : 0)
             if action != 1, action != 2, action != -1 { parent.configuration.onTapAction(action) }
+        }
+
+        private var lastLongPressTime: CFTimeInterval = 0
+
+        @objc private func longPressed(_ gesture: UILongPressGestureRecognizer) {
+            guard gesture.state == .began, let view, let handler = parent.configuration.onLongPressText,
+                  let layout = view.collectionViewLayout as? ReaderContinuousLayout else { return }
+            let point = gesture.location(in: view)
+            guard let row = layout.row(at: point.y), blocks.indices.contains(row), layout.frames.indices.contains(row) else { return }
+            let block = blocks[row]
+            let frame = layout.frames[row]
+            let chapter = block.chapter
+            let location = CGPoint(x: point.x - frame.minX - chapter.left, y: point.y - frame.minY + block.top)
+            let glyph = chapter.manager.glyphIndex(for: location, in: chapter.container)
+            guard NSLocationInRange(glyph, block.glyphRange) else { return }
+            let rect = chapter.manager.boundingRect(forGlyphRange: NSRange(location: glyph, length: 1), in: chapter.container)
+            guard rect.insetBy(dx: -6, dy: -6).contains(location) else { return }
+            let character = chapter.manager.characterIndexForGlyph(at: glyph)
+            guard let pick = ReaderTextPick.make(text: chapter.storage.string, at: character) else { return }
+            lastLongPressTime = CACurrentMediaTime()
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            handler(pick)
         }
 
         /// 段评气泡 / 插图标记的点击目标。

@@ -31,6 +31,7 @@ struct ReaderView: View {
     @State private var tocDescending = false
     @State private var showsContentSearch = false
     @State private var showsReplaceRules = false
+    @State private var quickReplacePick: ReaderTextPick?
     @State private var showsReaderSettings = false
     @State private var showsClickActionSettings = false
     @State private var showsContentEditor = false
@@ -314,6 +315,15 @@ struct ReaderView: View {
         }
         .sheet(isPresented: $showsReplaceRules) {
             ReadingNavigationStack { ReplaceRuleManagementView() }
+        }
+        .sheet(item: $quickReplacePick) { pick in
+            ReaderQuickReplaceSheet(pick: pick, bookName: model.book.name, sourceURL: model.book.origin,
+                                    rulesDisabled: !model.usesReplaceRules,
+                                    makeRule: { replaceRules.newRule() }) { rule in
+                let saved = await replaceRules.save(rule)
+                if saved { await applyReplaceRulesInPlace() }
+                return saved ? nil : (replaceRules.notice?.detail ?? "保存失败")
+            }
         }
         .sheet(isPresented: $showsReaderSettings) { readerSettings }
         .sheet(isPresented: $showsClickActionSettings) { clickActionSettings }
@@ -665,7 +675,8 @@ struct ReaderView: View {
             showsReviewBubbles: showsReviewBubbles,
             reviewBubbleStyle: 0,
             reviewBubbleAccent: false,
-            reviewBubbleImageRevision: bubbleStyles.revision
+            reviewBubbleImageRevision: bubbleStyles.revision,
+            onLongPressText: { pick in quickReplacePick = pick }
         )
     }
 
@@ -1888,6 +1899,16 @@ struct ReaderView: View {
         }
     }
 
+    /// 新规则保存后就地重排当前章节：读缓存正文重新净化，不重新联网，尽量留在原位置。
+    private func applyReplaceRulesInPlace() async {
+        let position = readerPosition
+        await model.reapplyReplaceRules(replaceRules.rules)
+        readerPosition = min(position, max(model.content.utf16.count - 1, 0))
+        readerJumpPosition = readerPosition
+        readerPageRanges = []
+        readerRenderRevision &+= 1
+    }
+
     private func refreshCurrentChapter() {
         stopSpeechIfNeeded()
         Task {
@@ -2412,3 +2433,126 @@ private struct ReaderFailureTestLoader: ChapterContentLoading {
     }
 }
 #endif
+
+
+/// 长按正文弹出的快速替换：选好要替换的文字和替换成的内容，保存为净化规则并立即生效。
+private struct ReaderQuickReplaceSheet: View {
+    let pick: ReaderTextPick
+    let bookName: String
+    let sourceURL: String
+    let rulesDisabled: Bool
+    let makeRule: () -> ReplaceRule
+    let onSave: (ReplaceRule) async -> String?
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var pattern: String
+    @State private var replacement = ""
+    @State private var scope = 0
+    @State private var isRegex = false
+    @State private var saving = false
+    @State private var error: String?
+
+    init(pick: ReaderTextPick, bookName: String, sourceURL: String, rulesDisabled: Bool,
+         makeRule: @escaping () -> ReplaceRule, onSave: @escaping (ReplaceRule) async -> String?) {
+        self.pick = pick
+        self.bookName = bookName
+        self.sourceURL = sourceURL
+        self.rulesDisabled = rulesDisabled
+        self.makeRule = makeRule
+        self.onSave = onSave
+        _pattern = State(initialValue: pick.word)
+    }
+
+    private var trimmedPattern: String { pattern.trimmingCharacters(in: .newlines) }
+
+    private var matchCount: Int {
+        guard !trimmedPattern.isEmpty else { return 0 }
+        if isRegex {
+            guard let regex = try? NSRegularExpression(pattern: trimmedPattern) else { return 0 }
+            return regex.numberOfMatches(in: pick.paragraph, range: NSRange(location: 0, length: (pick.paragraph as NSString).length))
+        }
+        return pick.paragraph.components(separatedBy: trimmedPattern).count - 1
+    }
+
+    var body: some View {
+        ReadingNavigationStack {
+            Form {
+                Section {
+                    Text(pick.paragraph)
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .lineLimit(8)
+                } header: {
+                    Text("所在段落")
+                } footer: {
+                    Text("长按上面的段落可以拷贝更长的一段，再粘贴到「替换内容」。")
+                }
+                Section("替换") {
+                    ReadingTextField("要替换的文字", text: $pattern, axis: .vertical)
+                        .accessibilityIdentifier("quickReplace.pattern")
+                    ReadingTextField("替换为（留空则删除）", text: $replacement, axis: .vertical)
+                        .accessibilityIdentifier("quickReplace.replacement")
+                    Toggle("使用正则表达式", isOn: $isRegex)
+                    if !trimmedPattern.isEmpty {
+                        Text(isRegex && (try? NSRegularExpression(pattern: trimmedPattern)) == nil
+                             ? "正则表达式无效"
+                             : "本段匹配 \(matchCount) 处")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    Picker("作用范围", selection: $scope) {
+                        Text("仅本书").tag(0)
+                        Text("本书源").tag(1)
+                        Text("全部书籍").tag(2)
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("作用范围")
+                } footer: {
+                    Text(rulesDisabled
+                         ? "本书已关闭净化规则，规则会保存，但要在阅读菜单里打开「替换规则」后才生效。"
+                         : "保存后立即重排本章；之后可在「我的 → 净化规则」里修改或删除。")
+                }
+                if let error { Section { Text(error).foregroundStyle(.red) } }
+            }
+            .navigationTitle("替换文字")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
+                        .disabled(saving || trimmedPattern.isEmpty
+                                  || (isRegex && (try? NSRegularExpression(pattern: trimmedPattern)) == nil))
+                        .accessibilityIdentifier("quickReplace.save")
+                }
+            }
+        }
+        .readingPresentationDetents([.medium, .large])
+    }
+
+    private func save() {
+        var rule = makeRule()
+        let shown = trimmedPattern.count > 12 ? String(trimmedPattern.prefix(12)) + "…" : trimmedPattern
+        rule.name = replacement.isEmpty ? "删除「\(shown)」" : "「\(shown)」→「\(replacement.prefix(12))」"
+        rule.group = "阅读时添加"
+        rule.pattern = trimmedPattern
+        rule.replacement = replacement
+        rule.isRegex = isRegex
+        rule.scopeContent = true
+        rule.scopeTitle = false
+        rule.isEnabled = true
+        switch scope {
+        case 0: rule.scope = bookName.isEmpty ? nil : bookName
+        case 1: rule.scope = sourceURL.isEmpty ? nil : sourceURL
+        default: rule.scope = nil
+        }
+        saving = true
+        error = nil
+        Task {
+            let failure = await onSave(rule)
+            saving = false
+            if let failure { error = failure } else { dismiss() }
+        }
+    }
+}

@@ -204,7 +204,9 @@ private struct BookshelfView: View {
                             .padding(.bottom, 30)
                         }
                         bookshelfSummary
-                        if bookshelfLayout.hasPrefix("grid") {
+                        if bookshelfLayout == "shelf" {
+                            BookshelfShelfView(books: displayedBooks)
+                        } else if bookshelfLayout.hasPrefix("grid") {
                             LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 24) {
                                 ForEach(displayedBooks) { book in
                                     BookshelfBookLink(book: book, compact: false, grid: true)
@@ -283,11 +285,18 @@ private struct BookshelfView: View {
                 .accessibilityAddTraits(bookshelfLayout.hasPrefix("grid") ? .isSelected : [])
                 Button { bookshelfLayout = "list" } label: {
                     Image(systemName: "list.bullet")
-                        .foregroundStyle(bookshelfLayout.hasPrefix("grid") ? .secondary : ReadingTheme.accent)
+                        .foregroundStyle(isListLayout ? ReadingTheme.accent : .secondary)
                         .frame(width: 44, height: 44)
                 }
                 .accessibilityLabel("列表布局")
-                .accessibilityAddTraits(bookshelfLayout.hasPrefix("grid") ? [] : .isSelected)
+                .accessibilityAddTraits(isListLayout ? .isSelected : [])
+                Button { bookshelfLayout = "shelf" } label: {
+                    Image(systemName: "books.vertical.fill")
+                        .foregroundStyle(bookshelfLayout == "shelf" ? ReadingTheme.accent : .secondary)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("仿真书架")
+                .accessibilityAddTraits(bookshelfLayout == "shelf" ? .isSelected : [])
             }
             .font(.system(size: 18, weight: .medium))
             .buttonStyle(.plain)
@@ -312,6 +321,7 @@ private struct BookshelfView: View {
                     ForEach(2...6, id: \.self) { count in
                         layoutButton("\(count) 列宫格", value: "grid\(count)")
                     }
+                    layoutButton("仿真书架", value: "shelf")
                 }
                 NavigationLink {
                     FileManagementView()
@@ -348,6 +358,8 @@ private struct BookshelfView: View {
         }
     }
 
+    private var isListLayout: Bool { bookshelfLayout == "list" || bookshelfLayout == "compact" }
+
     private var gridColumns: [GridItem] {
         let count = Int(bookshelfLayout.dropFirst(4)) ?? 3
         let maximum = dynamicTypeSize.isAccessibilitySize ? 2 : 6
@@ -371,6 +383,7 @@ private struct BookshelfBookLink: View {
     let book: Book
     let compact: Bool
     let grid: Bool
+    var shelf: Bool = false
     @State private var showsGroupSelector = false
 
     private var source: BookSource? { sources.sources.first { $0.bookSourceUrl == book.origin } }
@@ -379,7 +392,8 @@ private struct BookshelfBookLink: View {
         NavigationLink {
             BookshelfBookDestination(book: book, source: source)
         } label: {
-            if grid { BookshelfGridItem(book: book) }
+            if shelf { BookshelfSpine(book: book) }
+            else if grid { BookshelfGridItem(book: book) }
             else { BookshelfRow(book: book, compact: compact) }
         }
         .buttonStyle(.plain)
@@ -2101,5 +2115,130 @@ private struct ReadingPreferencesView: View {
             ReadingLabeledContent(title, value: String(Int(value.wrappedValue)))
             Slider(value: value, in: 0...100, step: 1)
         }
+    }
+}
+
+
+/// 仿真书架：书脊竖排站在层板上，按屏幕宽度自动分层。
+private struct BookshelfShelfView: View {
+    let books: [Book]
+    @Environment(\.colorScheme) private var colorScheme
+    private let spineWidth: CGFloat = 44
+    private let spacing: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { geometry in
+            let perRow = max(1, Int((geometry.size.width + spacing) / (spineWidth + spacing)))
+            let rows = stride(from: 0, to: books.count, by: perRow).map { Array(books[$0..<min($0 + perRow, books.count)]) }
+            VStack(alignment: .leading, spacing: 28) {
+                ForEach(rows.indices, id: \.self) { index in
+                    VStack(spacing: 0) {
+                        HStack(alignment: .bottom, spacing: spacing) {
+                            ForEach(rows[index]) { book in
+                                BookshelfBookLink(book: book, compact: false, grid: false, shelf: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 6)
+                        shelfBoard
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(GeometryReader { inner in
+                Color.clear.preference(key: BookshelfShelfHeightKey.self, value: inner.size.height)
+            })
+        }
+        .frame(height: shelfHeight)
+        .onPreferenceChange(BookshelfShelfHeightKey.self) { measured = $0 }
+    }
+
+    @State private var measured: CGFloat = 0
+    private var shelfHeight: CGFloat {
+        if measured > 0 { return measured }
+        let perRow = max(1, Int((UIScreen.main.bounds.width - 48 + spacing) / (spineWidth + spacing)))
+        let rows = max(1, (books.count + perRow - 1) / perRow)
+        return CGFloat(rows) * (BookshelfSpine.maxHeight + 16) + CGFloat(rows - 1) * 28
+    }
+
+    private var shelfBoard: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(colorScheme == .dark ? Color(white: 0.32) : Color(white: 0.86))
+                .frame(height: 3)
+            Rectangle()
+                .fill(LinearGradient(colors: [colorScheme == .dark ? Color(white: 0.22) : Color(white: 0.96),
+                                              colorScheme == .dark ? Color(white: 0.16) : Color(white: 0.90)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(height: 13)
+        }
+        .shadow(color: .black.opacity(colorScheme == .dark ? 0.4 : 0.12), radius: 6, y: 5)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct BookshelfShelfHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+/// 一本书的书脊：颜色和高度按书名固定生成，书名竖排。
+private struct BookshelfSpine: View {
+    let book: Book
+    static let maxHeight: CGFloat = 230
+
+    private static let palette: [(Double, Double, Double)] = [
+        (0.27, 0.19, 0.12), (0.15, 0.20, 0.24), (0.33, 0.24, 0.14), (0.42, 0.18, 0.16),
+        (0.18, 0.28, 0.22), (0.23, 0.22, 0.32), (0.45, 0.36, 0.22), (0.12, 0.12, 0.14)
+    ]
+
+    private var seed: Int {
+        book.name.unicodeScalars.reduce(7) { ($0 &* 31 &+ Int($1.value)) & 0x7FFF_FFFF }
+    }
+
+    private var height: CGFloat { Self.maxHeight - CGFloat(seed % 4) * 9 }
+
+    private var color: Color {
+        let c = Self.palette[seed % Self.palette.count]
+        return Color(red: c.0, green: c.1, blue: c.2)
+    }
+
+    private var verticalTitle: String {
+        let name = book.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chars = Array(name.isEmpty ? "未命名" : name).filter { !$0.isWhitespace }
+        let limit = 9
+        let shown = chars.count > limit ? Array(chars.prefix(limit - 1)) + ["…"] : chars
+        return shown.map(String.init).joined(separator: "\n")
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                .fill(LinearGradient(colors: [color.opacity(0.82), color, color.opacity(0.88)],
+                                     startPoint: .leading, endPoint: .trailing))
+            VStack(spacing: 0) {
+                Rectangle().fill(Color.white.opacity(0.18)).frame(height: 1).padding(.top, 14)
+                Text(verticalTitle)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Color.white.opacity(0.92))
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(1)
+                    .minimumScaleFactor(0.6)
+                    .padding(.top, 14)
+                    .padding(.horizontal, 4)
+                Spacer(minLength: 6)
+                Rectangle().fill(Color.white.opacity(0.18)).frame(height: 1).padding(.bottom, 14)
+            }
+        }
+        .frame(width: 44, height: height)
+        .shadow(color: .black.opacity(0.18), radius: 2, x: 1, y: 1)
+        .overlay(alignment: .topTrailing) {
+            if book.lastCheckCount > 0 {
+                Circle().fill(ReadingTheme.coral).frame(width: 7, height: 7).offset(x: 2, y: -2)
+            }
+        }
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(book.name)
     }
 }

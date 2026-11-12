@@ -15,6 +15,7 @@ final class ExploreSourceViewModel: ObservableObject {
     private let service: BookExploreService
     private var page = 1
     private var canLoadMore = false
+    private var stalePages = 0
     private var paginationTask: Task<Void, Never>?
 
     init(source: BookSource, service: BookExploreService = .init()) {
@@ -70,9 +71,29 @@ final class ExploreSourceViewModel: ObservableObject {
         let outcome = await service.explore(source: source, kind: kind, page: page)
         guard !Task.isCancelled, selectedKind?.id == kind.id else { return }
         diagnostics = outcome.diagnostics
-        books = outcome.books
-        canLoadMore = !outcome.books.isEmpty
+        books = Self.newBooks(outcome.books, excluding: [])
+        stalePages = 0
+        canLoadMore = !books.isEmpty
         state = books.isEmpty ? (outcome.diagnostics.isEmpty ? .empty : .failed) : .ready
+    }
+
+    /// 本页中真正的新书：链接、或书名+作者已出现过的都算重复。
+    static func newBooks(_ incoming: [SearchBook], excluding existing: [SearchBook]) -> [SearchBook] {
+        var urls = Set(existing.map(\.bookURL))
+        var keys = Set(existing.map(identityKey))
+        var result: [SearchBook] = []
+        for book in incoming {
+            guard urls.insert(book.bookURL).inserted else { continue }
+            guard keys.insert(identityKey(book)).inserted else { continue }
+            result.append(book)
+        }
+        return result
+    }
+
+    private static func identityKey(_ book: SearchBook) -> String {
+        let name = book.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let author = book.author.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(name)\u{1F}\(author)"
     }
 
     func loadNextPageIfNeeded(current book: SearchBook) {
@@ -95,11 +116,15 @@ final class ExploreSourceViewModel: ObservableObject {
                 isLoadingMore = false
                 return
             }
-            let knownURLs = Set(books.map(\.bookURL))
-            books.append(contentsOf: outcome.books.filter { !knownURLs.contains($0.bookURL) })
+            // 有的书源到最后一页后仍返回同一批书（或换了链接参数的同一批书），
+            // 只按链接去重会一直翻页、列表不停重复。按链接 + 书名作者去重，
+            // 连续两页没有新书就认为到底了。
+            let added = Self.newBooks(outcome.books, excluding: books)
+            books.append(contentsOf: added)
             diagnostics += outcome.diagnostics
             page = nextPage
-            canLoadMore = !outcome.books.isEmpty
+            stalePages = added.isEmpty ? stalePages + 1 : 0
+            canLoadMore = !outcome.books.isEmpty && stalePages < 2 && nextPage < 500
             isLoadingMore = false
         }
     }
