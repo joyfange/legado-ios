@@ -312,6 +312,7 @@ private struct BookshelfView: View {
         .sheet(isPresented: $showsGroupManager) {
             BookshelfManagerSheet()
                 .environmentObject(library)
+                .readingPresentationDetents([.medium, .large])
         }
         .alert("本地书导入失败", isPresented: Binding(
             get: { library.errorMessage != nil },
@@ -484,7 +485,6 @@ private struct BookshelfView: View {
                 }
                 Button("本地书", systemImage: "plus") { showsLocalImporter = true }
                 Button("管理书架", systemImage: "rectangle.3.group") { showsGroupManager = true }
-                Button("书架设置", systemImage: "slider.horizontal.3") { showsShelfSettings = true }
                 if bookshelfLayout == "shelf" {
                     Button { showsOrnamentManager = true } label: {
                         Label("书架摆件", systemImage: "leaf")
@@ -813,7 +813,6 @@ private struct BookshelfManagerSheet: View {
     @State private var dialogError: String?
     @State private var deleting = false
     @State private var marked = Set<Int64>()
-    @State private var showsSettings = false
     @State private var confirmsDelete = false
 
     private var orderedGroups: [BookGroup] {
@@ -869,9 +868,6 @@ private struct BookshelfManagerSheet: View {
         .animation(.easeOut(duration: 0.2), value: deleting)
         .animation(.easeOut(duration: 0.2), value: showsCreate)
         .animation(.easeOut(duration: 0.2), value: editingGroup?.groupId)
-        .sheet(isPresented: $showsSettings) {
-            BookshelfShelfSettingsSheet()
-        }
         .alert("删除书架", isPresented: $confirmsDelete) {
             Button("取消", role: .cancel) {}
             Button("删除", role: .destructive) {
@@ -899,12 +895,6 @@ private struct BookshelfManagerSheet: View {
                 .font(.title3.bold())
                 .accessibilityAddTraits(.isHeader)
             Spacer()
-            Button { showsSettings = true } label: {
-                Image(systemName: "gearshape")
-                    .font(.system(size: 17))
-                    .frame(width: 40, height: 40)
-            }
-            .accessibilityLabel("书架设置")
             Button {
                 draft = ""
                 dialogError = nil
@@ -1359,6 +1349,7 @@ struct SearchView: View {
     @State private var selectedSourceID: String?
     @State private var didStartInitialSearch = false
     @State private var searchIsPresented = false
+    @State private var didAutoFocus = false
     @AppStorage("precisionSearch") private var precisionSearch = false
 
     init(fixedSource: BookSource? = nil, initialKeyword: String = "") {
@@ -1390,7 +1381,7 @@ struct SearchView: View {
         }
         .background(ReadingTheme.canvas)
         .navigationTitle("搜索")
-        .readingSearchable(text: $keyword, isPresented: $searchIsPresented, prompt: "书名或作者")
+        .readingSearchable(text: $keyword, isPresented: $searchIsPresented, prompt: "书名或作者", alwaysVisible: true)
         .readingScrollDismissesKeyboard()
         .onSubmit(of: [.text, .search]) { startSearch() }
         .onDisappear {
@@ -1411,6 +1402,13 @@ struct SearchView: View {
         .task {
             await model.loadSearchKeywords()
             if initialKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // 只在首次进入时自动聚焦，并等推入动画结束后再激活，
+                // 避免搜索栏在转场中途收起导航栏造成“卡一下”的跳动；
+                // 从书籍详情返回时不再重复弹出键盘。
+                guard !didAutoFocus else { return }
+                didAutoFocus = true
+                try? await Task.sleep(nanoseconds: 450_000_000)
+                guard !Task.isCancelled, model.state == .idle else { return }
                 searchIsPresented = true
             } else if !library.sources.isEmpty, !didStartInitialSearch {
                 didStartInitialSearch = true
@@ -3076,6 +3074,9 @@ private struct BookshelfFolderBox: View {
     static let bottomLabel: CGFloat = 15
     static let side: CGFloat = 5
     static let maxShown = 6
+    /// 旋转按钮的点击区域（位于外框右上角之内）。
+    static let rotateHitWidth: CGFloat = 26
+    static let rotateHitHeight: CGFloat = 30
 
     static func innerScale(_ style: BookshelfShelfStyle) -> CGFloat {
         max((style.bookHeight - topLabel - bottomLabel - 4) / style.bookHeight, 0.3)
@@ -3122,8 +3123,8 @@ private struct BookshelfFolderBox: View {
                 .foregroundStyle(colors.label)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-                .frame(width: size.width - 22, height: Self.topLabel)
-                .offset(x: 6)
+                .frame(width: max(size.width - 32, 12), height: Self.topLabel)
+                .offset(x: 5)
             // 窗口：里面立着文件夹里的书
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(colors.window)
@@ -3152,19 +3153,24 @@ private struct BookshelfFolderBox: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .overlay(alignment: .topTrailing) {
-            Button(action: onRotate) {
-                Image(systemName: "arrow.triangle.2.circlepath")
-                    .font(.system(size: 6.5, weight: .bold))
-                    .foregroundStyle(colors.label)
-                    .frame(width: 13, height: 13)
-                    .background(Color.black.opacity(0.35), in: Circle())
-                    .opacity(style.hideRotateButtons ? 0.011 : 1)
-                    .frame(width: 26, height: 26)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .offset(x: 9, y: -9)
-            .accessibilityLabel("修改文件夹摆放形态与样式")
+            // 旋转按钮整块放在文件夹外框之内：之前按钮向外偏移，超出外框的部分
+            // 会被外框的点击形状裁掉、被相邻的书盖住，导致大多数时候点不中。
+            Image(systemName: "arrow.triangle.2.circlepath")
+                .font(.system(size: 7.5, weight: .bold))
+                .foregroundStyle(colors.label)
+                .frame(width: 15, height: 15)
+                .background(Color.black.opacity(0.4), in: Circle())
+                .overlay(Circle().strokeBorder(colors.label.opacity(0.35), lineWidth: 0.5))
+                .opacity(style.hideRotateButtons ? 0.011 : 1)
+                .padding(.top, 2)
+                .padding(.trailing, 2)
+                .frame(width: Self.rotateHitWidth, height: Self.rotateHitHeight, alignment: .topTrailing)
+                .contentShape(Rectangle())
+                .highPriorityGesture(TapGesture().onEnded { onRotate() })
+                .accessibilityElement()
+                .accessibilityLabel("修改文件夹摆放形态与样式")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { onRotate() }
         }
         .shadow(color: .black.opacity(0.22), radius: 2, x: 1, y: 1)
         .contentShape(Rectangle())

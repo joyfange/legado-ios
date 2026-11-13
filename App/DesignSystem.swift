@@ -100,8 +100,8 @@ extension View {
         }
     }
 
-    func readingSearchable(text: Binding<String>, isPresented: Binding<Bool>, prompt: String) -> some View {
-        modifier(ReadingSearchModifier(text: text, isPresented: isPresented, prompt: prompt))
+    func readingSearchable(text: Binding<String>, isPresented: Binding<Bool>, prompt: String, alwaysVisible: Bool = false) -> some View {
+        modifier(ReadingSearchModifier(text: text, isPresented: isPresented, prompt: prompt, alwaysVisible: alwaysVisible))
     }
 
     @ViewBuilder
@@ -118,11 +118,21 @@ private struct ReadingSearchModifier: ViewModifier {
     @Binding var text: String
     @Binding var isPresented: Bool
     let prompt: String
+    var alwaysVisible: Bool = false
     @FocusState private var isFocused: Bool
 
     func body(content: Content) -> some View {
         if #available(iOS 17.0, *), !ReadingCompatibility.usesLegacyUI {
-            content.searchable(text: $text, isPresented: $isPresented, prompt: prompt)
+            if alwaysVisible {
+                content.searchable(
+                    text: $text,
+                    isPresented: $isPresented,
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: prompt
+                )
+            } else {
+                content.searchable(text: $text, isPresented: $isPresented, prompt: prompt)
+            }
         } else {
             content
                 .safeAreaInset(edge: .top, spacing: 0) {
