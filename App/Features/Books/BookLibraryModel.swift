@@ -342,6 +342,16 @@ final class BookLibraryModel: ObservableObject {
         await persistGroups(updated)
     }
 
+    /// 按给定顺序重排全部书架（含系统书架）。
+    func reorderGroups(_ ids: [Int64]) async {
+        var updated = groups
+        for (order, id) in ids.enumerated() {
+            if let index = updated.firstIndex(where: { $0.groupId == id }) { updated[index].order = order }
+        }
+        guard updated != groups else { return }
+        _ = await persistGroups(updated)
+    }
+
     func deleteGroup(_ group: BookGroup) async {
         guard group.groupId > 0, !deletingGroupIDs.contains(group.id),
               let stored = groups.first(where: { $0.id == group.id }) else { return }

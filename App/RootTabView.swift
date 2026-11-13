@@ -152,6 +152,7 @@ private struct BookshelfView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var library: BookLibraryModel
     @EnvironmentObject private var sources: SourceLibraryModel
+    @ObservedObject private var folderStore = BookshelfFolderStore.shared
     @State private var showsLocalImporter = false
     @State private var pendingLocalFiles: [LocalBookImportFile] = []
     @State private var selectedGroupID = BookGroup.idAll
@@ -159,7 +160,12 @@ private struct BookshelfView: View {
     @State private var showsOrnamentManager = false
     @State private var showsShelfSettings = false
     @AppStorage("bookshelfLayout") private var bookshelfLayout = "grid3"
+    @AppStorage(BookshelfShelfSettings.sideSwitcherKey) private var sideSwitcher = true
+    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
+    @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
     @State private var shelfDestination: BookshelfShelfDestination?
+
+    private static let gridSpacing: CGFloat = 16
 
     private var selectedGroup: BookGroup {
         library.visibleGroups.first(where: { $0.id == selectedGroupID })
@@ -174,6 +180,11 @@ private struct BookshelfView: View {
             .sorted { $0.durChapterTime > $1.durChapterTime }
             .first
     }
+
+    private var showsSideSwitcher: Bool { sideSwitcher && library.visibleGroups.count > 1 }
+
+    /// 书架内容宽度：左右各留 24pt 边距。
+    private var contentWidth: CGFloat { max(UIScreen.main.bounds.width - 48, 120) }
 
     var body: some View {
         ScrollView {
@@ -223,23 +234,13 @@ private struct BookshelfView: View {
                         }
                         bookshelfSummary
                         if bookshelfLayout == "shelf" {
-                            BookshelfShelfView(books: displayedBooks, showsFolders: selectedGroup.groupId <= 0) {
+                            BookshelfShelfView(books: displayedBooks, groupID: selectedGroup.groupId) {
                                 shelfDestination = $0
                             }
                         } else if bookshelfLayout.hasPrefix("grid") {
-                            LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 24) {
-                                ForEach(displayedBooks) { book in
-                                    BookshelfBookLink(book: book, compact: false, grid: true)
-                                }
-                            }
+                            gridSection
                         } else {
-                            ForEach(displayedBooks) { book in
-                                BookshelfBookLink(book: book, compact: bookshelfLayout == "compact", grid: false)
-                                if book.id != displayedBooks.last?.id {
-                                    Rectangle().fill(ReadingTheme.separator).frame(height: 0.5)
-                                        .padding(.leading, bookshelfLayout == "compact" ? 54 : 66)
-                                }
-                            }
+                            listSection
                         }
                     }
                 }
@@ -248,8 +249,24 @@ private struct BookshelfView: View {
             }
         }
         .background(ReadingTheme.canvas)
+        .overlay(alignment: .trailing) {
+            if showsSideSwitcher {
+                sideSwitcherBar
+                    .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: showsSideSwitcher)
         .navigationBarHidden(true)
-        .onReceive(library.$books) { ReadRecordCoverStore.remember($0) }
+        .onReceive(library.$books) { books in
+            ReadRecordCoverStore.remember(books)
+            if library.hasLoaded {
+                folderStore.prune(existing: Set(books.map(\.bookUrl)))
+            }
+        }
+        .onAppear { Task { await migrateLegacyFolders() } }
+        .onChange(of: library.hasLoaded) { loaded in
+            if loaded { Task { await migrateLegacyFolders() } }
+        }
         .readingNavigationDestination(isPresented: Binding(
             get: { shelfDestination != nil },
             set: { if !$0 { shelfDestination = nil } }
@@ -293,7 +310,7 @@ private struct BookshelfView: View {
             shelfDestination = request
         }
         .sheet(isPresented: $showsGroupManager) {
-            BookGroupManagerView()
+            BookshelfManagerSheet()
                 .environmentObject(library)
         }
         .alert("本地书导入失败", isPresented: Binding(
@@ -324,33 +341,136 @@ private struct BookshelfView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            HStack(spacing: 0) {
-                Button { bookshelfLayout = "grid3" } label: {
-                    Image(systemName: "square.grid.2x2.fill")
-                        .foregroundStyle(bookshelfLayout.hasPrefix("grid") ? ReadingTheme.accent : .secondary)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("网格布局")
-                .accessibilityAddTraits(bookshelfLayout.hasPrefix("grid") ? .isSelected : [])
-                Button { bookshelfLayout = "list" } label: {
-                    Image(systemName: "list.bullet")
-                        .foregroundStyle(isListLayout ? ReadingTheme.accent : .secondary)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("列表布局")
-                .accessibilityAddTraits(isListLayout ? .isSelected : [])
-                Button { bookshelfLayout = "shelf" } label: {
-                    Image(systemName: "books.vertical.fill")
-                        .foregroundStyle(bookshelfLayout == "shelf" ? ReadingTheme.accent : .secondary)
-                        .frame(width: 44, height: 44)
-                }
-                .accessibilityLabel("仿真书架")
-                .accessibilityAddTraits(bookshelfLayout == "shelf" ? .isSelected : [])
-            }
-            .font(.system(size: 18, weight: .medium))
-            .buttonStyle(.plain)
         }
         .padding(.bottom, 20)
+    }
+
+    // MARK: 网格
+
+    private var gridColumnCount: Int {
+        if dynamicTypeSize.isAccessibilitySize { return 2 }
+        let minimum = BookshelfShelfSettings.gridCount(bookshelfLayout)
+        // 宽屏自动加列：每列至少约 110pt。
+        let fit = Int((contentWidth + Self.gridSpacing) / (110 + Self.gridSpacing))
+        return max(minimum, fit)
+    }
+
+    private var gridSection: some View {
+        let entries = folderStore.entries(for: displayedBooks, groupID: selectedGroup.groupId)
+        let columns = gridColumnCount
+        let inset: CGFloat = hideShelfBase ? 0 : 6
+        let cellWidth = ((contentWidth - inset * 2 - CGFloat(columns - 1) * Self.gridSpacing) / CGFloat(columns)).rounded(.down)
+        let rows = stride(from: 0, to: entries.count, by: columns).map { Array(entries[$0..<min($0 + columns, entries.count)]) }
+        let solid = boardStyle == "solid"
+        return VStack(alignment: .leading, spacing: hideShelfBase ? 22 : 26) {
+            ForEach(rows.indices, id: \.self) { index in
+                VStack(spacing: 0) {
+                    HStack(alignment: .bottom, spacing: Self.gridSpacing) {
+                        ForEach(rows[index]) { entry in
+                            gridCell(entry, width: cellWidth)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, inset)
+                    if !hideShelfBase {
+                        BookshelfBoard(width: contentWidth, height: solid ? 12 : 5, solid: solid)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func gridCell(_ entry: BookshelfEntry, width: CGFloat) -> some View {
+        switch entry {
+        case .book(let book):
+            BookshelfBookLink(book: book, mode: .grid(width), groupID: selectedGroup.groupId)
+        case .folder(let folder, let inside):
+            Button {
+                openFolder(folder)
+            } label: {
+                BookshelfFolderGridTile(folder: folder, books: inside, width: width)
+            }
+            .buttonStyle(.plain)
+            .modifier(BookshelfDropModifier(targetURL: nil, folderID: folder.id, groupID: selectedGroup.groupId))
+            .accessibilityLabel("文件夹「\(folder.name)」，\(inside.count) 本书")
+            .accessibilityHint("轻点打开")
+        }
+    }
+
+    // MARK: 列表
+
+    private var listSection: some View {
+        let entries = folderStore.entries(for: displayedBooks, groupID: selectedGroup.groupId)
+        let compact = bookshelfLayout == "compact"
+        let solid = boardStyle == "solid"
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(entries) { entry in
+                switch entry {
+                case .book(let book):
+                    BookshelfBookLink(book: book, mode: compact ? .compact : .list, groupID: selectedGroup.groupId)
+                case .folder(let folder, let inside):
+                    Button {
+                        openFolder(folder)
+                    } label: {
+                        BookshelfFolderRow(folder: folder, books: inside, compact: compact)
+                    }
+                    .buttonStyle(.plain)
+                    .modifier(BookshelfDropModifier(targetURL: nil, folderID: folder.id, groupID: selectedGroup.groupId))
+                }
+                if solid {
+                    BookshelfBoard(width: contentWidth, height: 7, solid: true)
+                        .padding(.bottom, 6)
+                } else if entry.id != entries.last?.id {
+                    Rectangle().fill(ReadingTheme.separator).frame(height: 0.5)
+                        .padding(.leading, compact ? 54 : 66)
+                }
+            }
+        }
+    }
+
+    private func openFolder(_ folder: BookshelfFolder) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+            folderStore.presentedFolderID = folder.id
+        }
+    }
+
+    // MARK: 右侧切换条
+
+    private var sideSwitcherBar: some View {
+        VStack(spacing: 2) {
+            ForEach(library.visibleGroups) { group in
+                let isSelected = selectedGroup.id == group.id
+                Button {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    withAnimation(.easeOut(duration: 0.2)) { selectedGroupID = group.id }
+                } label: {
+                    Text(Self.verticalLabel(group.groupName))
+                        .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(0)
+                        .foregroundStyle(isSelected ? ReadingTheme.onAccent : Color.secondary)
+                        .frame(width: 20)
+                        .padding(.vertical, 6)
+                        .background(isSelected ? ReadingTheme.accentFill : Color.clear, in: Capsule())
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(group.groupName)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.08), radius: 4, x: -1, y: 1)
+        .padding(.trailing, 2)
+    }
+
+    private static func verticalLabel(_ name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.prefix(4).map(String.init).joined(separator: "\n")
     }
 
     @ViewBuilder
@@ -363,16 +483,8 @@ private struct BookshelfView: View {
                     Task { await library.checkForUpdates(sources: sources.sources) }
                 }
                 Button("本地书", systemImage: "plus") { showsLocalImporter = true }
-                Button("书架分组", systemImage: "rectangle.3.group") { showsGroupManager = true }
+                Button("管理书架", systemImage: "rectangle.3.group") { showsGroupManager = true }
                 Button("书架设置", systemImage: "slider.horizontal.3") { showsShelfSettings = true }
-                Menu("书架布局", systemImage: "square.grid.2x2") {
-                    layoutButton("列表", value: "list")
-                    layoutButton("紧凑列表", value: "compact")
-                    ForEach(2...6, id: \.self) { count in
-                        layoutButton("\(count) 列宫格", value: "grid\(count)")
-                    }
-                    layoutButton("仿真书架", value: "shelf")
-                }
                 if bookshelfLayout == "shelf" {
                     Button { showsOrnamentManager = true } label: {
                         Label("书架摆件", systemImage: "leaf")
@@ -395,16 +507,23 @@ private struct BookshelfView: View {
             HStack(spacing: 24) {
                 ForEach(library.visibleGroups) { group in
                     Button(group.groupName) { selectedGroupID = group.id }
-                        .font(.subheadline.weight(selectedGroupID == group.id ? .semibold : .regular))
-                        .foregroundStyle(selectedGroupID == group.id ? Color.primary : .secondary)
+                        .font(.subheadline.weight(selectedGroup.id == group.id ? .semibold : .regular))
+                        .foregroundStyle(selectedGroup.id == group.id ? Color.primary : .secondary)
                         .frame(minHeight: 44)
                         .overlay(alignment: .bottom) {
-                            if selectedGroupID == group.id {
+                            if selectedGroup.id == group.id {
                                 Rectangle().fill(ReadingTheme.accent).frame(height: 2)
                             }
                         }
-                        .accessibilityAddTraits(selectedGroupID == group.id ? .isSelected : [])
+                        .accessibilityAddTraits(selectedGroup.id == group.id ? .isSelected : [])
                 }
+                Button { showsGroupManager = true } label: {
+                    Image(systemName: "slider.horizontal.below.rectangle")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 32, minHeight: 44)
+                }
+                .accessibilityLabel("管理书架")
             }
             .padding(.horizontal, 24)
         }
@@ -413,31 +532,39 @@ private struct BookshelfView: View {
         }
     }
 
-    private var isListLayout: Bool { bookshelfLayout == "list" || bookshelfLayout == "compact" }
-
-    private var gridColumns: [GridItem] {
-        let count = Int(bookshelfLayout.dropFirst(4)) ?? 3
-        let maximum = dynamicTypeSize.isAccessibilitySize ? 2 : 6
-        return Array(repeating: GridItem(.flexible(), spacing: 16, alignment: .top), count: max(2, min(count, maximum)))
-    }
-
-    @ViewBuilder
-    private func layoutButton(_ title: String, value: String) -> some View {
-        Button {
-            bookshelfLayout = value
-        } label: {
-            if bookshelfLayout == value { Label(title, systemImage: "checkmark") }
-            else { Text(title) }
+    /// 上一版把文件夹存成书架分组：改成「全部」书架里的文件夹，并删掉那些分组。
+    @MainActor
+    private func migrateLegacyFolders() async {
+        let ids = folderStore.legacyGroupIDs
+        guard library.hasLoaded, !ids.isEmpty else { return }
+        let styles = Dictionary(ids.map { ($0, folderStore.legacyStyle(for: $0)) }, uniquingKeysWith: { first, _ in first })
+        folderStore.clearLegacy()
+        for id in ids {
+            guard let group = library.groups.first(where: { $0.groupId == id }) else { continue }
+            let urls = library.books.filter { ($0.group & id) != 0 }.map(\.bookUrl)
+            if !urls.isEmpty {
+                folderStore.makeFolder(groupID: BookGroup.idAll, bookURLs: urls, name: group.groupName,
+                                       style: styles[id] ?? 0)
+            }
+            await library.deleteGroup(group)
         }
     }
+}
+
+/// 一本书在网格、列表、紧凑列表里的入口。
+private enum BookshelfLinkMode {
+    case grid(CGFloat)
+    case list
+    case compact
 }
 
 private struct BookshelfBookLink: View {
     @EnvironmentObject private var library: BookLibraryModel
     @EnvironmentObject private var sources: SourceLibraryModel
+    @ObservedObject private var folderStore = BookshelfFolderStore.shared
     let book: Book
-    let compact: Bool
-    let grid: Bool
+    let mode: BookshelfLinkMode
+    let groupID: Int64
     @State private var showsGroupSelector = false
 
     private var source: BookSource? { sources.sources.first { $0.bookSourceUrl == book.origin } }
@@ -446,10 +573,15 @@ private struct BookshelfBookLink: View {
         NavigationLink {
             BookshelfBookDestination(book: book, source: source)
         } label: {
-            if grid { BookshelfGridItem(book: book) }
-            else { BookshelfRow(book: book, compact: compact) }
+            switch mode {
+            case .grid(let width): BookshelfGridItem(book: book, width: width)
+            case .list: BookshelfRow(book: book, compact: false)
+            case .compact: BookshelfRow(book: book, compact: true)
+            }
         }
         .buttonStyle(.plain)
+        .onDrag { NSItemProvider(object: book.bookUrl as NSString) }
+        .modifier(BookshelfDropModifier(targetURL: book.bookUrl, folderID: nil, groupID: groupID))
         .contextMenu {
             NavigationLink {
                 if let source { BookDetailView(book: book, source: source) }
@@ -457,9 +589,23 @@ private struct BookshelfBookLink: View {
             } label: {
                 Label("书籍信息", systemImage: "info.circle")
             }
-            Button("移至分组", systemImage: "rectangle.3.group") { showsGroupSelector = true }
+            Button("移至书架", systemImage: "rectangle.3.group") { showsGroupSelector = true }
+            let folders = folderStore.folders(inGroup: groupID)
+            if !folders.isEmpty {
+                Menu {
+                    ForEach(folders) { folder in
+                        Button(folder.name) {
+                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                                folderStore.add(book.bookUrl, to: folder.id)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("放入文件夹", systemImage: "folder")
+                }
+            }
             Button("移出书架", systemImage: "trash", role: .destructive) {
-                Task { await library.remove(bookURL: book.bookUrl) }
+                Task { await BookshelfRemoval.remove(book, library: library) }
             }
         }
         .sheet(isPresented: $showsGroupSelector) {
@@ -468,69 +614,136 @@ private struct BookshelfBookLink: View {
     }
 }
 
+/// 网格封面：书名和作者压在封面底部的遮罩上，阅读进度是封面底边的一条细线。
 private struct BookshelfGridItem: View {
     let book: Book
+    let width: CGFloat
     @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
-    @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            GeometryReader { geometry in
-                BookCoverArtwork(
-                    title: book.name,
-                    author: book.author,
-                    remoteURL: book.coverUrl,
-                    width: geometry.size.width,
-                    height: geometry.size.height
-                )
-                .overlay(alignment: .leading) {
-                    if coverStyle == "solid" {
-                        // 实体封面：左侧书脊的凹槽与高光。
-                        HStack(spacing: 0) {
-                            LinearGradient(stops: [
-                                .init(color: .black.opacity(0.30), location: 0),
-                                .init(color: .white.opacity(0.22), location: 0.35),
-                                .init(color: .black.opacity(0.25), location: 0.7),
-                                .init(color: .white.opacity(0.10), location: 1)
-                            ], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: max(geometry.size.width * 0.075, 5))
-                            LinearGradient(colors: [.black.opacity(0.12), .clear], startPoint: .leading, endPoint: .trailing)
-                                .frame(width: max(geometry.size.width * 0.06, 4))
+        let height = (width / 0.7).rounded()
+        let progress = BookReadingPresentation.progress(book)
+        BookshelfCover(book: book, width: width, height: height)
+            .overlay(alignment: .bottom) {
+                ZStack(alignment: .bottomLeading) {
+                    if !hideTitles {
+                        LinearGradient(stops: [
+                            .init(color: .clear, location: 0),
+                            .init(color: .black.opacity(0.45), location: 0.45),
+                            .init(color: .black.opacity(0.78), location: 1)
+                        ], startPoint: .top, endPoint: .bottom)
+                        .frame(height: height * 0.5)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(book.name)
+                                .font(.system(size: width < 90 ? 11 : 12.5, weight: .semibold))
+                                .foregroundStyle(Color.white)
+                                .lineLimit(2)
+                            Text(book.author.isEmpty ? "未知作者" : book.author)
+                                .font(.system(size: width < 90 ? 9 : 10))
+                                .foregroundStyle(Color.white.opacity(0.78))
+                                .lineLimit(1)
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        .allowsHitTesting(false)
+                        .shadow(color: .black.opacity(0.35), radius: 1)
+                        .padding(.horizontal, 7)
+                        .padding(.bottom, progress > 0 ? 9 : 7)
+                    }
+                    if progress > 0 {
+                        GeometryReader { proxy in
+                            ZStack(alignment: .leading) {
+                                Rectangle().fill(Color.white.opacity(0.25))
+                                Rectangle().fill(ReadingTheme.accent)
+                                    .frame(width: proxy.size.width * min(max(progress, 0), 1))
+                            }
+                        }
+                        .frame(height: 2.5)
                     }
                 }
-                .shadow(color: .black.opacity(coverStyle == "solid" ? 0.22 : 0), radius: 3, x: 2, y: 3)
+                .frame(width: width)
+                .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .allowsHitTesting(false)
             }
-            .aspectRatio(0.70, contentMode: .fit)
-            .frame(maxWidth: 180)
-            .frame(maxWidth: .infinity)
             .overlay(alignment: .topTrailing) {
                 if book.lastCheckCount > 0 {
-                    Circle()
-                        .fill(ReadingTheme.coral)
-                        .frame(width: 7, height: 7)
-                        .overlay { Circle().stroke(ReadingTheme.canvas, lineWidth: 2) }
-                        .offset(x: 3, y: -3)
+                    Text("+\(book.lastCheckCount)")
+                        .font(.system(size: 9, weight: .bold).monospacedDigit())
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 5)
+                        .frame(height: 15)
+                        .background(ReadingTheme.coral, in: Capsule())
+                        .offset(x: 4, y: -5)
                         .accessibilityLabel("更新 \(book.lastCheckCount) 章")
                 }
             }
-            if !hideTitles {
-                Text(book.name)
-                    .font(.caption.weight(.semibold))
-                    .lineLimit(2)
-                    .padding(.top, 10)
-                Text(book.author.isEmpty ? "未知作者" : book.author)
-                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                    .padding(.top, 3)
+            .frame(width: width, height: height)
+            .contentShape(Rectangle())
+    }
+}
+
+/// 网格里的文件夹：前四本书的封面拼成一格，底部写文件夹名与本数。
+private struct BookshelfFolderGridTile: View {
+    let folder: BookshelfFolder
+    let books: [Book]
+    let width: CGFloat
+    @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
+
+    var body: some View {
+        let height = (width / 0.7).rounded()
+        BookshelfFolderIcon(books: books, width: width, height: height)
+            .overlay(alignment: .bottomLeading) {
+                if !hideTitles {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder.fill").font(.system(size: 9))
+                        Text(folder.name).lineLimit(1)
+                        Spacer(minLength: 2)
+                        Text("\(books.count)").monospacedDigit()
+                    }
+                    .font(.system(size: width < 90 ? 10 : 11, weight: .semibold))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 7)
+                    .frame(height: 22)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.black.opacity(0.55))
+                    .clipShape(RoundedRectangle(cornerRadius: max(width * 0.08, 5), style: .continuous))
+                    .padding(4)
+                }
             }
-            ReadingProgressLine(value: BookReadingPresentation.progress(book))
-                .padding(.top, 12)
-            Text(BookReadingPresentation.progressLabel(book))
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                .padding(.top, 7)
+            .frame(width: width, height: height)
+            .contentShape(Rectangle())
+    }
+}
+
+/// 列表里的文件夹。
+private struct BookshelfFolderRow: View {
+    let folder: BookshelfFolder
+    let books: [Book]
+    let compact: Bool
+    @ScaledMetric(relativeTo: .body) private var coverWidth = 52
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            BookshelfFolderIcon(books: books, width: compact ? 40 : coverWidth, height: compact ? 56 : coverWidth * 1.42)
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Image(systemName: "folder.fill")
+                        .font(.caption)
+                        .foregroundStyle(ReadingTheme.accent)
+                    Text(folder.name)
+                        .font(.body.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                }
+                Text("\(books.count) 本 · " + books.prefix(3).map(\.name).joined(separator: "、"))
+                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
         }
+        .padding(.vertical, compact ? 10 : 12)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("文件夹「\(folder.name)」，\(books.count) 本书")
     }
 }
 
@@ -590,87 +803,259 @@ private struct ContinueReadingCard: View {
     }
 }
 
-private struct BookGroupManagerView: View {
-    @Environment(\.dismiss) private var dismiss
+/// 管理书架：拖动调整顺序、眼睛按钮显示或隐藏、轻点改名、新建书架、批量删除；齿轮进入书架设置。
+private struct BookshelfManagerSheet: View {
+    @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var library: BookLibraryModel
-    @State private var newName = ""
     @State private var showsCreate = false
     @State private var editingGroup: BookGroup?
-    @State private var editingName = ""
+    @State private var draft = ""
+    @State private var dialogError: String?
+    @State private var deleting = false
+    @State private var marked = Set<Int64>()
+    @State private var showsSettings = false
+    @State private var confirmsDelete = false
 
-    private var customGroups: [BookGroup] {
-        library.groups.filter { $0.groupId > 0 }.sorted { $0.order < $1.order }
+    private var orderedGroups: [BookGroup] {
+        library.groups.sorted { $0.order == $1.order ? $0.groupId < $1.groupId : $0.order < $1.order }
     }
 
+    private var visibleCount: Int { library.groups.filter(\.show).count }
+
     var body: some View {
-        ReadingNavigationStack {
+        VStack(spacing: 0) {
+            header
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 8)
             List {
-                Section {
-                    HStack {
-                        Text("全部")
-                        Spacer()
-                        Text("系统分组").font(.caption).foregroundStyle(.secondary)
-                    }
+                ForEach(orderedGroups) { group in
+                    row(group)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 16))
                 }
-                Section("自定义分组") {
-                    ForEach(customGroups) { group in
-                        HStack {
-                            Toggle(isOn: Binding(
-                                get: { group.show },
-                                set: { visible in Task { await library.setGroupVisible(group, visible: visible) } }
-                            )) {
-                                Text(group.groupName)
-                            }
-                            Button {
-                                editingGroup = group
-                                editingName = group.groupName
-                            } label: {
-                                Image(systemName: "pencil")
-                            }
-                            .buttonStyle(.borderless)
-                        }
-                        .swipeActions {
-                            Button("删除", role: .destructive) {
-                                Task { await library.deleteGroup(group) }
-                            }
-                        }
-                    }
-                    .onMove { offsets, destination in
-                        Task { await library.moveGroups(from: offsets, to: destination) }
-                    }
+                .onMove { offsets, destination in
+                    var ids = orderedGroups.map(\.groupId)
+                    ids.move(fromOffsets: offsets, toOffset: destination)
+                    Task { await library.reorderGroups(ids) }
                 }
             }
-            .overlay {
-                if customGroups.isEmpty {
-                    ReadingUnavailableView("没有自定义分组", systemImage: "rectangle.3.group", description: Text("点右上角加号新建分组。"))
+            .listStyle(.plain)
+            if deleting {
+                Button {
+                    confirmsDelete = true
+                } label: {
+                    Text(marked.isEmpty ? "选择要删除的书架" : "删除所选书架（\(marked.count)）")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(marked.isEmpty ? Color.secondary : Color.white)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 46)
+                        .background(marked.isEmpty ? Color.secondary.opacity(0.15) : ReadingTheme.coral, in: Capsule())
                 }
-            }
-            .navigationTitle("书架分组")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { dismiss() } }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    EditButton()
-                    Button("新建", systemImage: "plus") { newName = ""; showsCreate = true }
-                }
-            }
-            .alert("新建分组", isPresented: $showsCreate) {
-                TextField("分组名称", text: $newName)
-                Button("取消", role: .cancel) {}
-                Button("确定") { Task { await library.createGroup(name: newName) } }
-            }
-            .alert("编辑分组", isPresented: Binding(
-                get: { editingGroup != nil },
-                set: { if !$0 { editingGroup = nil } }
-            )) {
-                TextField("分组名称", text: $editingName)
-                Button("取消", role: .cancel) { editingGroup = nil }
-                Button("确定") {
-                    guard let group = editingGroup else { return }
-                    Task { await library.renameGroup(group, name: editingName) }
-                    editingGroup = nil
-                }
+                .buttonStyle(.plain)
+                .disabled(marked.isEmpty)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .overlay {
+            if showsCreate || editingGroup != nil {
+                nameDialog
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: deleting)
+        .animation(.easeOut(duration: 0.2), value: showsCreate)
+        .animation(.easeOut(duration: 0.2), value: editingGroup?.groupId)
+        .sheet(isPresented: $showsSettings) {
+            BookshelfShelfSettingsSheet()
+        }
+        .alert("删除书架", isPresented: $confirmsDelete) {
+            Button("取消", role: .cancel) {}
+            Button("删除", role: .destructive) {
+                let targets = library.groups.filter { marked.contains($0.groupId) }
+                marked.removeAll()
+                deleting = false
+                Task {
+                    for group in targets {
+                        await library.deleteGroup(group)
+                        for folder in BookshelfFolderStore.shared.folders(inGroup: group.groupId) {
+                            BookshelfFolderStore.shared.dissolve(folder.id)
+                        }
+                    }
+                }
+            }
+        } message: {
+            Text("只删除书架本身，书仍在「全部」里。")
+        }
+        .readingPresentationDragIndicator()
+    }
+
+    private var header: some View {
+        HStack(spacing: 4) {
+            Text("管理书架")
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+            Spacer()
+            Button { showsSettings = true } label: {
+                Image(systemName: "gearshape")
+                    .font(.system(size: 17))
+                    .frame(width: 40, height: 40)
+            }
+            .accessibilityLabel("书架设置")
+            Button {
+                draft = ""
+                dialogError = nil
+                showsCreate = true
+            } label: {
+                Image(systemName: "folder.badge.plus")
+                    .font(.system(size: 17))
+                    .frame(width: 40, height: 40)
+            }
+            .accessibilityLabel("新建书架")
+            Button {
+                deleting.toggle()
+                marked.removeAll()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: deleting ? "xmark" : "trash")
+                        .font(.system(size: 14))
+                    Text(deleting ? "取消" : "批量删除")
+                        .font(.system(size: 14))
+                }
+                .frame(minHeight: 40)
+            }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+    }
+
+    private func row(_ group: BookGroup) -> some View {
+        let isCustom = group.groupId > 0
+        let isMarked = marked.contains(group.groupId)
+        return HStack(spacing: 12) {
+            if deleting {
+                Button {
+                    guard isCustom else { return }
+                    if isMarked { marked.remove(group.groupId) } else { marked.insert(group.groupId) }
+                } label: {
+                    Image(systemName: isMarked ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 19))
+                        .foregroundStyle(isMarked ? ReadingTheme.coral : Color.secondary.opacity(isCustom ? 1 : 0.35))
+                        .frame(width: 26, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(isCustom ? (isMarked ? "取消选择" : "选择") : "系统书架不能删除")
+            } else {
+                Image(systemName: "line.3.horizontal")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 26, height: 44)
+                    .accessibilityHidden(true)
+            }
+            Button {
+                if deleting {
+                    guard isCustom else { return }
+                    if isMarked { marked.remove(group.groupId) } else { marked.insert(group.groupId) }
+                } else {
+                    draft = group.groupName
+                    dialogError = nil
+                    editingGroup = group
+                }
+            } label: {
+                Text(group.groupName)
+                    .font(.body)
+                    .foregroundStyle(group.show ? Color.primary : Color.secondary)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(deleting ? "" : "轻点改名，长按拖动调整顺序")
+            Text("\(library.books(in: group).count) 本")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Button {
+                guard !(group.show && visibleCount <= 1) else { return }
+                Task { await library.setGroupVisible(group, visible: !group.show) }
+            } label: {
+                Image(systemName: group.show ? "eye" : "eye.slash")
+                    .font(.system(size: 15))
+                    .foregroundStyle(group.show ? Color.primary : Color.secondary)
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(group.show ? "隐藏书架 \(group.groupName)" : "显示书架 \(group.groupName)")
+        }
+    }
+
+    private var nameDialog: some View {
+        ZStack {
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .onTapGesture { closeDialog() }
+            VStack(alignment: .leading, spacing: 16) {
+                Text(editingGroup == nil ? "新建书架" : "重命名书架")
+                    .font(.system(size: 17, weight: .semibold))
+                TextField("输入书架名称", text: $draft)
+                    .font(.system(size: 15))
+                    .padding(.horizontal, 14)
+                    .frame(height: 44)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .onChange(of: draft) { _ in dialogError = nil }
+                if let dialogError {
+                    Text(dialogError)
+                        .font(.system(size: 12))
+                        .foregroundStyle(ReadingTheme.coral)
+                }
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button("取消") { closeDialog() }
+                        .font(.system(size: 15))
+                        .foregroundStyle(.primary)
+                        .frame(width: 64, height: 38)
+                    Button(editingGroup == nil ? "创建" : "保存") { submit() }
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(ReadingTheme.accent)
+                        .frame(width: 64, height: 38)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+            .frame(width: 300)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(colorScheme == .dark ? Color(white: 0.16) : Color.white)
+            )
+            .shadow(color: .black.opacity(0.2), radius: 22, y: 8)
+            .padding(.bottom, 120)
+        }
+    }
+
+    private func closeDialog() {
+        showsCreate = false
+        editingGroup = nil
+    }
+
+    private func submit() {
+        let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            dialogError = "名称不能为空"
+            return
+        }
+        if library.groups.contains(where: { $0.groupName == name && $0.groupId != editingGroup?.groupId }) {
+            dialogError = "已经有名为「\(name)」的书架了"
+            return
+        }
+        if let group = editingGroup {
+            Task { await library.renameGroup(group, name: name) }
+        } else {
+            Task { await library.createGroup(name: name) }
+        }
+        closeDialog()
     }
 }
 
@@ -704,10 +1089,10 @@ private struct BookGroupSelectView: View {
             }
             .overlay {
                 if customGroups.isEmpty {
-                    ReadingUnavailableView("没有自定义分组", systemImage: "rectangle.3.group")
+                    ReadingUnavailableView("没有自定义书架", systemImage: "rectangle.3.group", description: Text("在「管理书架」里新建书架。"))
                 }
             }
-            .navigationTitle("移至分组")
+            .navigationTitle("移至书架")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
@@ -925,10 +1310,8 @@ private struct BookshelfRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            BookCoverArtwork(
-                title: book.name,
-                author: book.author,
-                remoteURL: book.coverUrl,
+            BookshelfCover(
+                book: book,
                 width: compact ? 40 : coverWidth,
                 height: compact ? 56 : coverWidth * 1.42
             )
@@ -2275,7 +2658,29 @@ enum BookshelfShelfSettings {
     static let hideRotateKey = "shelfHideRotateButtons"
     /// 网格封面样式："flat" 平面，"solid" 实体（左侧有书脊凹陷）。
     static let coverStyleKey = "bookshelfCoverStyle"
+    /// 移出书架时同时删除本地书文件。
+    static let deleteLocalKey = "bookshelfDeleteLocalOnRemove"
+    /// 书架右侧竖向切换条。
+    static let sideSwitcherKey = "bookshelfSideSwitcher"
+    /// 网格视图不画搁板。
+    static let hideShelfBaseKey = "bookshelfHideShelfBase"
+    /// 搁板样式："flat" 平面，"solid" 立体。
+    static let boardStyleKey = "bookshelfBoardStyle"
+    private static let lastGridCountKey = "bookshelfLastGridCount"
     static let widthRange: ClosedRange<Double> = 16...44
+
+    /// 网格列数（3–5），旧版的 2、6 列等按就近处理。
+    static func gridCount(_ layout: String) -> Int {
+        min(max(Int(layout.dropFirst(4)) ?? 3, 3), 5)
+    }
+
+    static var lastGridCount: Int {
+        get {
+            let value = UserDefaults.standard.integer(forKey: lastGridCountKey)
+            return value == 0 ? 3 : min(max(value, 3), 5)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: lastGridCountKey) }
+    }
     static let heightRange: ClosedRange<Double> = 100...200
     static let defaultWidth: Double = 26
     static let defaultHeight: Double = 150
@@ -2297,70 +2702,375 @@ struct BookshelfShelfStyle: Equatable {
     }
 }
 
-// MARK: - 书盒（文件夹）
+// MARK: - 文件夹
 
-/// 在仿真书架上显示成「书盒」的分组：把一本书拖到另一本书上时创建。
-/// 分组本身仍是普通的书架分组，可在顶部分组栏查看；这里只记录哪些分组以书盒形式摆在书架上，以及书盒样式。
+/// 书架上的文件夹：属于某个书架（分组），里面放这个书架里的几本书。
+/// 网格、列表、仿真书架三种视图共用同一份数据，所以在哪种视图里建的文件夹，其他视图里都能看到。
+struct BookshelfFolder: Codable, Identifiable, Equatable, Sendable {
+    var id: String
+    var name: String
+    /// 文件夹所在的书架（分组 id，「全部」等系统书架为负数）。
+    var groupID: Int64
+    var bookURLs: [String]
+    /// 仿真书架上的装帧样式：0 典藏（酒红），1 精装（深灰）。
+    var style: Int = 0
+}
+
+/// 书架页上的一项：一本书或一个文件夹（网格与列表视图用）。
+enum BookshelfEntry: Identifiable {
+    case book(Book)
+    case folder(BookshelfFolder, [Book])
+
+    var id: String {
+        switch self {
+        case .book(let book): "b:" + book.bookUrl
+        case .folder(let folder, _): "f:" + folder.id
+        }
+    }
+}
+
 @MainActor
 final class BookshelfFolderStore: ObservableObject {
     static let shared = BookshelfFolderStore()
-    private static let idsKey = "bookshelfFolderGroups"
-    private static let stylesKey = "bookshelfFolderStyles"
+    private static let storageKey = "bookshelfFolders.v2"
+    /// 上一版把文件夹存成书架分组，这里记录那些分组 id，用于迁移。
+    private static let legacyIDsKey = "bookshelfFolderGroups"
+    private static let legacyStylesKey = "bookshelfFolderStyles"
     static let nameLimit = 20
 
-    @Published private(set) var folderIDs: [Int64]
-    @Published private(set) var styles: [String: Int]
-    /// 正在打开的书盒（面板）。
-    @Published var presentedFolderID: Int64?
-    /// 在书盒面板里点了某本书：交给书架页打开。
+    @Published private(set) var folders: [BookshelfFolder]
+    /// 正在打开的文件夹（面板）。
+    @Published var presentedFolderID: String?
+    /// 在文件夹面板里点了某本书：交给书架页打开。
     @Published var openRequest: BookshelfShelfDestination?
 
     private init() {
-        folderIDs = (UserDefaults.standard.array(forKey: Self.idsKey) as? [NSNumber])?.map(\.int64Value) ?? []
-        styles = UserDefaults.standard.dictionary(forKey: Self.stylesKey) as? [String: Int] ?? [:]
+        if let data = UserDefaults.standard.data(forKey: Self.storageKey),
+           let decoded = try? JSONDecoder().decode([BookshelfFolder].self, from: data) {
+            folders = decoded
+        } else {
+            folders = []
+        }
     }
 
-    func contains(_ id: Int64) -> Bool { folderIDs.contains(id) }
+    var legacyGroupIDs: [Int64] {
+        (UserDefaults.standard.array(forKey: Self.legacyIDsKey) as? [NSNumber])?.map(\.int64Value) ?? []
+    }
 
-    func add(_ id: Int64) {
-        guard id > 0, !folderIDs.contains(id) else { return }
-        folderIDs.append(id)
+    func legacyStyle(for groupID: Int64) -> Int {
+        (UserDefaults.standard.dictionary(forKey: Self.legacyStylesKey) as? [String: Int])?[String(groupID)] ?? 0
+    }
+
+    func clearLegacy() {
+        UserDefaults.standard.removeObject(forKey: Self.legacyIDsKey)
+        UserDefaults.standard.removeObject(forKey: Self.legacyStylesKey)
+    }
+
+    func folder(id: String) -> BookshelfFolder? { folders.first { $0.id == id } }
+
+    func folders(inGroup groupID: Int64) -> [BookshelfFolder] { folders.filter { $0.groupID == groupID } }
+
+    /// 把书架里的书按文件夹收起来：文件夹排在它里面第一本书原来的位置。
+    func entries(for books: [Book], groupID: Int64) -> [BookshelfEntry] {
+        let scoped = folders(inGroup: groupID)
+        guard !scoped.isEmpty else { return books.map { .book($0) } }
+        var byURL: [String: Book] = [:]
+        for book in books where byURL[book.bookUrl] == nil { byURL[book.bookUrl] = book }
+        var owner: [String: Int] = [:]
+        var contents: [[Book]] = []
+        for (index, folder) in scoped.enumerated() {
+            var inside: [Book] = []
+            for url in folder.bookURLs where owner[url] == nil {
+                guard let book = byURL[url] else { continue }
+                owner[url] = index
+                inside.append(book)
+            }
+            contents.append(inside)
+        }
+        var placed = Set<Int>()
+        var result: [BookshelfEntry] = []
+        for book in books {
+            if let index = owner[book.bookUrl] {
+                if placed.insert(index).inserted { result.append(.folder(scoped[index], contents[index])) }
+            } else {
+                result.append(.book(book))
+            }
+        }
+        return result
+    }
+
+    func nextName(inGroup groupID: Int64) -> String {
+        let names = Set(folders(inGroup: groupID).map(\.name))
+        var name = "文件夹"
+        var index = 2
+        while names.contains(name) {
+            name = "文件夹\(index)"
+            index += 1
+        }
+        return name
+    }
+
+    /// 新建文件夹并放进这些书（书原来在本书架其他文件夹里的会移过来）。
+    @discardableResult
+    func makeFolder(groupID: Int64, bookURLs: [String], name: String? = nil, style: Int = 0) -> BookshelfFolder {
+        var urls: [String] = []
+        for url in bookURLs where !urls.contains(url) { urls.append(url) }
+        detach(Set(urls), inGroup: groupID, except: nil)
+        var folderName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if folderName.isEmpty || folders(inGroup: groupID).contains(where: { $0.name == folderName }) {
+            folderName = folderName.isEmpty ? nextName(inGroup: groupID) : folderName + "2"
+        }
+        let folder = BookshelfFolder(id: UUID().uuidString, name: String(folderName.prefix(Self.nameLimit)),
+                                     groupID: groupID, bookURLs: urls, style: style)
+        folders.append(folder)
+        save()
+        return folder
+    }
+
+    func add(_ url: String, to id: String) {
+        guard let existing = folders.first(where: { $0.id == id }), !existing.bookURLs.contains(url) else { return }
+        detach([url], inGroup: existing.groupID, except: id)
+        if let index = folders.firstIndex(where: { $0.id == id }) {
+            folders[index].bookURLs.append(url)
+        }
         save()
     }
 
-    func remove(_ id: Int64) {
-        folderIDs.removeAll { $0 == id }
-        styles[String(id)] = nil
+    /// 拖书松手：落在书上就和那本书建一个文件夹，落在文件夹上就放进去。
+    func handleDrop(_ url: String, ontoBook target: String?, folder: String?, groupID: Int64) {
+        if let folder {
+            add(url, to: folder)
+        } else if let target, target != url {
+            makeFolder(groupID: groupID, bookURLs: [target, url])
+        } else {
+            return
+        }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    /// 移出文件夹；文件夹空了就解散。
+    func remove(_ urls: Set<String>, from id: String) {
+        guard let index = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[index].bookURLs.removeAll { urls.contains($0) }
+        if folders[index].bookURLs.isEmpty {
+            dissolve(id)
+        } else {
+            save()
+        }
+    }
+
+    /// 改名，返回错误提示（nil 表示成功或无需修改）。
+    func rename(_ id: String, to name: String) -> String? {
+        let name = String(name.trimmingCharacters(in: .whitespacesAndNewlines).prefix(Self.nameLimit))
+        guard let index = folders.firstIndex(where: { $0.id == id }) else { return nil }
+        guard !name.isEmpty else { return "名称不能为空" }
+        guard name != folders[index].name else { return nil }
+        let groupID = folders[index].groupID
+        if folders.contains(where: { $0.groupID == groupID && $0.id != id && $0.name == name }) {
+            return "这个书架已经有「\(name)」了"
+        }
+        folders[index].name = name
+        save()
+        return nil
+    }
+
+    func toggleStyle(_ id: String) {
+        guard let index = folders.firstIndex(where: { $0.id == id }) else { return }
+        folders[index].style = folders[index].style == 0 ? 1 : 0
+        save()
+    }
+
+    func dissolve(_ id: String) {
+        folders.removeAll { $0.id == id }
         if presentedFolderID == id { presentedFolderID = nil }
         save()
     }
 
-    func style(for id: Int64) -> Int { styles[String(id)] ?? 0 }
-
-    func toggleStyle(_ id: Int64) {
-        styles[String(id)] = style(for: id) == 0 ? 1 : 0
+    /// 书移出书架后，从所有文件夹里去掉它。
+    func removeBook(_ url: String) {
+        guard folders.contains(where: { $0.bookURLs.contains(url) }) else { return }
+        for index in folders.indices { folders[index].bookURLs.removeAll { $0 == url } }
+        folders.removeAll { $0.bookURLs.isEmpty }
+        if let current = presentedFolderID, !folders.contains(where: { $0.id == current }) { presentedFolderID = nil }
         save()
     }
 
-    /// 书架上以书盒显示的分组（分组被删除的不算）。
-    func folders(in groups: [BookGroup]) -> [BookGroup] {
-        groups.filter { $0.groupId > 0 && folderIDs.contains($0.groupId) }
-            .sorted { $0.order == $1.order ? $0.groupId < $1.groupId : $0.order < $1.order }
+    /// 书架书目变化后，清掉已经不在书架上的书；空文件夹解散。
+    func prune(existing: Set<String>) {
+        var changed = false
+        for index in folders.indices {
+            let before = folders[index].bookURLs.count
+            folders[index].bookURLs.removeAll { !existing.contains($0) }
+            if folders[index].bookURLs.count != before { changed = true }
+        }
+        if folders.contains(where: { $0.bookURLs.isEmpty }) {
+            folders.removeAll { $0.bookURLs.isEmpty }
+            changed = true
+        }
+        guard changed else { return }
+        if let current = presentedFolderID, !folders.contains(where: { $0.id == current }) { presentedFolderID = nil }
+        save()
+    }
+
+    /// 一本书在同一个书架里只放在一个文件夹。
+    private func detach(_ urls: Set<String>, inGroup groupID: Int64, except id: String?) {
+        for index in folders.indices where folders[index].groupID == groupID && folders[index].id != id {
+            folders[index].bookURLs.removeAll { urls.contains($0) }
+        }
+        folders.removeAll { $0.groupID == groupID && $0.id != id && $0.bookURLs.isEmpty }
     }
 
     private func save() {
-        UserDefaults.standard.set(folderIDs.map { NSNumber(value: $0) }, forKey: Self.idsKey)
-        UserDefaults.standard.set(styles, forKey: Self.stylesKey)
+        if let data = try? JSONEncoder().encode(folders) {
+            UserDefaults.standard.set(data, forKey: Self.storageKey)
+        }
     }
 }
 
-/// 书盒外观：两种装帧样式，书盒上的小旋转按钮切换。
+/// 从书架移出一本书；打开「移除同时删除本地文件」时，本地书连同导入的原文件一起删除。
+@MainActor
+enum BookshelfRemoval {
+    static func remove(_ book: Book, library: BookLibraryModel) async {
+        let deleteLocal = UserDefaults.standard.bool(forKey: BookshelfShelfSettings.deleteLocalKey)
+        if deleteLocal, book.origin == "local", let url = URL(string: book.bookUrl), url.isFileURL {
+            do {
+                try await library.deleteLocalFile(at: url)
+            } catch {
+                await library.remove(bookURL: book.bookUrl)
+            }
+        } else {
+            await library.remove(bookURL: book.bookUrl)
+        }
+        BookshelfFolderStore.shared.removeBook(book.bookUrl)
+    }
+}
+
+/// 实体封面左侧的书脊凹槽与高光。
+struct BookshelfSolidSpineShade: View {
+    let width: CGFloat
+
+    var body: some View {
+        HStack(spacing: 0) {
+            LinearGradient(stops: [
+                .init(color: .black.opacity(0.30), location: 0),
+                .init(color: .white.opacity(0.22), location: 0.35),
+                .init(color: .black.opacity(0.25), location: 0.7),
+                .init(color: .white.opacity(0.10), location: 1)
+            ], startPoint: .leading, endPoint: .trailing)
+            .frame(width: max(width * 0.075, 3))
+            LinearGradient(colors: [.black.opacity(0.12), .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: max(width * 0.06, 2))
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+/// 书架页上的封面：按「封面样式」显示平面或实体。
+struct BookshelfCover: View {
+    let book: Book
+    let width: CGFloat
+    let height: CGFloat
+    @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
+
+    var body: some View {
+        let solid = coverStyle == "solid"
+        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl, width: width, height: height)
+            .overlay(alignment: .leading) {
+                if solid {
+                    BookshelfSolidSpineShade(width: width)
+                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                }
+            }
+            .shadow(color: .black.opacity(solid ? 0.22 : 0.08), radius: solid ? 3 : 1.5, x: solid ? 2 : 0, y: solid ? 3 : 1)
+    }
+}
+
+/// 网格与列表里的文件夹图标：圆角底板上排着前四本书的封面。
+struct BookshelfFolderIcon: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let books: [Book]
+    let width: CGFloat
+    let height: CGFloat
+
+    var body: some View {
+        let inset = max(width * 0.08, 3)
+        let gap = max(width * 0.05, 2)
+        let cellWidth = (width - inset * 2 - gap) / 2
+        let cellHeight = (height - inset * 2 - gap) / 2
+        let shown = Array(books.prefix(4))
+        RoundedRectangle(cornerRadius: max(width * 0.08, 5), style: .continuous)
+            .fill(colorScheme == .dark ? Color(white: 0.22) : Color(white: 0.9))
+            .overlay(
+                RoundedRectangle(cornerRadius: max(width * 0.08, 5), style: .continuous)
+                    .strokeBorder(Color.black.opacity(0.06), lineWidth: 0.5)
+            )
+            .overlay(alignment: .topLeading) {
+                VStack(alignment: .leading, spacing: gap) {
+                    ForEach(0..<2, id: \.self) { row in
+                        HStack(spacing: gap) {
+                            ForEach(0..<2, id: \.self) { column in
+                                let index = row * 2 + column
+                                if index < shown.count {
+                                    BookCoverArtwork(title: shown[index].name, author: shown[index].author,
+                                                     remoteURL: shown[index].coverUrl, width: cellWidth, height: cellHeight)
+                                } else {
+                                    Color.clear.frame(width: cellWidth, height: cellHeight)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(inset)
+            }
+            .frame(width: width, height: height)
+            .shadow(color: .black.opacity(0.12), radius: 3, y: 2)
+            .accessibilityHidden(true)
+    }
+}
+
+/// 网格、列表里的拖放：把一本书拖到另一本书上建文件夹，拖到文件夹上放进去。
+struct BookshelfDropModifier: ViewModifier {
+    let targetURL: String?
+    let folderID: String?
+    let groupID: Int64
+    var cornerRadius: CGFloat = 6
+    @State private var targeted = false
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(ReadingTheme.accent, lineWidth: 2)
+                    .opacity(targeted ? 1 : 0)
+                    .allowsHitTesting(false)
+            }
+            .scaleEffect(targeted ? 1.04 : 1)
+            .animation(.easeOut(duration: 0.15), value: targeted)
+            .onDrop(of: [UTType.plainText], isTargeted: $targeted) { providers in
+                guard let provider = providers.first else { return false }
+                let target = targetURL
+                let folder = folderID
+                let group = groupID
+                _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+                    guard let value = object as? NSString else { return }
+                    let url = String(value)
+                    Task { @MainActor in
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                            BookshelfFolderStore.shared.handleDrop(url, ontoBook: target, folder: folder, groupID: group)
+                        }
+                    }
+                }
+                return true
+            }
+    }
+}
+
+/// 仿真书架上的文件夹外观：两种装帧样式；书脊上的小旋转按钮修改摆放形态与样式。
 private struct BookshelfFolderBox: View {
-    let group: BookGroup
+    let folder: BookshelfFolder
     let books: [Book]
     let style: BookshelfShelfStyle
-    let boxStyle: Int
-    let onToggleStyle: () -> Void
+    let onRotate: () -> Void
 
     static let topLabel: CGFloat = 17
     static let bottomLabel: CGFloat = 15
@@ -2379,7 +3089,7 @@ private struct BookshelfFolderBox: View {
     }
 
     private var colors: (box: Color, dark: Color, label: Color, window: Color) {
-        if boxStyle == 1 {
+        if folder.style == 1 {
             return (Color(red: 0.20, green: 0.21, blue: 0.23), Color(red: 0.11, green: 0.12, blue: 0.13),
                     Color(red: 0.86, green: 0.87, blue: 0.89), Color(red: 0.06, green: 0.06, blue: 0.07))
         }
@@ -2388,7 +3098,7 @@ private struct BookshelfFolderBox: View {
     }
 
     private var footer: String {
-        boxStyle == 1 ? "PRECISION // \(books.count)V" : "典藏 · \(books.count) 册"
+        folder.style == 1 ? "PRECISION // \(books.count)V" : "典藏 · \(books.count) 册"
     }
 
     var body: some View {
@@ -2406,15 +3116,15 @@ private struct BookshelfFolderBox: View {
                 LinearGradient(colors: [Color.clear, Color.black.opacity(0.35)], startPoint: .leading, endPoint: .trailing)
                     .frame(width: 5)
             }
-            // 顶部标签：书盒名
-            Text(group.groupName)
+            // 顶部标签：文件夹名
+            Text(folder.name)
                 .font(.system(size: 8, weight: .semibold))
                 .foregroundStyle(colors.label)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
                 .frame(width: size.width - 22, height: Self.topLabel)
                 .offset(x: 6)
-            // 书盒的窗口：里面立着分组里的书
+            // 窗口：里面立着文件夹里的书
             RoundedRectangle(cornerRadius: 2, style: .continuous)
                 .fill(colors.window)
                 .overlay(RoundedRectangle(cornerRadius: 2, style: .continuous)
@@ -2433,7 +3143,7 @@ private struct BookshelfFolderBox: View {
             .allowsHitTesting(false)
             // 底部标签
             Text(footer)
-                .font(.system(size: 6.5, weight: .medium, design: boxStyle == 1 ? .monospaced : .default))
+                .font(.system(size: 6.5, weight: .medium, design: folder.style == 1 ? .monospaced : .default))
                 .foregroundStyle(colors.label.opacity(0.9))
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
@@ -2442,7 +3152,7 @@ private struct BookshelfFolderBox: View {
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .overlay(alignment: .topTrailing) {
-            Button(action: onToggleStyle) {
+            Button(action: onRotate) {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.system(size: 6.5, weight: .bold))
                     .foregroundStyle(colors.label)
@@ -2454,7 +3164,7 @@ private struct BookshelfFolderBox: View {
             }
             .buttonStyle(.plain)
             .offset(x: 9, y: -9)
-            .accessibilityLabel("切换书盒样式")
+            .accessibilityLabel("修改文件夹摆放形态与样式")
         }
         .shadow(color: .black.opacity(0.22), radius: 2, x: 1, y: 1)
         .contentShape(Rectangle())
@@ -2462,17 +3172,17 @@ private struct BookshelfFolderBox: View {
     }
 }
 
-/// 仿真书架上的一个位置：摆件、书或书盒。
+/// 仿真书架上的一个位置：摆件、书或文件夹。
 private enum BookshelfShelfItem {
     case ornament(ShelfOrnament, CGSize)
     case book(Book)
-    case folder(BookGroup, [Book])
+    case folder(BookshelfFolder, [Book])
 
     var id: String {
         switch self {
         case .ornament(let ornament, _): "o:" + ornament.id
         case .book(let book): "b:" + book.bookUrl
-        case .folder(let group, _): "f:\(group.groupId)"
+        case .folder(let folder, _): "f:" + folder.id
         }
     }
 
@@ -2480,9 +3190,26 @@ private enum BookshelfShelfItem {
         if case .book(let book) = self { return book }
         return nil
     }
+
+    /// 书和文件夹可以竖立、平躺或倾斜，摆件不行。
+    var isSlab: Bool {
+        if case .ornament = self { return false }
+        return true
+    }
+
+    /// 保存摆放姿势、放摆件用的键：书用书籍链接，文件夹用 "folder:" + id。
+    var poseKey: String? {
+        switch self {
+        case .ornament: nil
+        case .book(let book): book.bookUrl
+        case .folder(let folder, _): BookshelfShelfItem.folderPoseKey(folder.id)
+        }
+    }
+
+    static func folderPoseKey(_ id: String) -> String { "folder:" + id }
 }
 
-/// 一本书、一个书盒或一个摆件在某一层上的实际摆放位置（按现实中的支撑关系算出来）。
+/// 一本书、一个文件夹或一个摆件在某一层上的实际摆放位置（按现实中的支撑关系算出来）。
 private struct BookshelfShelfPlacement: Identifiable {
     let item: BookshelfShelfItem
     /// 在全局顺序里的位置（不含放在平躺书上的摆件）。
@@ -2502,7 +3229,7 @@ private struct BookshelfShelfPlacement: Identifiable {
     var id: String { item.id }
 }
 
-/// 用户拖动调整过的书架顺序（摆件、书、书盒混排），按 id 保存。
+/// 用户拖动调整过的书架顺序（摆件、书、文件夹混排），按 id 保存。
 enum BookshelfShelfOrder {
     static let storageKey = "bookshelfShelfOrder"
     static func load() -> [String] { UserDefaults.standard.stringArray(forKey: storageKey) ?? [] }
@@ -2521,15 +3248,15 @@ enum ShelfOrnamentPerches {
 /// 仿真书架：
 /// - 书按现实摆放：竖立的书站在层板上；倾斜的书一角着地、靠在相邻的书上；平躺的书横放，上面可以放摆件；
 /// - 轻点一本书：书向外抽出，书脊上出现小按钮改摆放形态；再点这本书打开，点空白恢复；
-/// - 长按拖动：放在两件东西之间调整位置（黄线）；把书拖到另一本书上松手，两本书装进一个书盒；
-///   拖到书盒上松手，书放进这个书盒；把摆件拖到平躺的书上，摆件就放在这本书上面；
-/// - 轻点书盒：打开书盒面板（改名、多选移出、解散）；轻点摆件：调整大小或移出书架。
+/// - 长按拖动：放在两件东西之间调整位置（黄线）；把书拖到另一本书上松手，两本书装进一个文件夹；
+///   拖到文件夹上松手，书放进这个文件夹；把摆件拖到平躺的书上，摆件就放在这本书上面；
+/// - 轻点文件夹：打开文件夹面板（改名、多选移出、解散）；轻点摆件：调整大小或移出书架。
 private struct BookshelfShelfView: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var library: BookLibraryModel
     let books: [Book]
-    /// 是否把书盒里的书收进书盒（查看某个分组时直接平铺）。
-    let showsFolders: Bool
+    /// 当前书架（分组）：只显示属于这个书架的文件夹。
+    let groupID: Int64
     let onOpen: (BookshelfShelfDestination) -> Void
 
     @ObservedObject private var ornamentStore = ShelfOrnamentStore.shared
@@ -2539,7 +3266,10 @@ private struct BookshelfShelfView: View {
     @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
     @AppStorage(BookshelfShelfSettings.coverSpineKey) private var coverSpine = false
     @AppStorage(BookshelfShelfSettings.hideRotateKey) private var hideRotateButtons = false
+    @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
     @State private var poses: [String: Int] = BookshelfShelfPose.load()
+    /// 文件夹上的旋转按钮打开的摆放形态选择条。
+    @State private var folderPickerID: String?
     @State private var order: [String] = BookshelfShelfOrder.load()
     @State private var perches: [String: String] = ShelfOrnamentPerches.load()
     @State private var selectedURL: String?
@@ -2549,7 +3279,7 @@ private struct BookshelfShelfView: View {
     @State private var dragTranslation: CGSize = .zero
     @State private var insertionIndex: Int?
     @State private var insertionMarker: (row: Int, x: CGFloat)?
-    /// 拖动时手指停在哪件东西上（书 "b:"、书盒 "f:"）：合并、放进书盒或放摆件。
+    /// 拖动时手指停在哪件东西上（书 "b:"、文件夹 "f:"）：合并、放进文件夹或放摆件。
     @State private var dropTargetID: String?
     @State private var toast: String?
     @GestureState private var dragGestureActive = false
@@ -2577,44 +3307,26 @@ private struct BookshelfShelfView: View {
     private var rowPitch: CGFloat { rowHeight + boardHeight + rowSpacing }
 
     private func requestedPose(_ book: Book) -> BookshelfShelfPose {
-        BookshelfShelfPose(rawValue: poses[book.bookUrl] ?? 0) ?? .upright
+        requestedPose(key: book.bookUrl)
+    }
+
+    private func requestedPose(key: String) -> BookshelfShelfPose {
+        BookshelfShelfPose(rawValue: poses[key] ?? 0) ?? .upright
     }
 
     // MARK: 顺序与分层
 
-    /// 书盒与其中的书（按书架当前显示的书）。
-    private var folderContents: [(group: BookGroup, books: [Book])] {
-        guard showsFolders else { return [] }
-        var assigned = Set<String>()
-        var result: [(BookGroup, [Book])] = []
-        for group in folderStore.folders(in: library.groups) {
-            let inside = books.filter { ($0.group & group.groupId) != 0 && !assigned.contains($0.bookUrl) }
-            guard !inside.isEmpty else { continue }
-            inside.forEach { assigned.insert($0.bookUrl) }
-            result.append((group, inside))
-        }
-        return result
-    }
-
-    /// 摆件在前、书和书盒在后的默认顺序，再按用户拖动保存的顺序重排；新加入的放在最后。
-    /// 书盒没有保存过位置时，排在它里面第一本书原来的位置。
+    /// 摆件在前、书和文件夹在后的默认顺序，再按用户拖动保存的顺序重排；新加入的放在最后。
+    /// 文件夹没有保存过位置时，排在它里面第一本书原来的位置。
     private var allItems: [BookshelfShelfItem] {
-        let folders = folderContents
-        let folded = Set(folders.flatMap { $0.books.map(\.bookUrl) })
         let ornaments = ornamentStore.placed.map {
             BookshelfShelfItem.ornament($0, ornamentStore.displaySize(for: $0, maxWidth: contentWidth * 0.5))
         }
         var defaults = ornaments
-        var placedFolders = Set<Int64>()
-        for book in books {
-            if folded.contains(book.bookUrl) {
-                if let folder = folders.first(where: { $0.books.contains { $0.bookUrl == book.bookUrl } }),
-                   !placedFolders.contains(folder.group.groupId) {
-                    placedFolders.insert(folder.group.groupId)
-                    defaults.append(.folder(folder.group, folder.books))
-                }
-            } else {
-                defaults.append(.book(book))
+        for entry in folderStore.entries(for: books, groupID: groupID) {
+            switch entry {
+            case .book(let book): defaults.append(.book(book))
+            case .folder(let folder, let inside): defaults.append(.folder(folder, inside))
             }
         }
         guard !order.isEmpty else { return defaults }
@@ -2639,7 +3351,7 @@ private struct BookshelfShelfView: View {
     private func perchedOrnaments(in items: [BookshelfShelfItem]) -> [String: (ShelfOrnament, CGSize)] {
         var flatBooks = Set<String>()
         for item in items {
-            if let book = item.book, requestedPose(book) == .flat { flatBooks.insert(book.bookUrl) }
+            if let key = item.poseKey, requestedPose(key: key) == .flat { flatBooks.insert(key) }
         }
         var result: [String: (ShelfOrnament, CGSize)] = [:]
         for item in items {
@@ -2650,7 +3362,7 @@ private struct BookshelfShelfView: View {
         return result
     }
 
-    /// 按现实中的支撑关系摆一层：倾斜的书一角着地，上端刚好靠在相邻的书、书盒或摆件上。
+    /// 按现实中的支撑关系摆一层：倾斜的书一角着地，上端刚好靠在相邻的书、文件夹或摆件上。
     private func layoutRow(_ entries: [(item: BookshelfShelfItem, index: Int)],
                            perched: [String: (ShelfOrnament, CGSize)]) -> [BookshelfShelfPlacement] {
         let t = Self.leanRadians
@@ -2664,15 +3376,18 @@ private struct BookshelfShelfView: View {
                 result.append(.init(item: entry.item, index: entry.index, pose: .upright,
                                     boxX: left, boxSize: size, boardMinX: left, boardMaxX: left + size.width,
                                     height: size.height, pivotX: left))
-            case .folder(_, let inside):
-                let size = BookshelfFolderBox.size(count: inside.count, style: style)
-                let left = previous.map { leftEdgeAfter($0, objectHeight: size.height) + 4 } ?? 0
-                result.append(.init(item: entry.item, index: entry.index, pose: .upright,
-                                    boxX: left, boxSize: size, boardMinX: left, boardMaxX: left + size.width + 4,
-                                    height: size.height, pivotX: left))
-            case .book(let book):
-                let w = style.bookWidth, h = style.bookHeight
-                var pose = requestedPose(book)
+            case .book, .folder:
+                let w: CGFloat, h: CGFloat
+                if case .folder(_, let inside) = entry.item {
+                    let size = BookshelfFolderBox.size(count: inside.count, style: style)
+                    w = size.width
+                    h = size.height
+                } else {
+                    w = style.bookWidth
+                    h = style.bookHeight
+                }
+                let key = entry.item.poseKey ?? ""
+                var pose = requestedPose(key: key)
                 // 一层最边上的书没有东西可靠：改靠向另一侧；这一层只有它一件时竖立。
                 if pose == .leanLeft && position == 0 { pose = entries.count > 1 ? .leanRight : .upright }
                 if pose == .leanRight && position == entries.count - 1 { pose = entries.count > 1 ? .leanLeft : .upright }
@@ -2683,7 +3398,7 @@ private struct BookshelfShelfView: View {
                                         boxX: left, boxSize: CGSize(width: w, height: h),
                                         boardMinX: left, boardMaxX: left + w, height: h, pivotX: left))
                 case .flat:
-                    let lying = w + (perched[book.bookUrl]?.1.height ?? 0)
+                    let lying = w + (perched[key]?.1.height ?? 0)
                     let left = previous.map { leftEdgeAfter($0, objectHeight: w) } ?? 0
                     result.append(.init(item: entry.item, index: entry.index, pose: pose,
                                         boxX: left, boxSize: CGSize(width: h, height: w),
@@ -2693,10 +3408,10 @@ private struct BookshelfShelfView: View {
                     guard let previous else { continue }
                     let pivot: CGFloat
                     switch previous.pose {
-                    case .leanLeft where previous.item.book != nil:
+                    case .leanLeft where previous.item.isSlab:
                         // 同向倾斜，两本书贴在一起。
                         pivot = previous.pivotX + previous.boxSize.width / cos(t)
-                    case .leanRight where previous.item.book != nil:
+                    case .leanRight where previous.item.isSlab:
                         // 两本书相对倾斜，顶端互相抵住。
                         pivot = previous.pivotX + (previous.boxSize.height + h) * sin(t)
                     default:
@@ -2709,7 +3424,7 @@ private struct BookshelfShelfView: View {
                 case .leanRight:
                     // 右倾：右下角着地，右侧靠在后一个物体上（后一个物体按它摆放）。
                     let left: CGFloat
-                    if let previous, previous.pose == .leanRight, previous.item.book != nil {
+                    if let previous, previous.pose == .leanRight, previous.item.isSlab {
                         let pivot = previous.pivotX + w / cos(t)
                         left = pivot - w * cos(t)
                     } else {
@@ -2725,10 +3440,10 @@ private struct BookshelfShelfView: View {
         return result
     }
 
-    /// 竖直物体（竖立的书、平躺的书、书盒、摆件）放在 previous 后面时的左边位置。
+    /// 竖直物体（竖立的书、平躺的书、文件夹、摆件）放在 previous 后面时的左边位置。
     private func leftEdgeAfter(_ previous: BookshelfShelfPlacement, objectHeight: CGFloat) -> CGFloat {
         let t = Self.leanRadians
-        if previous.pose == .leanRight, previous.item.book != nil {
+        if previous.pose == .leanRight, previous.item.isSlab {
             // 前一本右倾的书靠在这个物体上。
             let h = previous.boxSize.height
             let gap = h * cos(t) <= objectHeight ? h * sin(t) : objectHeight * tan(t)
@@ -2778,7 +3493,7 @@ private struct BookshelfShelfView: View {
         .background(
             Color.clear
                 .contentShape(Rectangle())
-                .onTapGesture { if selectedURL != nil { deselect() } }
+                .onTapGesture { if hasSelection { deselect() } }
         )
         .overlay(alignment: .top) {
             if let toast {
@@ -2809,7 +3524,7 @@ private struct BookshelfShelfView: View {
 
     private func isRaised(_ placement: BookshelfShelfPlacement, perched: [String: (ShelfOrnament, CGSize)]) -> Bool {
         if placement.id == draggingID || placement.id == "b:" + (selectedURL ?? "") { return true }
-        if let book = placement.item.book, let ornament = perched[book.bookUrl]?.0 {
+        if let key = placement.item.poseKey, let ornament = perched[key]?.0 {
             return "o:" + ornament.id == draggingID
         }
         return false
@@ -2819,8 +3534,11 @@ private struct BookshelfShelfView: View {
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
             selectedURL = nil
             showsPicker = false
+            folderPickerID = nil
         }
     }
+
+    private var hasSelection: Bool { selectedURL != nil || folderPickerID != nil }
 
     private func shelfRow(_ row: [BookshelfShelfPlacement], rowIndex: Int, rows: [[BookshelfShelfPlacement]],
                           perched: [String: (ShelfOrnament, CGSize)]) -> some View {
@@ -2828,11 +3546,11 @@ private struct BookshelfShelfView: View {
             ZStack(alignment: .bottomLeading) {
                 Color.clear
                     .contentShape(Rectangle())
-                    .onTapGesture { if selectedURL != nil { deselect() } }
+                    .onTapGesture { if hasSelection { deselect() } }
                 ForEach(row) { placement in
                     placementView(placement, rows: rows)
                         .zIndex(placement.id == draggingID ? 3 : (placement.id == "b:" + (selectedURL ?? "") ? 2 : 0))
-                    if let book = placement.item.book, let perch = perched[book.bookUrl] {
+                    if let key = placement.item.poseKey, let perch = perched[key] {
                         perchedOrnamentView(perch.0, size: perch.1, on: placement, rows: rows)
                             .zIndex("o:" + perch.0.id == draggingID ? 3 : 1)
                     }
@@ -2853,7 +3571,12 @@ private struct BookshelfShelfView: View {
             .overlay(alignment: .topLeading) {
                 if showsPicker, let placement = row.first(where: { $0.id == "b:" + (selectedURL ?? "") }),
                    let book = placement.item.book {
-                    posePicker(for: book)
+                    posePicker(key: book.bookUrl, folderID: nil)
+                        .offset(x: pickerX(for: placement), y: max(rowHeight - placement.height - 46, -40))
+                        .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottom)))
+                } else if let folderID = folderPickerID,
+                          let placement = row.first(where: { $0.id == "f:" + folderID }) {
+                    posePicker(key: BookshelfShelfItem.folderPoseKey(folderID), folderID: folderID)
                         .offset(x: pickerX(for: placement), y: max(rowHeight - placement.height - 46, -40))
                         .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottom)))
                 }
@@ -2877,8 +3600,9 @@ private struct BookshelfShelfView: View {
                 ornamentView(ornament, size: size, drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
             case .book(let book):
                 spine(book, pose: placement.pose, drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
-            case .folder(let group, let inside):
-                folderView(group, books: inside, drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
+            case .folder(let folder, let inside):
+                folderView(folder, books: inside, pose: placement.pose,
+                           drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
             }
         }
         .frame(width: placement.boxSize.width, height: placement.boxSize.height, alignment: .bottomLeading)
@@ -2933,6 +3657,7 @@ private struct BookshelfShelfView: View {
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                         selectedURL = nil
                         showsPicker = false
+                        folderPickerID = nil
                         draggingID = id
                     }
                     insertionIndex = nil
@@ -2946,7 +3671,7 @@ private struct BookshelfShelfView: View {
             }
     }
 
-    /// 根据手指位置决定：插到两件东西之间（黄线），或者落在某本书 / 书盒上。
+    /// 根据手指位置决定：插到两件东西之间（黄线），或者落在某本书 / 文件夹上。
     private func updateDropTarget(at location: CGPoint, rows: [[BookshelfShelfPlacement]]) {
         guard let draggingID, !rows.isEmpty else { return }
         let rowIndex = min(max(Int(floor(location.y / rowPitch)), 0), rows.count - 1)
@@ -2960,7 +3685,7 @@ private struct BookshelfShelfView: View {
             case .book:
                 let width = placement.boardMaxX - placement.boardMinX
                 if draggingBook {
-                    // 手指在一本书中间一半的范围内：两本书装进一个书盒。
+                    // 手指在一本书中间一半的范围内：两本书装进一个文件夹。
                     let inset = width * 0.25
                     if location.x > placement.boardMinX + inset, location.x < placement.boardMaxX - inset {
                         target = placement.id
@@ -2971,9 +3696,12 @@ private struct BookshelfShelfView: View {
                     target = placement.id
                 }
             case .folder:
-                // 书拖到书盒上：放进书盒（两边留一点给插入位置）。
+                // 书拖到文件夹上：放进文件夹（两边留一点给插入位置）；摆件拖到平躺的文件夹上：放在上面。
                 let inset = min(8, (placement.boardMaxX - placement.boardMinX) * 0.2)
                 if draggingBook, location.x > placement.boardMinX + inset, location.x < placement.boardMaxX - inset {
+                    target = placement.id
+                } else if draggingOrnament, placement.pose == .flat,
+                          location.x > placement.boardMinX, location.x < placement.boardMaxX {
                     target = placement.id
                 }
             case .ornament:
@@ -3024,21 +3752,21 @@ private struct BookshelfShelfView: View {
                         let destinationURL = String(target.dropFirst(2))
                         if destinationURL != sourceURL,
                            let destination = books.first(where: { $0.bookUrl == destinationURL }) {
-                            Task { await makeFolder(with: source, and: destination) }
+                            makeFolder(with: source, and: destination)
                         }
-                    } else if target.hasPrefix("f:"), let id = Int64(target.dropFirst(2)),
-                              let group = library.groups.first(where: { $0.groupId == id }) {
-                        Task {
-                            await library.setBook(source, in: group, included: true)
-                            showToast("已放入「\(group.groupName)」")
+                    } else if target.hasPrefix("f:"), let folder = folderStore.folder(id: String(target.dropFirst(2))) {
+                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                            folderStore.add(source.bookUrl, to: folder.id)
                         }
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        showToast("已放入「\(folder.name)」")
                     }
                 }
-            } else if draggingID.hasPrefix("o:"), target.hasPrefix("b:") {
+            } else if draggingID.hasPrefix("o:"),
+                      let key = items.first(where: { $0.id == target })?.poseKey {
                 let ornamentID = String(draggingID.dropFirst(2))
-                let url = String(target.dropFirst(2))
-                perches = perches.filter { $0.value != url }
-                perches[ornamentID] = url
+                perches = perches.filter { $0.value != key }
+                perches[ornamentID] = key
                 ShelfOrnamentPerches.save(perches)
             }
         } else if let insertion {
@@ -3058,7 +3786,7 @@ private struct BookshelfShelfView: View {
                     sequence.insert(draggingID, at: to)
                 }
             }
-            // 保留书盒里那些书原来的位置记录，书拿出书盒时回到原处附近。
+            // 保留文件夹里那些书原来的位置记录，书拿出文件夹时回到原处附近。
             let ids = sequence + order.filter { !sequence.contains($0) }
             order = ids
             BookshelfShelfOrder.save(ids)
@@ -3072,35 +3800,23 @@ private struct BookshelfShelfView: View {
         }
     }
 
-    // MARK: 书盒
+    // MARK: 文件夹
 
-    /// 把两本书装进一个新书盒（新建一个书架分组），书盒放在目标书原来的位置。
-    @MainActor
-    private func makeFolder(with source: Book, and destination: Book) async {
-        let names = Set(library.groups.map(\.groupName))
-        var name = "文件夹"
-        var index = 2
-        while names.contains(name) {
-            name = "文件夹\(index)"
-            index += 1
-        }
-        await library.createGroup(name: name)
-        guard let group = library.groups.first(where: { $0.groupName == name && $0.groupId > 0 }) else { return }
-        folderStore.add(group.groupId)
-        // 书盒占用目标书的位置。
+    /// 把两本书装进一个新文件夹（属于当前书架），文件夹放在目标书原来的位置。
+    private func makeFolder(with source: Book, and destination: Book) {
         var ids = order.isEmpty ? allItems.map(\.id) : order
+        let folder = withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+            folderStore.makeFolder(groupID: groupID, bookURLs: [destination.bookUrl, source.bookUrl])
+        }
         if let position = ids.firstIndex(of: "b:" + destination.bookUrl) {
-            ids.insert("f:\(group.groupId)", at: position)
+            ids.insert("f:" + folder.id, at: position)
         } else {
-            ids.append("f:\(group.groupId)")
+            ids.append("f:" + folder.id)
         }
         order = ids
         BookshelfShelfOrder.save(ids)
-        await library.setBook(destination, in: group, included: true)
-        if let refreshed = library.books.first(where: { $0.bookUrl == source.bookUrl }) {
-            await library.setBook(refreshed, in: group, included: true)
-        }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        showToast("已建立「\(folder.name)」")
     }
 
     @MainActor
@@ -3124,7 +3840,7 @@ private struct BookshelfShelfView: View {
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
         .onTapGesture {
-            if selectedURL != nil { deselect() } else { editingOrnament = ornament }
+            if hasSelection { deselect() } else { editingOrnament = ornament }
         }
         .gesture(drag)
         .accessibilityLabel("书架摆件")
@@ -3132,22 +3848,46 @@ private struct BookshelfShelfView: View {
         .accessibilityHint("轻点调整大小或移出书架，长按拖动调整位置")
     }
 
-    private func folderView<G: Gesture>(_ group: BookGroup, books inside: [Book], drag: G) -> some View {
-        BookshelfFolderBox(group: group, books: inside, style: style, boxStyle: folderStore.style(for: group.groupId)) {
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { folderStore.toggleStyle(group.groupId) }
+    private func folderView<G: Gesture>(_ folder: BookshelfFolder, books inside: [Book], pose: BookshelfShelfPose,
+                                        drag: G) -> some View {
+        let size = BookshelfFolderBox.size(count: inside.count, style: style)
+        let box = BookshelfFolderBox(folder: folder, books: inside, style: style) {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            withAnimation(.easeOut(duration: 0.18)) {
+                selectedURL = nil
+                showsPicker = false
+                folderPickerID = folderPickerID == folder.id ? nil : folder.id
+            }
         }
+        return Group {
+            switch pose {
+            case .upright:
+                box
+            case .flat:
+                // 平躺：盒子侧放，长边贴着层板。
+                box
+                    .frame(width: size.width, height: size.height)
+                    .rotationEffect(.degrees(-90))
+                    .frame(width: size.height, height: size.width)
+            case .leanLeft:
+                box.rotationEffect(.degrees(-BookshelfSpine.leanAngle), anchor: .bottomLeading)
+            case .leanRight:
+                box.rotationEffect(.degrees(BookshelfSpine.leanAngle), anchor: .bottomTrailing)
+            }
+        }
+        .contentShape(Rectangle())
         .onTapGesture {
-            if selectedURL != nil {
+            if hasSelection {
                 deselect()
             } else {
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
-                    folderStore.presentedFolderID = group.groupId
+                    folderStore.presentedFolderID = folder.id
                 }
             }
         }
         .gesture(drag)
-        .accessibilityLabel("书盒「\(group.groupName)」，\(inside.count) 本书")
+        .accessibilityLabel("文件夹「\(folder.name)」，\(inside.count) 本书，\(pose.title)")
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("轻点打开，长按拖动调整位置")
     }
@@ -3184,16 +3924,18 @@ private struct BookshelfShelfView: View {
                     withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
                         selectedURL = book.bookUrl
                         showsPicker = false
+                        folderPickerID = nil
                     }
                 }
             }
             .gesture(drag)
             .accessibilityAddTraits(.isButton)
-            .accessibilityHint(isSelected ? "再次轻点打开阅读" : "轻点抽出，长按拖动调整位置或拖到另一本书上装进书盒")
+            .accessibilityHint(isSelected ? "再次轻点打开阅读" : "轻点抽出，长按拖动调整位置或拖到另一本书上装进文件夹")
     }
 
-    private func posePicker(for book: Book) -> some View {
-        let current = requestedPose(book)
+    /// 摆放形态选择条：书和文件夹共用；文件夹多一个「换装」切换装帧样式。
+    private func posePicker(key: String, folderID: String?) -> some View {
+        let current = requestedPose(key: key)
         return HStack(spacing: 0) {
             ForEach(Array(BookshelfShelfPose.allCases.enumerated()), id: \.element.rawValue) { index, item in
                 if index > 0 {
@@ -3201,9 +3943,10 @@ private struct BookshelfShelfView: View {
                 }
                 Button {
                     withAnimation(.spring(response: 0.36, dampingFraction: 0.8)) {
-                        if item == .upright { poses.removeValue(forKey: book.bookUrl) }
-                        else { poses[book.bookUrl] = item.rawValue }
+                        if item == .upright { poses.removeValue(forKey: key) }
+                        else { poses[key] = item.rawValue }
                         showsPicker = false
+                        folderPickerID = nil
                     }
                     BookshelfShelfPose.save(poses)
                 } label: {
@@ -3218,46 +3961,72 @@ private struct BookshelfShelfView: View {
                 .buttonStyle(.plain)
                 .accessibilityAddTraits(item == current ? .isSelected : [])
             }
+            if let folderID {
+                Rectangle().fill(Color.white.opacity(0.25)).frame(width: 0.5, height: 12)
+                Button {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { folderStore.toggleStyle(folderID) }
+                } label: {
+                    Text("换装")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.white.opacity(0.85))
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 24)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("切换文件夹装帧样式")
+            }
         }
         .padding(3)
-        .frame(width: Self.pickerWidth)
+        .frame(width: folderID == nil ? Self.pickerWidth : Self.pickerWidth + 44)
         .background(Color(white: 0.16).opacity(0.92), in: Capsule())
         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
     }
 
     private var shelfBoard: some View {
-        BookshelfBoard(width: contentWidth, height: boardHeight)
+        BookshelfBoard(width: contentWidth, height: boardStyle == "solid" ? boardHeight : 5, solid: boardStyle == "solid")
+            .frame(height: boardHeight, alignment: .top)
     }
 }
 
-/// 一层书架的层板：浅色台面 + 正面 + 下方柔和的阴影。
-private struct BookshelfBoard: View {
+/// 一层书架的层板：立体时为浅色台面 + 正面 + 下方柔和的阴影；平面时只是一条薄板。
+struct BookshelfBoard: View {
     @Environment(\.colorScheme) private var colorScheme
     let width: CGFloat
     let height: CGFloat
+    var solid: Bool = true
 
     var body: some View {
         let dark = colorScheme == .dark
-        VStack(spacing: 0) {
-            // 台面（略带透视的浅色条）
-            Rectangle()
-                .fill(LinearGradient(colors: [dark ? Color(white: 0.30) : Color(white: 0.86),
-                                              dark ? Color(white: 0.24) : Color(white: 0.93)],
-                                     startPoint: .top, endPoint: .bottom))
-                .frame(height: 3)
-            // 正面
-            Rectangle()
-                .fill(LinearGradient(colors: [dark ? Color(white: 0.22) : Color(white: 0.985),
-                                              dark ? Color(white: 0.16) : Color(white: 0.94)],
-                                     startPoint: .top, endPoint: .bottom))
-                .frame(height: max(height - 3, 4))
-                .overlay(alignment: .bottom) {
-                    Rectangle().fill(Color.black.opacity(dark ? 0.4 : 0.06)).frame(height: 0.5)
+        Group {
+            if solid {
+                VStack(spacing: 0) {
+                    // 台面（略带透视的浅色条）
+                    Rectangle()
+                        .fill(LinearGradient(colors: [dark ? Color(white: 0.30) : Color(white: 0.86),
+                                                      dark ? Color(white: 0.24) : Color(white: 0.93)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .frame(height: 3)
+                    // 正面
+                    Rectangle()
+                        .fill(LinearGradient(colors: [dark ? Color(white: 0.22) : Color(white: 0.985),
+                                                      dark ? Color(white: 0.16) : Color(white: 0.94)],
+                                             startPoint: .top, endPoint: .bottom))
+                        .frame(height: max(height - 3, 4))
+                        .overlay(alignment: .bottom) {
+                            Rectangle().fill(Color.black.opacity(dark ? 0.4 : 0.06)).frame(height: 0.5)
+                        }
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+                .shadow(color: .black.opacity(dark ? 0.45 : 0.10), radius: 6, y: 5)
+            } else {
+                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                    .fill(dark ? Color(white: 0.26) : Color(white: 0.88))
+                    .frame(height: max(min(height, 5), 2))
+                    .shadow(color: .black.opacity(dark ? 0.3 : 0.06), radius: 2, y: 1.5)
+            }
         }
         .frame(width: width)
-        .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
-        .shadow(color: .black.opacity(dark ? 0.45 : 0.10), radius: 6, y: 5)
         .accessibilityHidden(true)
     }
 }
@@ -3682,19 +4451,18 @@ private struct BookshelfSpine: View {
     }
 }
 
-// MARK: - 书盒面板
+// MARK: - 文件夹面板
 
-/// 打开的书盒：盖在整个界面上（包括底部标签栏），背景模糊。
-/// 标题可改名；「多选」后可把选中的书移出书盒；「解散」把书放回书架；长按书拖到面板外移出书盒。
+/// 打开的文件夹：盖在整个界面上（包括底部标签栏），背景模糊，书以封面网格排列。
+/// 标题可改名；「多选」后可把选中的书移出文件夹；「解散」把书放回书架；长按书拖到面板外移出文件夹。
 struct BookshelfFolderOverlay: View {
-    @EnvironmentObject private var library: BookLibraryModel
     @ObservedObject private var store = BookshelfFolderStore.shared
 
     var body: some View {
         ZStack {
-            if let id = store.presentedFolderID,
-               let group = library.groups.first(where: { $0.groupId == id }) {
-                BookshelfFolderPanel(group: group)
+            if let id = store.presentedFolderID, let folder = store.folder(id: id) {
+                BookshelfFolderPanel(folder: folder)
+                    .id(folder.id)
                     .transition(.opacity)
             }
         }
@@ -3706,11 +4474,7 @@ private struct BookshelfFolderPanel: View {
     @Environment(\.colorScheme) private var colorScheme
     @EnvironmentObject private var library: BookLibraryModel
     @ObservedObject private var store = BookshelfFolderStore.shared
-    @AppStorage(BookshelfShelfSettings.bookWidthKey) private var bookWidth = BookshelfShelfSettings.defaultWidth
-    @AppStorage(BookshelfShelfSettings.bookHeightKey) private var bookHeight = BookshelfShelfSettings.defaultHeight
-    @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
-    @AppStorage(BookshelfShelfSettings.coverSpineKey) private var coverSpine = false
-    let group: BookGroup
+    let folder: BookshelfFolder
 
     @State private var appeared = false
     @State private var selecting = false
@@ -3723,12 +4487,12 @@ private struct BookshelfFolderPanel: View {
     @State private var panelFrame: CGRect = .zero
 
     private static let space = "bookshelf.folder.panel"
+    private static let columnSpacing: CGFloat = 14
 
-    private var books: [Book] { library.books.filter { ($0.group & group.groupId) != 0 } }
-
-    private var style: BookshelfShelfStyle {
-        BookshelfShelfStyle(bookWidth: CGFloat(bookWidth).rounded(), bookHeight: CGFloat(bookHeight).rounded(),
-                            hideTitles: hideTitles, coverSpine: coverSpine, hideRotateButtons: true)
+    /// 文件夹里的书（按放进去的顺序），已经不在书架上的跳过。
+    private var books: [Book] {
+        let byURL = Dictionary(library.books.map { ($0.bookUrl, $0) }, uniquingKeysWith: { first, _ in first })
+        return folder.bookURLs.compactMap { byURL[$0] }
     }
 
     private var isOutside: Bool {
@@ -3737,15 +4501,19 @@ private struct BookshelfFolderPanel: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let width = min(proxy.size.width - 28, 520)
-            let height = min(max(proxy.size.height * 0.62, 360), proxy.size.height - 120)
+            let width = min(proxy.size.width - 36, 460)
+            let columns = width > 400 ? 4 : 3
+            let cellWidth = ((width - 40 - CGFloat(columns - 1) * Self.columnSpacing) / CGFloat(columns)).rounded(.down)
+            let rows = Int(ceil(Double(max(books.count, 1)) / Double(columns)))
+            let gridHeight = CGFloat(rows) * (cellWidth / 0.7 + 34) + CGFloat(max(rows - 1, 0)) * 16
+            let height = min(max(gridHeight + 130, 260), proxy.size.height - 140)
             ZStack {
                 Rectangle()
                     .fill(.ultraThinMaterial)
-                    .overlay(Color.black.opacity(colorScheme == .dark ? 0.35 : 0.22))
+                    .overlay(Color.black.opacity(colorScheme == .dark ? 0.35 : 0.18))
                     .ignoresSafeArea()
                     .onTapGesture { close() }
-                panel(width: width, height: height)
+                panel(width: width, height: height, columns: columns, cellWidth: cellWidth)
                     .frame(width: width, height: height)
                     .background(
                         GeometryReader { panel in
@@ -3754,15 +4522,15 @@ private struct BookshelfFolderPanel: View {
                                 .onChange(of: panel.frame(in: .named(Self.space))) { panelFrame = $0 }
                         }
                     )
-                    .scaleEffect(appeared ? 1 : 0.9)
+                    .scaleEffect(appeared ? 1 : 0.86)
                     .opacity(appeared ? 1 : 0)
                 if let url = draggingURL, let book = books.first(where: { $0.bookUrl == url }) {
                     // 拖动中的书浮在最上层，拖出面板也看得见。
-                    BookshelfSpine(book: book, pose: .upright, isSelected: false, style: style)
+                    BookshelfCover(book: book, width: cellWidth, height: (cellWidth / 0.7).rounded())
                         .scaleEffect(1.08)
                         .shadow(color: .black.opacity(0.3), radius: 10, y: 6)
                         .rotationEffect(.degrees(isOutside ? -6 : 0))
-                        .position(x: dragLocation.x, y: dragLocation.y - style.bookHeight * 0.3)
+                        .position(x: dragLocation.x, y: dragLocation.y - cellWidth * 0.4)
                         .allowsHitTesting(false)
                         .zIndex(1)
                 }
@@ -3776,60 +4544,64 @@ private struct BookshelfFolderPanel: View {
         }
         .coordinateSpace(name: Self.space)
         .onAppear {
-            withAnimation(.spring(response: 0.34, dampingFraction: 0.82)) { appeared = true }
-        }
-        .onChange(of: books.count) { count in
-            if count == 0 { dissolve() }
+            withAnimation(.spring(response: 0.34, dampingFraction: 0.8)) { appeared = true }
         }
     }
 
-    private func panel(width: CGFloat, height: CGFloat) -> some View {
+    private func panel(width: CGFloat, height: CGFloat, columns: Int, cellWidth: CGFloat) -> some View {
         VStack(spacing: 0) {
             header
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 18)
                 .padding(.top, 14)
-                .padding(.bottom, 10)
+                .padding(.bottom, 6)
             ScrollView(showsIndicators: false) {
-                shelf(width: width - 32)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .padding(.bottom, 20)
+                grid(columns: columns, cellWidth: cellWidth)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 16)
             }
             footer
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 18)
                 .padding(.bottom, 14)
         }
         .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(colorScheme == .dark ? Color(white: 0.12) : Color.white)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .fill(colorScheme == .dark ? Color(white: 0.13).opacity(0.96) : Color.white.opacity(0.94))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(isOutside ? ReadingTheme.coral : Color.clear, lineWidth: 2)
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(isOutside ? ReadingTheme.coral : Color.white.opacity(colorScheme == .dark ? 0.08 : 0.6),
+                              lineWidth: isOutside ? 2 : 0.5)
         )
-        .shadow(color: .black.opacity(0.18), radius: 24, y: 10)
+        .shadow(color: .black.opacity(0.2), radius: 28, y: 12)
     }
 
     private var header: some View {
         HStack(spacing: 6) {
-            Image(systemName: "folder.fill")
-                .font(.system(size: 14))
             Button {
-                draft = group.groupName
+                draft = folder.name
                 renameError = nil
                 withAnimation(.easeOut(duration: 0.2)) { renaming = true }
             } label: {
-                HStack(spacing: 4) {
-                    Text(group.groupName)
-                        .font(.system(size: 16, weight: .semibold))
+                HStack(spacing: 6) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(ReadingTheme.accent)
+                    Text(folder.name)
+                        .font(.system(size: 17, weight: .semibold))
                         .lineLimit(1)
                     Image(systemName: "pencil")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
+                .frame(minHeight: 36)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("书盒名称 \(group.groupName)，轻点修改")
+            .accessibilityLabel("文件夹名称 \(folder.name)，轻点修改")
+            Text("\(books.count) 本")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Button(selecting ? "完成" : "多选") {
                 withAnimation(.easeOut(duration: 0.18)) {
@@ -3844,10 +4616,12 @@ private struct BookshelfFolderPanel: View {
                 .font(.system(size: 13))
                 .foregroundStyle(.primary)
                 .frame(minWidth: 40, minHeight: 36)
-                .accessibilityHint("把书放回书架并删除这个书盒")
+                .accessibilityHint("把书放回书架并删除这个文件夹")
             Button { close() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .background(Color.secondary.opacity(0.12), in: Circle())
                     .frame(width: 36, height: 36)
                     .contentShape(Rectangle())
             }
@@ -3857,90 +4631,96 @@ private struct BookshelfFolderPanel: View {
         .foregroundStyle(.primary)
     }
 
-    /// 书盒里的小书架：书竖着排，按宽度换行。
-    private func shelf(width: CGFloat) -> some View {
-        let style = self.style
-        let perRow = max(Int((width + 3) / (style.bookWidth + 3)), 1)
+    /// 文件夹里的书：封面网格，书名在封面下方。
+    private func grid(columns: Int, cellWidth: CGFloat) -> some View {
         let list = books
-        let rows = stride(from: 0, to: list.count, by: perRow).map { Array(list[$0..<min($0 + perRow, list.count)]) }
-        return VStack(alignment: .leading, spacing: 28) {
+        let rows = stride(from: 0, to: list.count, by: columns).map { Array(list[$0..<min($0 + columns, list.count)]) }
+        return VStack(alignment: .leading, spacing: 16) {
             ForEach(rows.indices, id: \.self) { index in
-                VStack(spacing: 0) {
-                    HStack(alignment: .bottom, spacing: 3) {
-                        ForEach(rows[index]) { book in
-                            bookCell(book, style: style)
-                                .zIndex(book.bookUrl == draggingURL ? 2 : 0)
-                        }
-                        Spacer(minLength: 0)
+                HStack(alignment: .top, spacing: Self.columnSpacing) {
+                    ForEach(rows[index]) { book in
+                        bookCell(book, width: cellWidth)
+                            .zIndex(book.bookUrl == draggingURL ? 2 : 0)
                     }
-                    .frame(width: width, height: style.bookHeight + 12, alignment: .bottomLeading)
-                    .zIndex(rows[index].contains { $0.bookUrl == draggingURL } ? 2 : 0)
-                    BookshelfBoard(width: width, height: 10)
+                    Spacer(minLength: 0)
                 }
                 .zIndex(rows[index].contains { $0.bookUrl == draggingURL } ? 2 : 0)
             }
         }
     }
 
-    private func bookCell(_ book: Book, style: BookshelfShelfStyle) -> some View {
+    private func bookCell(_ book: Book, width: CGFloat) -> some View {
         let isDragging = book.bookUrl == draggingURL
         let isChecked = selected.contains(book.bookUrl)
-        return BookshelfSpine(book: book, pose: .upright, isSelected: false, style: style)
-            .overlay(alignment: .bottom) {
-                if selecting {
-                    Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(isChecked ? ReadingTheme.accent : Color.white)
-                        .background(Circle().fill(Color.black.opacity(isChecked ? 0 : 0.25)))
-                        .padding(.bottom, 6)
-                        .allowsHitTesting(false)
-                }
-            }
-            .opacity(isDragging ? 0.25 : (selecting && !isChecked ? 0.75 : 1))
-            .onTapGesture {
-                if selecting {
-                    if isChecked { selected.remove(book.bookUrl) } else { selected.insert(book.bookUrl) }
-                } else {
-                    store.openRequest = .read(book)
-                    close()
-                }
-            }
-            .gesture(
-                LongPressGesture(minimumDuration: 0.35)
-                    .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
-                    .onChanged { value in
-                        guard case .second(true, let drag) = value else { return }
-                        if draggingURL == nil, let drag {
-                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                            dragLocation = drag.location
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { draggingURL = book.bookUrl }
-                        }
-                        if let drag {
-                            let wasOutside = isOutside
-                            dragLocation = drag.location
-                            if isOutside != wasOutside { UISelectionFeedbackGenerator().selectionChanged() }
-                        }
+        return VStack(alignment: .leading, spacing: 6) {
+            BookshelfCover(book: book, width: width, height: (width / 0.7).rounded())
+                .overlay(alignment: .bottomTrailing) {
+                    if selecting {
+                        Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(isChecked ? ReadingTheme.accent : Color.white)
+                            .background(Circle().fill(isChecked ? Color.white : Color.black.opacity(0.25)))
+                            .padding(5)
+                            .allowsHitTesting(false)
                     }
-                    .onEnded { _ in
-                        let remove = isOutside
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
-                            draggingURL = nil
-                        }
-                        if remove { Task { await removeFromFolder([book.bookUrl]) } }
+                }
+            Text(book.name)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .frame(width: width, alignment: .leading)
+            Text(book.author.isEmpty ? "未知作者" : book.author)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: width, alignment: .leading)
+        }
+        .opacity(isDragging ? 0.25 : (selecting && !isChecked ? 0.7 : 1))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if selecting {
+                if isChecked { selected.remove(book.bookUrl) } else { selected.insert(book.bookUrl) }
+            } else {
+                store.openRequest = .read(book)
+                close()
+            }
+        }
+        .gesture(
+            LongPressGesture(minimumDuration: 0.35)
+                .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.space)))
+                .onChanged { value in
+                    guard case .second(true, let drag) = value else { return }
+                    if draggingURL == nil, let drag {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        dragLocation = drag.location
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { draggingURL = book.bookUrl }
                     }
-            )
-            .accessibilityAddTraits(.isButton)
-            .accessibilityHint(selecting ? "轻点选择" : "轻点打开阅读，长按拖到面板外移出书盒")
+                    if let drag {
+                        let wasOutside = isOutside
+                        dragLocation = drag.location
+                        if isOutside != wasOutside { UISelectionFeedbackGenerator().selectionChanged() }
+                    }
+                }
+                .onEnded { _ in
+                    let remove = isOutside
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                        draggingURL = nil
+                    }
+                    if remove { removeFromFolder([book.bookUrl]) }
+                }
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint(selecting ? "轻点选择" : "轻点打开阅读，长按拖到面板外移出文件夹")
     }
 
     @ViewBuilder
     private var footer: some View {
         if selecting {
             Button {
-                let urls = selected
-                Task { await removeFromFolder(urls) }
+                removeFromFolder(selected)
             } label: {
-                Text(selected.isEmpty ? "选择要移出的书" : "移出书盒（\(selected.count)）")
+                Text(selected.isEmpty ? "选择要移出的书" : "移出文件夹（\(selected.count)）")
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(selected.isEmpty ? Color.secondary : Color.white)
                     .frame(maxWidth: .infinity)
@@ -3950,7 +4730,7 @@ private struct BookshelfFolderPanel: View {
             .buttonStyle(.plain)
             .disabled(selected.isEmpty)
         } else {
-            Text(isOutside ? "松手移出书盒" : "长按书封拖到面板外 = 移出书盒")
+            Text(isOutside ? "松手移出文件夹" : "长按书封拖到面板外 = 移出文件夹")
                 .font(.system(size: 11))
                 .foregroundStyle(isOutside ? ReadingTheme.coral : Color.secondary)
                 .frame(maxWidth: .infinity)
@@ -3964,7 +4744,7 @@ private struct BookshelfFolderPanel: View {
                 .ignoresSafeArea()
                 .onTapGesture { withAnimation(.easeOut(duration: 0.2)) { renaming = false } }
             VStack(alignment: .leading, spacing: 14) {
-                Text("书盒名称")
+                Text("文件夹名称")
                     .font(.system(size: 16, weight: .semibold))
                 TextField("输入名称", text: $draft)
                     .font(.system(size: 15))
@@ -3996,15 +4776,11 @@ private struct BookshelfFolderPanel: View {
                         .foregroundStyle(.primary)
                         .frame(width: 64, height: 38)
                     Button {
-                        let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                        withAnimation(.easeOut(duration: 0.2)) { renaming = false }
-                        guard !name.isEmpty, name != group.groupName else { return }
-                        if library.groups.contains(where: { $0.groupName == name && $0.groupId != group.groupId }) {
-                            renameError = "已经有名为「\(name)」的分组了"
-                            withAnimation(.easeOut(duration: 0.2)) { renaming = true }
-                            return
+                        if let error = store.rename(folder.id, to: draft) {
+                            renameError = error
+                        } else {
+                            withAnimation(.easeOut(duration: 0.2)) { renaming = false }
                         }
-                        Task { await library.renameGroup(group, name: name) }
                     } label: {
                         Text("保存")
                             .font(.system(size: 14, weight: .semibold))
@@ -4027,7 +4803,7 @@ private struct BookshelfFolderPanel: View {
 
     private func close() {
         withAnimation(.easeIn(duration: 0.16)) { appeared = false }
-        let id = group.groupId
+        let id = folder.id
         let store = self.store
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 120_000_000)
@@ -4035,88 +4811,149 @@ private struct BookshelfFolderPanel: View {
         }
     }
 
-    @MainActor
-    private func removeFromFolder(_ urls: Set<String>) async {
-        for url in urls {
-            if let book = library.books.first(where: { $0.bookUrl == url }) {
-                await library.setBook(book, in: group, included: false)
-            }
-        }
+    private func removeFromFolder(_ urls: Set<String>) {
         selected.subtract(urls)
-        if books.isEmpty { dissolve() }
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            store.remove(urls, from: folder.id)
+        }
     }
 
     private func dissolve() {
-        let group = self.group
-        store.remove(group.groupId)
-        Task { await library.deleteGroup(group) }
+        let id = folder.id
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { store.dissolve(id) }
     }
 }
 
 // MARK: - 书架设置
 
-/// 书架设置：书架页视图、隐藏书名作者、拟真书大小、封面书脊、隐藏旋转按钮、封面样式。
+/// 书架设置：通用选项（移除时删除本地文件、右侧切换条、书架页视图），再按当前视图显示各自的选项：
+/// - 网格：表格列数、隐藏书名/作者、隐藏书架底座、封面样式、书架样式；
+/// - 列表：封面样式、书架样式；
+/// - 仿真书架：隐藏书名/作者、仿真书大小、封面书脊、隐藏旋转按钮、书架样式。
 struct BookshelfShelfSettingsSheet: View {
     @AppStorage("bookshelfLayout") private var bookshelfLayout = "grid3"
+    @AppStorage(BookshelfShelfSettings.deleteLocalKey) private var deleteLocal = false
+    @AppStorage(BookshelfShelfSettings.sideSwitcherKey) private var sideSwitcher = true
     @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
+    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
+    @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
     @AppStorage(BookshelfShelfSettings.bookWidthKey) private var bookWidth = BookshelfShelfSettings.defaultWidth
     @AppStorage(BookshelfShelfSettings.bookHeightKey) private var bookHeight = BookshelfShelfSettings.defaultHeight
     @AppStorage(BookshelfShelfSettings.coverSpineKey) private var coverSpine = false
     @AppStorage(BookshelfShelfSettings.hideRotateKey) private var hideRotateButtons = false
     @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
 
+    private var isGrid: Bool { bookshelfLayout.hasPrefix("grid") }
+    private var isShelf: Bool { bookshelfLayout == "shelf" }
+    private var isList: Bool { !isGrid && !isShelf }
+    private var gridCount: Int { BookshelfShelfSettings.gridCount(bookshelfLayout) }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
+                Text("书架设置")
+                    .font(.title3.bold())
+                    .accessibilityAddTraits(.isHeader)
+                toggleRow(title: "移除同时删除本地文件",
+                          detail: "从书架移除后，若该书不在其他书架，删除其本地文件（含导入的原文件），不可恢复",
+                          isOn: $deleteLocal)
+                toggleRow(title: "书架右侧切换条",
+                          detail: "书架右边竖型控制条：在各个书架之间快速切换；关闭后不再显示",
+                          isOn: $sideSwitcher)
                 row(title: "书架页视图", detail: "书架布局：网格封面、行卡列表或实体仿真书架") {
                     HStack(spacing: 4) {
-                        layoutChoice("square.grid.2x2.fill", selected: bookshelfLayout.hasPrefix("grid"), label: "网格") {
-                            if !bookshelfLayout.hasPrefix("grid") { bookshelfLayout = "grid3" }
+                        layoutChoice("square.grid.2x2.fill", selected: isGrid, label: "网格封面") {
+                            if !isGrid { bookshelfLayout = "grid\(BookshelfShelfSettings.lastGridCount)" }
                         }
-                        layoutChoice("list.bullet", selected: bookshelfLayout == "list" || bookshelfLayout == "compact", label: "列表") {
+                        layoutChoice("list.bullet", selected: isList, label: "行卡列表") {
                             bookshelfLayout = "list"
                         }
-                        layoutChoice("books.vertical.fill", selected: bookshelfLayout == "shelf", label: "仿真书架") {
+                        layoutChoice("books.vertical.fill", selected: isShelf, label: "仿真书架") {
                             bookshelfLayout = "shelf"
                         }
                     }
                     .padding(3)
                     .background(Color.secondary.opacity(0.1), in: Capsule())
                 }
-                toggleRow(title: "隐藏书名/作者", detail: "网格与仿真视图隐藏书名作者（纯净书脊）", isOn: $hideTitles)
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("仿真书大小").font(.headline)
-                    Text("统一调整书高与书宽，书脊与书盒文字一并等比缩放")
-                        .font(.caption).foregroundStyle(.secondary)
-                    AdjustableSlider(title: "书宽", value: $bookWidth, range: BookshelfShelfSettings.widthRange,
-                                     format: { "\(Int($0)) pt" })
-                    AdjustableSlider(title: "书高", value: $bookHeight, range: BookshelfShelfSettings.heightRange,
-                                     format: { "\(Int($0)) pt" })
-                    Button("恢复默认大小") {
-                        bookWidth = BookshelfShelfSettings.defaultWidth
-                        bookHeight = BookshelfShelfSettings.defaultHeight
+                if isGrid {
+                    row(title: "表格列数", detail: "网格视图每行最少几列；宽屏自动加列") {
+                        HStack(spacing: 4) {
+                            ForEach(3...5, id: \.self) { count in
+                                textChoice("\(count)", selected: gridCount == count, width: 34) {
+                                    bookshelfLayout = "grid\(count)"
+                                    BookshelfShelfSettings.lastGridCount = count
+                                }
+                            }
+                        }
+                        .padding(3)
+                        .background(Color.secondary.opacity(0.1), in: Capsule())
                     }
-                    .font(.footnote)
-                    .foregroundStyle(ReadingTheme.accent)
-                }
-                toggleRow(title: "封面书脊", detail: "书脊直接显示封面截取图案（关闭后按封面主色装帧）", isOn: $coverSpine)
-                toggleRow(title: "隐藏旋转按钮", detail: "仿真视图隐藏书脊与书盒上的旋转按钮（透明后依旧可点击）", isOn: $hideRotateButtons)
-                row(title: "封面样式", detail: "仅网格书架页封面：实体在封面左侧呈现书脊凹陷质感") {
-                    HStack(spacing: 4) {
-                        textChoice("平面", selected: coverStyle != "solid") { coverStyle = "flat" }
-                        textChoice("实体", selected: coverStyle == "solid") { coverStyle = "solid" }
+                    toggleRow(title: "隐藏书名/作者", detail: "网格与仿真视图隐藏书名作者与遮罩蒙版（纯净封面与书脊）", isOn: $hideTitles)
+                    toggleRow(title: "隐藏书架底座", detail: "网格视图不画搁板（含立体板）；板位留白一并收掉", isOn: $hideShelfBase)
+                    coverStyleRow
+                    boardStyleRow
+                } else if isList {
+                    coverStyleRow
+                    boardStyleRow
+                } else {
+                    toggleRow(title: "隐藏书名/作者", detail: "网格与仿真视图隐藏书名作者与遮罩蒙版（纯净书脊）", isOn: $hideTitles)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("仿真书大小").font(.headline)
+                        Text("统一调整书高与书宽，书脊与文件夹文字一并等比缩放")
+                            .font(.caption).foregroundStyle(.secondary)
+                        AdjustableSlider(title: "书宽", value: $bookWidth, range: BookshelfShelfSettings.widthRange,
+                                         format: { "\(Int($0)) pt" })
+                        AdjustableSlider(title: "书高", value: $bookHeight, range: BookshelfShelfSettings.heightRange,
+                                         format: { "\(Int($0)) pt" })
+                        Button("恢复默认大小") {
+                            bookWidth = BookshelfShelfSettings.defaultWidth
+                            bookHeight = BookshelfShelfSettings.defaultHeight
+                        }
+                        .font(.footnote)
+                        .foregroundStyle(ReadingTheme.accent)
                     }
-                    .padding(3)
-                    .background(Color.secondary.opacity(0.1), in: Capsule())
+                    toggleRow(title: "封面书脊", detail: "书脊直接显示封面截取图案（关闭后按封面主色装帧）", isOn: $coverSpine)
+                    toggleRow(title: "隐藏旋转按钮", detail: "仿真视图隐藏书脊与文件夹上的旋转按钮（透明后依旧可点击）", isOn: $hideRotateButtons)
+                    boardStyleRow
                 }
             }
             .padding(.horizontal, 24)
             .padding(.top, 28)
             .padding(.bottom, 40)
+            .animation(.easeOut(duration: 0.2), value: bookshelfLayout)
         }
         .tint(ReadingTheme.ink)
         .readingLivePreviewSheet()
         .readingPresentationDragIndicator()
+    }
+
+    private var coverStyleRow: some View {
+        row(title: "封面样式", detail: "仅书架页封面：实体在封面左侧呈现书脊凹陷质感") {
+            HStack(spacing: 8) {
+                BookshelfCoverStyleSample(solid: coverStyle == "solid")
+                HStack(spacing: 4) {
+                    textChoice("平面", selected: coverStyle != "solid") { coverStyle = "flat" }
+                    textChoice("实体", selected: coverStyle == "solid") { coverStyle = "solid" }
+                }
+                .padding(3)
+                .background(Color.secondary.opacity(0.1), in: Capsule())
+            }
+        }
+    }
+
+    private var boardStyleRow: some View {
+        row(title: "书架样式", detail: "仅书架页搁板：立体架板带顶面与前立面的厚度感") {
+            HStack(spacing: 8) {
+                BookshelfBoard(width: 44, height: boardStyle == "solid" ? 12 : 5, solid: boardStyle == "solid")
+                    .frame(height: 16)
+                HStack(spacing: 4) {
+                    textChoice("平面", selected: boardStyle != "solid") { boardStyle = "flat" }
+                    textChoice("立体", selected: boardStyle == "solid") { boardStyle = "solid" }
+                }
+                .padding(3)
+                .background(Color.secondary.opacity(0.1), in: Capsule())
+            }
+        }
     }
 
     private func row<Accessory: View>(title: String, detail: String, @ViewBuilder accessory: () -> Accessory) -> some View {
@@ -4154,17 +4991,39 @@ struct BookshelfShelfSettingsSheet: View {
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
-    private func textChoice(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func textChoice(_ title: String, selected: Bool, width: CGFloat = 44, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 13, weight: selected ? .semibold : .regular))
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
-                .frame(width: 44, height: 30)
+                .frame(width: width, height: 30)
                 .background(selected ? Color(UIColor.systemBackground) : Color.clear, in: Capsule())
                 .shadow(color: .black.opacity(selected ? 0.1 : 0), radius: 2, y: 1)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// 设置里「封面样式」旁边的小样：一本深色小书，实体时左侧有书脊凹陷。
+private struct BookshelfCoverStyleSample: View {
+    let solid: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2, style: .continuous)
+            .fill(Color(white: 0.16))
+            .frame(width: 18, height: 26)
+            .overlay {
+                Image(systemName: "book.closed.fill")
+                    .font(.system(size: 8))
+                    .foregroundStyle(Color.white.opacity(0.85))
+            }
+            .overlay(alignment: .leading) {
+                if solid { BookshelfSolidSpineShade(width: 18) }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
+            .shadow(color: .black.opacity(solid ? 0.25 : 0), radius: 1.5, x: 1, y: 1.5)
+            .accessibilityHidden(true)
     }
 }
 
