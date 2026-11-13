@@ -690,9 +690,9 @@
 			};
 			buildConfigurationList = D60000000000000000000001 /* Build configuration list for PBXProject "Legado" */;
 			compatibilityVersion = "Xcode 14.0";
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
-			knownRegions = (en, Base);
+			knownRegions = ("zh-Hans", en, Base);
 			mainGroup = D40000000000000000000001;
 			packageReferences = (
 				F30000000000000000000001 /* XCRemoteSwiftPackageReference "SwiftSoup" */,
