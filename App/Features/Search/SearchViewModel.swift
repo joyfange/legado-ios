@@ -27,6 +27,10 @@ final class SearchViewModel: ObservableObject {
     private var currentKeyword = ""
     private var pagedSources: [BookSource] = []
     private var currentPrecision = false
+    /// 「不聚合」时每个书源的结果单独成行，不合并同名同作者的书。
+    private var currentAggregate = true
+    private var unmerged: [SearchBook] = []
+    private var unmergedIndex: [String: Int] = [:]
     private var page = 1
     private var activePage = 1
     private var searchGeneration = 0
@@ -50,7 +54,7 @@ final class SearchViewModel: ObservableObject {
 
     deinit { searchTask?.cancel() }
 
-    func search(keyword: String, sources: [BookSource], precision: Bool = false) {
+    func search(keyword: String, sources: [BookSource], precision: Bool = false, aggregate: Bool = true) {
         let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !keyword.isEmpty else { cancel(reset: true); return }
         searchTask?.cancel()
@@ -58,6 +62,9 @@ final class SearchViewModel: ObservableObject {
         currentKeyword = keyword
         submittedKeyword = keyword
         currentPrecision = precision
+        currentAggregate = aggregate
+        unmerged = []
+        unmergedIndex = [:]
         page = 1
         activePage = 1
         pendingSources = eligible(sources)
@@ -111,6 +118,7 @@ final class SearchViewModel: ObservableObject {
                     return age >= 0 && age < 86_400_000 && source.lastUpdateTime <= book.time
                 }
                 accumulator.add(usable)
+                addUnmerged(usable)
                 cachedIdentities = Set(usable.map { BookSearchService.mergeIdentity(for: $0) })
                 preferred = Set(usable.flatMap(\.origins)).intersection(Set(enabled.keys))
                 publishResults()
@@ -126,6 +134,7 @@ final class SearchViewModel: ObservableObject {
                     if requestedPage > 1 && !liveIdentities.contains(identity) { foundMoreOnActivePage = true }
                     liveIdentities.insert(identity)
                     accumulator.add([book], replacingExisting: cachedIdentities.remove(identity) != nil)
+                    addUnmerged([book])
                 }
                 let now = ProcessInfo.processInfo.systemUptime
                 if books.isEmpty || now - lastVisibleUpdate >= 0.25 {
@@ -143,8 +152,43 @@ final class SearchViewModel: ObservableObject {
         }
     }
 
+    /// 切换「不聚合」只重新整理已有结果，不重新请求书源。
+    func setAggregate(_ aggregate: Bool) {
+        guard aggregate != currentAggregate else { return }
+        currentAggregate = aggregate
+        guard !currentKeyword.isEmpty else { return }
+        publishResults()
+    }
+
+    private func addUnmerged(_ incoming: [SearchBook]) {
+        for book in incoming {
+            let key = BookSearchService.mergeIdentity(for: book) + "\u{1}" + book.origin
+            if let index = unmergedIndex[key] {
+                unmerged[index] = book
+            } else {
+                unmergedIndex[key] = unmerged.count
+                unmerged.append(book)
+            }
+        }
+    }
+
+    private func rankedUnmerged() -> [SearchBook] {
+        let keyword = currentKeyword
+        var buckets = Array(repeating: [SearchBook](), count: 4)
+        for var book in unmerged {
+            book.origins = [book.origin]
+            let rank: Int
+            if book.name == keyword || book.author == keyword { rank = 0 }
+            else if book.kind?.contains(keyword) == true { rank = 1 }
+            else if book.name.contains(keyword) || book.author.contains(keyword) { rank = 2 }
+            else { rank = 3 }
+            buckets[rank].append(book)
+        }
+        return buckets.flatMap { $0 }
+    }
+
     private func publishResults() {
-        let values = accumulator.results(keyword: currentKeyword)
+        let values = currentAggregate ? accumulator.results(keyword: currentKeyword) : rankedUnmerged()
         let visible = currentPrecision ? values.filter {
             $0.name.localizedCaseInsensitiveContains(currentKeyword)
                 || $0.author.localizedCaseInsensitiveContains(currentKeyword)
@@ -175,6 +219,8 @@ final class SearchViewModel: ObservableObject {
         isLoadingMore = false
         if reset {
             accumulator = .init()
+            unmerged = []
+            unmergedIndex = [:]
             cachedIdentities = []
             liveIdentities = []
             collectedDiagnostics = []

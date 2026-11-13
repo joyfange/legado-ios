@@ -88,7 +88,7 @@ struct LocalBookDetailView: View {
             }
             .padding(.horizontal, 16).padding(.bottom, 30)
         }
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .navigationTitle(book.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

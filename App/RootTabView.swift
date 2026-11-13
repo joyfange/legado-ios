@@ -5,6 +5,9 @@ import PhotosUI
 struct RootTabView: View {
     @EnvironmentObject private var sourceLibrary: SourceLibraryModel
     private enum Tab: Hashable { case bookshelf, explore, statistics, my }
+    /// 切换或编辑主题后根视图会整体刷新，记住当前标签，刷新后停留在原处。
+    @MainActor private static var lastSelection: Tab?
+    @Environment(\.appTheme) private var appTheme
     @State private var selection: Tab
     @State private var showsDemoReader = false
     @State private var didOpenDemoReader = false
@@ -28,7 +31,7 @@ struct RootTabView: View {
             default: .bookshelf
             }
         }
-        _selection = State(initialValue: initial)
+        _selection = State(initialValue: Self.lastSelection ?? initial)
     }
 
     var body: some View {
@@ -73,15 +76,15 @@ struct RootTabView: View {
                     showsDemoReader = ProcessInfo.processInfo.arguments.contains("-uiDemoReader")
                 }
             }
-                .tabItem { Label("书架", systemImage: "book.fill") }
+                .tabItem { themedTabItem(.shelf) }
                 .tag(Tab.bookshelf)
 
             ReadingNavigationStack { ExploreView() }
-                .tabItem { Label("发现", systemImage: "safari") }
+                .tabItem { themedTabItem(.discover) }
                 .tag(Tab.explore)
 
             ReadingNavigationStack { ReadingStatisticsView() }
-                .tabItem { Label("统计", systemImage: "chart.bar") }
+                .tabItem { themedTabItem(.statistics) }
                 .tag(Tab.statistics)
 
             ReadingNavigationStack {
@@ -101,10 +104,11 @@ struct RootTabView: View {
                     SettingsView()
                 }
             }
-                .tabItem { Label("我的", systemImage: "person.crop.circle") }
+                .tabItem { themedTabItem(.profile) }
                 .tag(Tab.my)
         }
         .readingTabBarBackground()
+        .onChange(of: selection) { Self.lastSelection = $0 }
         .overlay { BookshelfFolderOverlay() }
         .preferredColorScheme(themeMode == "2" ? .dark : (themeMode == "1" || themeMode == "3" ? .light : nil))
         .transaction { transaction in
@@ -132,6 +136,20 @@ struct RootTabView: View {
         .toggleStyle(SwitchToggleStyle(tint: ReadingTheme.toggleTint))
     }
 
+    /// 底栏标签：跟随主题的「Tab栏」显示方式（图标和文字 / 仅图标 / 仅文字）与自定义图标。
+    @ViewBuilder
+    private func themedTabItem(_ tab: LibraryTab) -> some View {
+        switch appTheme.customization?.tabStyle ?? .iconsAndText {
+        case .iconsAndText:
+            ThemeTabIconImage.image(tab: tab, theme: appTheme, size: 25)
+            Text(tab.title)
+        case .icons:
+            ThemeTabIconImage.image(tab: tab, theme: appTheme, size: 25)
+        case .text:
+            Text(tab.title)
+        }
+    }
+
     private var requestedDemoPage: String? {
         let arguments = ProcessInfo.processInfo.arguments
         guard let index = arguments.firstIndex(of: "-uiDemoTab"), arguments.indices.contains(index + 1) else {
@@ -150,6 +168,7 @@ struct RootTabView: View {
 
 private struct BookshelfView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.appTheme) private var appTheme
     @EnvironmentObject private var library: BookLibraryModel
     @EnvironmentObject private var sources: SourceLibraryModel
     @ObservedObject private var folderStore = BookshelfFolderStore.shared
@@ -248,7 +267,7 @@ private struct BookshelfView: View {
                 .padding(.bottom, 32)
             }
         }
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .overlay(alignment: .trailing) {
             if showsSideSwitcher {
                 sideSwitcherBar
@@ -348,7 +367,15 @@ private struct BookshelfView: View {
 
     // MARK: 网格
 
+    /// 主题「书架」设置（列数、封面宽度）：只在所选主题启用了自定义界面设置时生效。
+    private var themeShelfMetrics: ThemeShelfMetrics? {
+        guard let customization = appTheme.customization else { return nil }
+        return ThemeShelfMetrics(width: contentWidth + 48, customization: customization,
+                                 accessibility: dynamicTypeSize.isAccessibilitySize)
+    }
+
     private var gridColumnCount: Int {
+        if let metrics = themeShelfMetrics { return metrics.columns }
         if dynamicTypeSize.isAccessibilitySize { return 2 }
         let minimum = BookshelfShelfSettings.gridCount(bookshelfLayout)
         // 宽屏自动加列：每列至少约 110pt。
@@ -360,7 +387,8 @@ private struct BookshelfView: View {
         let entries = folderStore.entries(for: displayedBooks, groupID: selectedGroup.groupId)
         let columns = gridColumnCount
         let inset: CGFloat = hideShelfBase ? 0 : 6
-        let cellWidth = ((contentWidth - inset * 2 - CGFloat(columns - 1) * Self.gridSpacing) / CGFloat(columns)).rounded(.down)
+        let fitted = ((contentWidth - inset * 2 - CGFloat(columns - 1) * Self.gridSpacing) / CGFloat(columns)).rounded(.down)
+        let cellWidth = themeShelfMetrics.map { min(fitted, $0.coverWidth.rounded(.down)) } ?? fitted
         let rows = stride(from: 0, to: entries.count, by: columns).map { Array(entries[$0..<min($0 + columns, entries.count)]) }
         let solid = boardStyle == "solid"
         return VStack(alignment: .leading, spacing: hideShelfBase ? 22 : 26) {
@@ -1338,8 +1366,14 @@ private struct BookshelfRow: View {
     }
 }
 
+/// 搜索页（功能与布局按 bookon 的搜索页搬运）：
+/// - 顶部常驻输入框（不再使用系统搜索栏，清除、聚焦都不会让下面的内容上下跳动）；
+/// - 四个选项：分组（记住）、精确（记住）、单源（每次重新指定）、不聚合（记住）；改了选项且已有结果时自动按新条件重搜；
+/// - 搜索历史以胶囊呈现，自动换行；点胶囊再次搜索，胶囊里的 × 删除单条，清空需确认；
+/// - 进度显示「已完成/总数，找到 N 本，K 个书源失败」，搜索中可随时停止。
 struct SearchView: View {
     @EnvironmentObject private var library: SourceLibraryModel
+    @ThemePalette private var palette
     let fixedSource: BookSource?
     private let initialKeyword: String
     @State private var keyword: String
@@ -1348,9 +1382,12 @@ struct SearchView: View {
     @State private var selectedGroups = Set<String>()
     @State private var selectedSourceID: String?
     @State private var didStartInitialSearch = false
-    @State private var searchIsPresented = false
     @State private var didAutoFocus = false
+    @State private var confirmsClearHistory = false
+    @FocusState private var fieldFocused: Bool
     @AppStorage("precisionSearch") private var precisionSearch = false
+    @AppStorage("search.scope.group") private var scopeGroup = ""
+    @AppStorage("search.noAggregate") private var noAggregate = false
 
     init(fixedSource: BookSource? = nil, initialKeyword: String = "") {
         self.fixedSource = fixedSource
@@ -1361,6 +1398,7 @@ struct SearchView: View {
     var body: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
+                header
                 switch model.state {
                 case .idle:
                     idleContent
@@ -1379,11 +1417,10 @@ struct SearchView: View {
             .padding(.top, 8)
             .padding(.bottom, 28)
         }
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .navigationTitle("搜索")
-        .readingSearchable(text: $keyword, isPresented: $searchIsPresented, prompt: "书名或作者", alwaysVisible: true)
+        .navigationBarTitleDisplayMode(.inline)
         .readingScrollDismissesKeyboard()
-        .onSubmit(of: [.text, .search]) { startSearch() }
         .onDisappear {
             if model.state == .searching || model.isLoadingMore { model.cancel() }
         }
@@ -1393,23 +1430,28 @@ struct SearchView: View {
             }
         }
         .onChange(of: library.sources.count) { _ in
+            normalizeScope()
             guard !didStartInitialSearch,
                   !initialKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !library.sources.isEmpty else { return }
             didStartInitialSearch = true
             startSearch()
         }
+        .onChange(of: scopeGroup) { _ in rerun() }
+        .onChange(of: selectedSourceID) { _ in rerun() }
+        .onChange(of: selectedGroups) { _ in rerun() }
+        .onChange(of: precisionSearch) { _ in rerun() }
+        .onChange(of: noAggregate) { value in model.setAggregate(!value) }
         .task {
+            normalizeScope()
             await model.loadSearchKeywords()
             if initialKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                // 只在首次进入时自动聚焦，并等推入动画结束后再激活，
-                // 避免搜索栏在转场中途收起导航栏造成“卡一下”的跳动；
-                // 从书籍详情返回时不再重复弹出键盘。
+                // 只在首次进入时自动聚焦，并等推入动画结束后再弹出键盘；从书籍详情返回时不再弹出。
                 guard !didAutoFocus else { return }
                 didAutoFocus = true
                 try? await Task.sleep(nanoseconds: 450_000_000)
                 guard !Task.isCancelled, model.state == .idle else { return }
-                searchIsPresented = true
+                fieldFocused = true
             } else if !library.sources.isEmpty, !didStartInitialSearch {
                 didStartInitialSearch = true
                 startSearch()
@@ -1417,26 +1459,33 @@ struct SearchView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Toggle("精准搜索", isOn: $precisionSearch)
-                    Button("分组或书源", systemImage: "scope") { showsScope = true }
-                    NavigationLink {
-                        SourceManagementView()
-                    } label: {
-                        Label("书源管理", systemImage: "network")
+                HStack(spacing: 4) {
+                    if model.state == .searching || model.isLoadingMore {
+                        Button("停止") { model.cancel() }
+                            .accessibilityIdentifier("search.stop")
                     }
-                    if model.state == .searching {
-                        Button("停止搜索", systemImage: "stop.fill", role: .destructive) {
-                            model.cancel()
+                    Menu {
+                        Toggle("精准搜索", isOn: $precisionSearch)
+                        Toggle("不聚合", isOn: $noAggregate)
+                        Button("分组或书源", systemImage: "scope") { showsScope = true }
+                        NavigationLink {
+                            SourceManagementView()
+                        } label: {
+                            Label("书源管理", systemImage: "network")
                         }
-                    } else if model.isPaused {
-                        Button("继续搜索", systemImage: "play.fill") { model.resume() }
+                        if model.state == .searching {
+                            Button("停止搜索", systemImage: "stop.fill", role: .destructive) {
+                                model.cancel()
+                            }
+                        } else if model.isPaused {
+                            Button("继续搜索", systemImage: "play.fill") { model.resume() }
+                        }
+                    } label: {
+                        Label("搜索选项", systemImage: "slider.horizontal.3")
                     }
-                } label: {
-                    Label("搜索选项", systemImage: "slider.horizontal.3")
+                    .accessibilityLabel("搜索选项")
+                    .accessibilityIdentifier("search.options")
                 }
-                .accessibilityLabel("搜索选项")
-                .accessibilityIdentifier("search.options")
             }
         }
         .sheet(isPresented: $showsScope) {
@@ -1447,35 +1496,160 @@ struct SearchView: View {
                 selectedSourceID: $selectedSourceID
             )
         }
+        .alert("清空搜索历史？", isPresented: $confirmsClearHistory) {
+            Button("清空全部记录", role: .destructive) { Task { await model.clearSearchKeywords() } }
+            Button("取消", role: .cancel) {}
+        } message: { Text("仅删除本机搜索记录，不影响书架和阅读进度。") }
+    }
+
+    // MARK: 顶部：输入框 + 四个选项
+
+    private var header: some View {
+        VStack(spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(palette.secondary)
+                    .accessibilityHidden(true)
+                TextField("书名或作者", text: $keyword)
+                    .focused($fieldFocused)
+                    .submitLabel(.search)
+                    .onSubmit { startSearch() }
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .accessibilityIdentifier("search.field")
+                if !keyword.isEmpty {
+                    Button {
+                        // 只清空文字、保留键盘：输入框位置固定，内容不会上下跳动。
+                        keyword = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(palette.secondary)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("清除输入")
+                }
+            }
+            .font(.body)
+            .padding(.leading, 14)
+            .padding(.trailing, keyword.isEmpty ? 14 : 6)
+            .frame(minHeight: 44)
+            .modifier(ShelfGlass(shape: Capsule(), isCard: true))
+
+            if fixedSource == nil {
+                HStack(spacing: 8) {
+                    Menu {
+                        Picker("分组", selection: groupSelection) {
+                            Text("全部分组").tag("")
+                            ForEach(availableGroups, id: \.self) { Text($0).tag($0) }
+                        }
+                    } label: {
+                        optionLabel(groupTitle, symbol: "square.stack.3d.up",
+                                    active: (!scopeGroup.isEmpty || !selectedGroups.isEmpty) && selectedSourceID == nil)
+                    }
+                    .accessibilityIdentifier("search.group")
+                    optionToggle("精确", isOn: $precisionSearch, id: "search.precision")
+                    Menu {
+                        Picker("书源", selection: sourceSelection) {
+                            Text("全部书源").tag("")
+                            ForEach(searchableSources) { Text($0.bookSourceName).tag($0.id) }
+                        }
+                    } label: {
+                        optionLabel(searchableSources.first { $0.id == selectedSourceID }?.bookSourceName ?? "单源",
+                                    symbol: "scope", active: selectedSourceID != nil)
+                    }
+                    .accessibilityIdentifier("search.single")
+                    optionToggle("不聚合", isOn: $noAggregate, id: "search.noAggregate")
+                }
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    private func optionLabel(_ title: String, symbol: String, active: Bool) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+            Text(title).lineLimit(1).minimumScaleFactor(0.75)
+        }
+        .font(.footnote)
+        .foregroundStyle(active ? palette.accent : palette.primary)
+        .padding(.horizontal, 6)
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .modifier(ShelfGlass(shape: Capsule(), isCard: true))
+        .overlay {
+            if active { Capsule().strokeBorder(palette.accent.opacity(0.6), lineWidth: 1) }
+        }
+        .contentShape(Capsule())
+    }
+
+    private func optionToggle(_ title: String, isOn: Binding<Bool>, id: String) -> some View {
+        Button { isOn.wrappedValue.toggle() } label: {
+            optionLabel(title, symbol: isOn.wrappedValue ? "checkmark.circle.fill" : "circle", active: isOn.wrappedValue)
+        }
+        .buttonStyle(.plain)
+        .accessibilityValue(isOn.wrappedValue ? "已开启" : "已关闭")
+        .accessibilityIdentifier(id)
+    }
+
+    private var searchableSources: [BookSource] {
+        library.sources.filter { $0.enabled && $0.searchUrl?.isEmpty == false }
+    }
+
+    private var availableGroups: [String] {
+        var seen = Set<String>()
+        var out: [String] = []
+        for source in searchableSources {
+            for group in source.groups where !group.isEmpty && seen.insert(group).inserted {
+                out.append(group)
+            }
+        }
+        return out
+    }
+
+    private var groupTitle: String {
+        if !scopeGroup.isEmpty { return scopeGroup }
+        if selectedGroups.count == 1, let only = selectedGroups.first { return only }
+        if selectedGroups.count > 1 { return "\(selectedGroups.count) 个分组" }
+        return "全部分组"
+    }
+
+    private var groupSelection: Binding<String> {
+        Binding(get: { scopeGroup }, set: { value in
+            selectedGroups = []
+            selectedSourceID = nil
+            scopeGroup = value
+        })
+    }
+
+    private var sourceSelection: Binding<String> {
+        Binding(get: { selectedSourceID ?? "" }, set: { value in
+            selectedSourceID = value.isEmpty ? nil : value
+        })
+    }
+
+    /// 记住的分组已不存在（书源被删或改组）时回到全部分组。
+    private func normalizeScope() {
+        guard !library.sources.isEmpty else { return }
+        if !scopeGroup.isEmpty, !availableGroups.contains(scopeGroup) { scopeGroup = "" }
+    }
+
+    /// 改了范围或选项后，已有结果或正在搜索时自动按新条件重搜。
+    private func rerun() {
+        guard !keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              model.state != .idle else { return }
+        startSearch()
     }
 
     @ViewBuilder
     private var idleContent: some View {
-        discoveryPrompt
-        if !model.searchKeywords.isEmpty {
-            searchHistoryView
+        HStack(spacing: 6) {
+            Image(systemName: "books.vertical").font(.caption)
+            Text("\(searchableSourceCount) 个书源 · \(scopeDisplay)")
+                .font(.caption)
+            Spacer(minLength: 0)
         }
-    }
-
-    private var discoveryPrompt: some View {
-        Button { searchIsPresented = true } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "magnifyingglass")
-                    .font(.body)
-                    .foregroundStyle(ReadingTheme.accent)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("搜索书名或作者")
-                        .font(.headline.weight(.medium))
-                        .foregroundStyle(.primary)
-                    Text("\(searchableSourceCount) 个书源 · \(scopeDisplay)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 20)
-        }
-        .buttonStyle(.plain)
+        .foregroundStyle(palette.secondary)
+        .padding(.horizontal, 4)
+        searchHistoryView
     }
 
     private var initialLoadingView: some View {
@@ -1510,7 +1684,7 @@ struct SearchView: View {
                         Text("“\(model.submittedKeyword)”").font(.headline).lineLimit(1)
                         Text(model.isShowingCachedResults
                              ? (model.state == .searching ? "已显示缓存结果，正在更新书源" : "已显示缓存结果")
-                             : "找到 \(model.books.count) 本，已自动合并重复来源")
+                             : resultSummary)
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -1569,7 +1743,7 @@ struct SearchView: View {
                 Button("继续搜索", systemImage: "play.fill") { model.resume() }
                     .readingProminentButtonStyle()
             }
-            Button("修改关键词", systemImage: "text.cursor") { searchIsPresented = true }
+            Button("修改关键词", systemImage: "text.cursor") { fieldFocused = true }
                 .readingSecondaryButtonStyle()
         }
     }
@@ -1589,6 +1763,16 @@ struct SearchView: View {
             }
             .readingSecondaryButtonStyle()
         }
+    }
+
+    private var resultSummary: String {
+        var parts = [model.state == .searching
+                     ? "\(model.completedSourceCount)/\(model.totalSourceCount)，找到 \(model.books.count) 本"
+                     : "找到 \(model.books.count) 本"]
+        let failed = Set(model.diagnostics.map(\.message)).count
+        if failed > 0 { parts.append("\(failed) 个书源未返回") }
+        parts.append(noAggregate ? "未聚合" : "已合并重复来源")
+        return parts.joined(separator: "，")
     }
 
     private var searchProgress: Double {
@@ -1637,59 +1821,125 @@ struct SearchView: View {
 
     private var searchHistoryView: some View {
         ReadingCard {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("搜索历史").font(.headline)
+                    Text("搜索历史").font(.subheadline.weight(.semibold))
                     Spacer()
-                    Button("清空") { Task { await model.clearSearchKeywords() } }.font(.subheadline)
-                }
-                .padding(.bottom, 8)
-                ForEach(model.searchKeywords) { item in
-                    Divider().padding(.leading, 28)
-                    HStack(spacing: 10) {
-                        Button { keyword = item.word; startSearch() } label: {
-                            HStack(spacing: 10) {
-                                Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
-                                Text(item.word).foregroundStyle(.primary).lineLimit(1)
-                                Spacer()
-                            }
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        Button {
-                            Task { await model.deleteSearchKeyword(item.word) }
-                        } label: {
-                            Image(systemName: "xmark").font(.caption.bold()).foregroundStyle(.tertiary)
-                                .frame(width: 28, height: 28)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("删除 \(item.word)")
+                    if !model.searchKeywords.isEmpty {
+                        Button("清空") { confirmsClearHistory = true }
+                            .font(.subheadline)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(palette.accent)
+                            .accessibilityIdentifier("searchHistory.clear")
                     }
-                    .padding(.vertical, 7)
+                }
+                if model.searchKeywords.isEmpty {
+                    Text("暂无搜索记录").font(.subheadline).foregroundStyle(palette.secondary)
+                        .accessibilityIdentifier("searchHistory.empty")
+                } else if #available(iOS 16.0, *) {
+                    SearchHistoryFlow(spacing: 8) {
+                        ForEach(model.searchKeywords) { item in historyChip(item.word) }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(model.searchKeywords) { item in historyChip(item.word) }
+                    }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private func historyChip(_ query: String) -> some View {
+        HStack(spacing: 2) {
+            Button { keyword = query; startSearch() } label: {
+                Text(query).font(.subheadline).foregroundStyle(palette.primary)
+                    .lineLimit(1).truncationMode(.middle)
+                    .padding(.leading, 13).padding(.trailing, 4).padding(.vertical, 8)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("再次搜索：" + query)
+            .accessibilityIdentifier("searchHistory.query." + query)
+            Button { Task { await model.deleteSearchKeyword(query) } } label: {
+                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(palette.secondary)
+                    .frame(width: 22, height: 22).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.trailing, 8)
+            .accessibilityLabel("删除搜索记录：" + query)
+            .accessibilityIdentifier("searchHistory.delete." + query)
+        }
+        .modifier(ShelfGlass(shape: Capsule()))
     }
 
     private var scopedSources: [BookSource] {
         if var fixedSource { fixedSource.enabled = true; return [fixedSource] }
         let enabled = library.sources.filter(\.enabled)
         if let selectedSourceID { return enabled.filter { $0.id == selectedSourceID } }
-        guard !selectedGroups.isEmpty else { return enabled }
-        return enabled.filter { source in selectedGroups.contains(where: source.hasGroup) }
+        let groups = activeGroups
+        guard !groups.isEmpty else { return enabled }
+        return enabled.filter { source in groups.contains(where: source.hasGroup) }
+    }
+
+    /// 顶部「分组」选项（记住）与「分组或书源」面板里多选的分组。
+    private var activeGroups: Set<String> {
+        scopeGroup.isEmpty ? selectedGroups : selectedGroups.union([scopeGroup])
     }
 
     private var scopeDisplay: String {
         if let fixedSource { return fixedSource.bookSourceName }
         if let selectedSourceID, let source = library.sources.first(where: { $0.id == selectedSourceID }) { return source.bookSourceName }
-        return selectedGroups.isEmpty ? "全部书源" : selectedGroups.sorted().joined(separator: ",")
+        return activeGroups.isEmpty ? "全部书源" : activeGroups.sorted().joined(separator: ",")
     }
 
     private func startSearch() {
         let value = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        searchIsPresented = false
-        model.search(keyword: value, sources: scopedSources, precision: precisionSearch)
+        fieldFocused = false
+        model.search(keyword: value, sources: scopedSources, precision: precisionSearch, aggregate: !noAggregate)
+    }
+}
+
+/// 胶囊自动换行布局：一行放不下就换到下一行，行高取该行最高的胶囊。
+@available(iOS 16.0, *)
+private struct SearchHistoryFlow: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var width: CGFloat = 0, rowWidth: CGFloat = 0, rowHeight: CGFloat = 0, height: CGFloat = 0
+        for view in subviews {
+            var size = view.sizeThatFits(.unspecified)
+            size.width = min(size.width, maxWidth)
+            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
+                width = max(width, rowWidth)
+                height += rowHeight + spacing
+                rowWidth = 0; rowHeight = 0
+            }
+            rowWidth += rowWidth == 0 ? size.width : size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
+        width = max(width, rowWidth)
+        height += rowHeight
+        return CGSize(width: min(width, maxWidth), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, rowHeight: CGFloat = 0
+        for view in subviews {
+            var size = view.sizeThatFits(.unspecified)
+            size.width = min(size.width, bounds.width)
+            if x > bounds.minX, x + size.width > bounds.maxX {
+                x = bounds.minX
+                y += rowHeight + spacing
+                rowHeight = 0
+            }
+            view.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+        }
     }
 }
 
@@ -1736,6 +1986,7 @@ private struct SearchStateCard<Actions: View>: View {
 }
 
 private struct SearchBookRow: View {
+    @ThemePalette private var palette
     let book: SearchBook
 
     var body: some View {
@@ -1756,7 +2007,9 @@ private struct SearchBookRow: View {
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 6) {
-                    Text(book.origins.count > 1 ? "\(book.origins.count) 个来源" : book.originName)
+                    Text(book.origins.count > 1
+                         ? "来源：\(book.originName) 等 \(book.origins.count) 个书源"
+                         : "来源：" + book.originName)
                         .lineLimit(1)
                     if let wordCount = book.wordCount, !wordCount.isEmpty {
                         Text("·")
@@ -1769,10 +2022,10 @@ private struct SearchBookRow: View {
             Spacer(minLength: 0)
             Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 12)
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(ReadingTheme.separator).frame(height: 0.5)
-                .padding(.leading, 66)
+        .padding(14)
+        .background {
+            ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: AppLayout.radiusCard),
+                                                 style: .continuous), isCard: true)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
@@ -1824,11 +2077,10 @@ private struct SettingsView: View {
                         .accessibilityHidden(true)
                 }
             }
-            .background(ProfileTheme.canvas)
             .ignoresSafeArea(.container, edges: .top)
             .accessibilityIdentifier("profile.scroll")
         }
-        .background(ProfileTheme.canvas)
+        .readingCanvas()
         .navigationBarHidden(true)
     }
 
@@ -1901,17 +2153,7 @@ private struct SettingsView: View {
     private var readingSection: some View {
         settingSection("阅读") {
             settingLink("阅读设置", icon: "textformat.size") { ReadingPreferencesView() }
-            Menu {
-                Picker("外观", selection: $themeMode) {
-                    Text("跟随系统").tag("0")
-                    Text("浅色").tag("1")
-                    Text("深色").tag("2")
-                    Text("E-Ink 模式").tag("3")
-                }
-            } label: {
-                settingRow("外观", icon: "circle.lefthalf.filled", value: appearanceTitle, showsValuePill: true)
-            }
-            .buttonStyle(.plain)
+            appearanceEntry
             .accessibilityLabel("外观")
             .accessibilityValue(appearanceTitle)
             .accessibilityIdentifier("profile.appearance")
@@ -1946,6 +2188,31 @@ private struct SettingsView: View {
             .buttonStyle(.plain)
             settingLink("其他设置", icon: "gearshape") { OtherSettingsView() }
             settingLink("关于", icon: "info.circle", showsSeparator: false) { AboutView() }
+        }
+    }
+
+    /// iOS 17 起打开完整的「外观主题」（主题配色、编辑器、玻璃模式、应用外观）；更早的系统保留原来的外观菜单。
+    @ViewBuilder
+    private var appearanceEntry: some View {
+        if #available(iOS 17.0, *) {
+            Button { AppearanceHubPresenter.shared.isPresented = true } label: {
+                settingRow("外观主题", icon: "circle.lefthalf.filled",
+                           value: AppThemeStore.shared.selectedTheme.name + " · " + appearanceTitle,
+                           showsValuePill: true)
+            }
+            .buttonStyle(.plain)
+        } else {
+            Menu {
+                Picker("外观", selection: $themeMode) {
+                    Text("跟随系统").tag("0")
+                    Text("浅色").tag("1")
+                    Text("深色").tag("2")
+                    Text("E-Ink 模式").tag("3")
+                }
+            } label: {
+                settingRow("外观", icon: "circle.lefthalf.filled", value: appearanceTitle, showsValuePill: true)
+            }
+            .buttonStyle(.plain)
         }
     }
 
@@ -2038,13 +2305,13 @@ private struct SettingsView: View {
 }
 
 private enum ProfileTheme {
-    static let canvas = adaptive(0xF8F8F7, dark: 0x141416)
-    static let surface = adaptive(0xFFFFFF, dark: 0x232326)
-    static let appCardTint = adaptive(0xFBF3EC, dark: 0x302923)
-    static let ink = adaptive(0x171817, dark: 0xF3F0EC)
-    static let secondary = adaptive(0x898A8C, dark: 0xA5A2A0)
+    static var canvas: Color { ReadingTheme.canvas }
+    static var surface: Color { ReadingTheme.surface }
+    static var appCardTint: Color { AppThemeRuntime.color { AppThemeColor.mix($0.surface, $0.accent, fraction: 0.06) } }
+    static var ink: Color { ReadingTheme.ink }
+    static var secondary: Color { ReadingTheme.secondaryInk }
     static let detail = adaptive(0xBA916B, dark: 0xD1AB84)
-    static let separator = adaptive(0xEAEAEA, dark: 0x373638)
+    static var separator: Color { ReadingTheme.separator }
 
     private static func adaptive(_ light: UInt32, dark: UInt32) -> Color {
         Color(uiColor: UIColor { traits in

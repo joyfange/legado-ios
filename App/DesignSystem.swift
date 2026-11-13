@@ -176,33 +176,24 @@ private struct ReadingSearchModifier: ViewModifier {
     }
 }
 
+/// 应用界面色板。颜色跟随「外观主题」里选用的主题（默认为经典黑白），
+/// 在解析时读取当前主题，因此所有沿用这些令牌的界面都会随主题变化。
 enum ReadingTheme {
-    static let accent = adaptive(0x171717, dark: 0xDADAE0)
-    static let accentFill = adaptive(0x171717, dark: 0x414148)
-    static let emphasisSurface = adaptive(0x171717, dark: 0x29292E)
-    static let selectionBorder = adaptive(0x171717, dark: 0x777780)
+    static var accent: Color { AppThemeRuntime.color { $0.accent } }
+    static var accentFill: Color { AppThemeRuntime.color { $0.accent } }
+    static var emphasisSurface: Color { AppThemeRuntime.color { $0.accent } }
+    static var selectionBorder: Color { AppThemeRuntime.color { $0.accent } }
     static let toggleTint = Color(uiColor: .systemGreen)
-    static let accentSoft = adaptive(0xEEEEEF, dark: 0x29292C)
+    static var accentSoft: Color { AppThemeRuntime.color { $0.selection } }
     static let coral = Color(red: 0.76, green: 0.48, blue: 0.27)
     static let paper = Color(red: 0.965, green: 0.945, blue: 0.895)
-    static let ink = Color.primary
-    static let canvas = adaptive(0xFCFCFC, dark: 0x111113)
-    static let groupedCanvas = adaptive(0xF3F3F4, dark: 0x1C1C1F)
-    static let surface = adaptive(0xFFFFFF, dark: 0x232326)
-    static let separator = adaptive(0xE6E6E8, dark: 0x363639)
-    static let onAccent = Color.white
-
-    private static func adaptive(_ light: UInt32, dark: UInt32) -> Color {
-        Color(uiColor: UIColor { traits in
-            let hex = traits.userInterfaceStyle == .dark ? dark : light
-            return UIColor(
-                red: CGFloat((hex >> 16) & 0xff) / 255,
-                green: CGFloat((hex >> 8) & 0xff) / 255,
-                blue: CGFloat(hex & 0xff) / 255,
-                alpha: 1
-            )
-        })
-    }
+    static var ink: Color { AppThemeRuntime.color { $0.primary } }
+    static var canvas: Color { AppThemeRuntime.color { $0.canvas } }
+    static var groupedCanvas: Color { AppThemeRuntime.color { $0.groupedCanvas } }
+    static var surface: Color { AppThemeRuntime.color { $0.surface } }
+    static var separator: Color { AppThemeRuntime.color { $0.separator } }
+    static var onAccent: Color { AppThemeRuntime.color { $0.onAccent } }
+    static var secondaryInk: Color { AppThemeRuntime.color { $0.secondary } }
 }
 
 struct ReadingPageHeader<Actions: View>: View {
@@ -334,7 +325,29 @@ struct BookCoverArtwork: View {
         .accessibilityHidden(true)
     }
 
+    @ViewBuilder
     private var placeholder: some View {
+        if let custom = AppThemeRuntime.current.customization?.defaultCoverImage,
+           let image = ThemeAssetStore.shared.image(for: custom) {
+            // 主题「默认封面」：只在书籍没有可用封面时显示。
+            ZStack(alignment: .bottomLeading) {
+                Image(uiImage: image).resizable().scaledToFill()
+                    .frame(width: width, height: height).clipped()
+                if width >= 50 {
+                    Text(title)
+                        .font(.system(size: max(8, width * 0.12), weight: .semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                        .shadow(color: .black.opacity(0.6), radius: 2)
+                        .padding(width * 0.08)
+                }
+            }
+        } else {
+            generatedPlaceholder
+        }
+    }
+
+    private var generatedPlaceholder: some View {
         ZStack(alignment: .topLeading) {
             coverColor
             Canvas { context, size in
@@ -397,12 +410,18 @@ struct BookCoverArtwork: View {
 }
 
 struct ReadingCard<Content: View>: View {
-    @ViewBuilder let content: Content
+    @ThemePalette private var palette
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: palette.cornerRadius(default: 20), style: .continuous)
         content
             .padding(20)
-            .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background { ThemeSurface(shape: shape, isCard: true) }
     }
 }
 

@@ -95,11 +95,11 @@ struct SourceSwitchView: View {
                 }
                 .listStyle(.insetGrouped)
                 .readingScrollContentBackgroundHidden()
-                .background(ReadingTheme.canvas)
+                .background(Color.clear)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .navigationTitle("为《\(model.bookName)》换源")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

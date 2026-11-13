@@ -225,7 +225,7 @@ struct ExploreView: View {
                 .padding(.bottom, 32)
             }
         }
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .navigationBarHidden(true)
     }
 }
@@ -274,7 +274,7 @@ private struct ExploreSourceView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .navigationTitle(model.source.bookSourceName)
         .navigationBarTitleDisplayMode(.inline)
         .task { await model.load() }

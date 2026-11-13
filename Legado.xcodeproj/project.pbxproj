@@ -6,6 +6,25 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		7E3A00000000000000000201 /* AppAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000101 /* AppAppearance.swift */; };
+		7E3A00000000000000000202 /* AppGlassMode.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000102 /* AppGlassMode.swift */; };
+		7E3A00000000000000000203 /* AppLayout.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000103 /* AppLayout.swift */; };
+		7E3A00000000000000000204 /* AppPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000104 /* AppPalette.swift */; };
+		7E3A00000000000000000205 /* AppTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000105 /* AppTheme.swift */; };
+		7E3A00000000000000000206 /* AppThemeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000106 /* AppThemeStore.swift */; };
+		7E3A00000000000000000207 /* AppTypography.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000107 /* AppTypography.swift */; };
+		7E3A00000000000000000208 /* SettingsGlassRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000108 /* SettingsGlassRow.swift */; };
+		7E3A00000000000000000209 /* ThemeAssetStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000109 /* ThemeAssetStore.swift */; };
+		7E3A0000000000000000020A /* ThemeCustomization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010A /* ThemeCustomization.swift */; };
+		7E3A0000000000000000020B /* ThemeCustomizationEditor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010B /* ThemeCustomizationEditor.swift */; };
+		7E3A0000000000000000020C /* ThemeEditorControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010C /* ThemeEditorControls.swift */; };
+		7E3A0000000000000000020D /* ThemeEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010D /* ThemeEditorView.swift */; };
+		7E3A0000000000000000020E /* ThemeHomeGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010E /* ThemeHomeGrid.swift */; };
+		7E3A0000000000000000020F /* ThemeIconTransparency.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010F /* ThemeIconTransparency.swift */; };
+		7E3A00000000000000000210 /* ThemeImagePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000110 /* ThemeImagePicker.swift */; };
+		7E3A00000000000000000211 /* ThemeIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000111 /* ThemeIntegration.swift */; };
+		7E3A00000000000000000212 /* ThemePalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000112 /* ThemePalette.swift */; };
+		7E3A00000000000000000213 /* ThemePreviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000113 /* ThemePreviewCard.swift */; };
 		DA1000000000000000000002 /* AppearanceContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000002; };
 		DA1000000000000000000001 /* DarkModeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001; };
 		B10000000000000000000050 = {isa = PBXBuildFile; fileRef = B20000000000000000000050; };
@@ -139,6 +158,25 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		7E3A00000000000000000101 /* AppAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppAppearance.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000102 /* AppGlassMode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppGlassMode.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000103 /* AppLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLayout.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000104 /* AppPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPalette.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000105 /* AppTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTheme.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000106 /* AppThemeStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppThemeStore.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000107 /* AppTypography.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppTypography.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000108 /* SettingsGlassRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsGlassRow.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000109 /* ThemeAssetStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeAssetStore.swift; sourceTree = "<group>"; };
+		7E3A0000000000000000010A /* ThemeCustomization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeCustomization.swift; sourceTree = "<group>"; };
+		7E3A0000000000000000010B /* ThemeCustomizationEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeCustomizationEditor.swift; sourceTree = "<group>"; };
+		7E3A0000000000000000010C /* ThemeEditorControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEditorControls.swift; sourceTree = "<group>"; };
+		7E3A0000000000000000010D /* ThemeEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeEditorView.swift; sourceTree = "<group>"; };
+		7E3A0000000000000000010E /* ThemeHomeGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeHomeGrid.swift; sourceTree = "<group>"; };
+		7E3A0000000000000000010F /* ThemeIconTransparency.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeIconTransparency.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000110 /* ThemeImagePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeImagePicker.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000111 /* ThemeIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeIntegration.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000112 /* ThemePalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePalette.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000113 /* ThemePreviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePreviewCard.swift; sourceTree = "<group>"; };
 		DA2000000000000000000002 /* AppearanceContrastTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderTests/AppearanceContrastTests.swift; sourceTree = SOURCE_ROOT; };
 		DA2000000000000000000001 /* DarkModeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderUITests/DarkModeUITests.swift; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000050 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderUITests/ReaderScrollGestureTests.swift; sourceTree = SOURCE_ROOT; };
@@ -288,6 +326,32 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		7E3A00000000000000000100 /* Theme */ = {
+			isa = PBXGroup;
+			children = (
+				7E3A00000000000000000101 /* AppAppearance.swift */,
+				7E3A00000000000000000102 /* AppGlassMode.swift */,
+				7E3A00000000000000000103 /* AppLayout.swift */,
+				7E3A00000000000000000104 /* AppPalette.swift */,
+				7E3A00000000000000000105 /* AppTheme.swift */,
+				7E3A00000000000000000106 /* AppThemeStore.swift */,
+				7E3A00000000000000000107 /* AppTypography.swift */,
+				7E3A00000000000000000108 /* SettingsGlassRow.swift */,
+				7E3A00000000000000000109 /* ThemeAssetStore.swift */,
+				7E3A0000000000000000010A /* ThemeCustomization.swift */,
+				7E3A0000000000000000010B /* ThemeCustomizationEditor.swift */,
+				7E3A0000000000000000010C /* ThemeEditorControls.swift */,
+				7E3A0000000000000000010D /* ThemeEditorView.swift */,
+				7E3A0000000000000000010E /* ThemeHomeGrid.swift */,
+				7E3A0000000000000000010F /* ThemeIconTransparency.swift */,
+				7E3A00000000000000000110 /* ThemeImagePicker.swift */,
+				7E3A00000000000000000111 /* ThemeIntegration.swift */,
+				7E3A00000000000000000112 /* ThemePalette.swift */,
+				7E3A00000000000000000113 /* ThemePreviewCard.swift */,
+			);
+			path = Theme;
+			sourceTree = "<group>";
+		};
 		D40000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
@@ -321,6 +385,7 @@
 				A20000000000000000000001 /* LegadoApp.swift */,
 				A20000000000000000000002 /* RootTabView.swift */,
 				CC1500000000000000000002 /* Compatibility.swift */,
+				7E3A00000000000000000100 /* Theme */,
 				A2000000000000000000000A /* DesignSystem.swift */,
 				A2000000000000000000000B /* DemoContent.swift */,
 				A30000000000000000000002 /* Sources Feature */,
@@ -732,6 +797,25 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				7E3A00000000000000000201 /* AppAppearance.swift in Sources */,
+				7E3A00000000000000000202 /* AppGlassMode.swift in Sources */,
+				7E3A00000000000000000203 /* AppLayout.swift in Sources */,
+				7E3A00000000000000000204 /* AppPalette.swift in Sources */,
+				7E3A00000000000000000205 /* AppTheme.swift in Sources */,
+				7E3A00000000000000000206 /* AppThemeStore.swift in Sources */,
+				7E3A00000000000000000207 /* AppTypography.swift in Sources */,
+				7E3A00000000000000000208 /* SettingsGlassRow.swift in Sources */,
+				7E3A00000000000000000209 /* ThemeAssetStore.swift in Sources */,
+				7E3A0000000000000000020A /* ThemeCustomization.swift in Sources */,
+				7E3A0000000000000000020B /* ThemeCustomizationEditor.swift in Sources */,
+				7E3A0000000000000000020C /* ThemeEditorControls.swift in Sources */,
+				7E3A0000000000000000020D /* ThemeEditorView.swift in Sources */,
+				7E3A0000000000000000020E /* ThemeHomeGrid.swift in Sources */,
+				7E3A0000000000000000020F /* ThemeIconTransparency.swift in Sources */,
+				7E3A00000000000000000210 /* ThemeImagePicker.swift in Sources */,
+				7E3A00000000000000000211 /* ThemeIntegration.swift in Sources */,
+				7E3A00000000000000000212 /* ThemePalette.swift in Sources */,
+				7E3A00000000000000000213 /* ThemePreviewCard.swift in Sources */,
 				AA1100000000000000000001 /* SourceEditorView.swift in Sources */,
 				AA1100000000000000000002 /* ReplaceRuleEditorView.swift in Sources */,
 				AA1100000000000000000003 /* SyntaxCodeEditor.swift in Sources */,

@@ -39,7 +39,7 @@ struct BookDetailView: View {
             .padding(.horizontal, 20)
             .padding(.bottom, 30)
         }
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .navigationTitle("书籍详情")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

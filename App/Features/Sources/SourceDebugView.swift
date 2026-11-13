@@ -45,7 +45,7 @@ struct SourceDebugView: View {
             .padding(.horizontal, 16)
             .padding(.bottom, 30)
         }
-        .background(ReadingTheme.canvas)
+        .readingCanvas()
         .navigationTitle("书源调试")
         .navigationBarTitleDisplayMode(.inline)
     }
