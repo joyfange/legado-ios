@@ -2112,20 +2112,16 @@ private struct ReadingPreferencesView: View {
     var body: some View {
         Form {
             Section("排版") {
-                ReadingLabeledContent("字号", value: String(format: "%.0f", fontSize))
-                Slider(value: $fontSize, in: 5...50, step: 1)
-                ReadingLabeledContent("字间距", value: String(format: "%.2f", letterSpacing))
-                Slider(value: $letterSpacing, in: -0.5...0.5, step: 0.01)
-                ReadingLabeledContent("行间距", value: String(format: "%.0f", lineSpacing))
-                Slider(value: $lineSpacing, in: 0...50, step: 1)
-                ReadingLabeledContent("段距", value: String(format: "%.1f", paragraphSpacing))
-                Slider(value: $paragraphSpacing, in: 0...50, step: 1)
+                AdjustableSlider(title: "字号", value: $fontSize, range: 5...50, format: { String(format: "%.0f", $0) })
+                AdjustableSlider(title: "字间距", value: $letterSpacing, range: -0.5...0.5, step: 0.01, format: { String(format: "%.2f", $0) })
+                AdjustableSlider(title: "行间距", value: $lineSpacing, range: 0...50, format: { String(format: "%.0f", $0) })
+                AdjustableSlider(title: "段距", value: $paragraphSpacing, range: 0...50, format: { String(format: "%.1f", $0) })
                 Picker("字重", selection: $fontWeight) {
                     Text("正常").tag(0)
                     Text("粗体").tag(1)
                     Text("细体").tag(2)
                 }
-                TextField("段落缩进字符", text: $paragraphIndent)
+                ParagraphIndentControl(indent: $paragraphIndent)
                 Picker("下划线", selection: $underlineMode) {
                     Text("关闭").tag(0)
                     Text("实线").tag(1)
@@ -2144,12 +2140,9 @@ private struct ReadingPreferencesView: View {
                     Text("居中").tag(1)
                     Text("隐藏").tag(2)
                 }
-                ReadingLabeledContent("字号增量", value: String(format: "%+.0f", titleSize))
-                Slider(value: $titleSize, in: -10...30, step: 1)
-                ReadingLabeledContent("上间距", value: String(Int(titleTopSpacing)))
-                Slider(value: $titleTopSpacing, in: 0...100, step: 1)
-                ReadingLabeledContent("下间距", value: String(Int(titleBottomSpacing)))
-                Slider(value: $titleBottomSpacing, in: 0...100, step: 1)
+                AdjustableSlider(title: "字号增量", value: $titleSize, range: -10...30, format: { String(format: "%+.0f", $0) })
+                AdjustableSlider(title: "上间距", value: $titleTopSpacing, range: 0...100, format: { String(Int($0)) })
+                AdjustableSlider(title: "下间距", value: $titleBottomSpacing, range: 0...100, format: { String(Int($0)) })
             }
             Section("翻页") {
                 Picker("翻页模式", selection: $pageAnimation) {
@@ -2199,10 +2192,7 @@ private struct ReadingPreferencesView: View {
     }
 
     private func paddingSlider(_ title: String, value: Binding<Double>) -> some View {
-        VStack {
-            ReadingLabeledContent(title, value: String(Int(value.wrappedValue)))
-            Slider(value: value, in: 0...100, step: 1)
-        }
+        AdjustableSlider(title: title, value: value, range: 0...100, format: { String(Int($0)) })
     }
 }
 
@@ -2245,14 +2235,30 @@ private enum BookshelfShelfItem {
         case .book(let book): "b:" + book.bookUrl
         }
     }
+
+    var book: Book? {
+        if case .book(let book) = self { return book }
+        return nil
+    }
 }
 
-/// 一个位置在某一层上的横向坐标。
-private struct BookshelfShelfSlot: Identifiable {
+/// 一本书或一个摆件在某一层上的实际摆放位置（按现实中的支撑关系算出来）。
+private struct BookshelfShelfPlacement: Identifiable {
     let item: BookshelfShelfItem
+    /// 在本层之外的全局顺序位置（不含放在平躺书上的摆件）。
     let index: Int
-    let x: CGFloat
-    let width: CGFloat
+    /// 实际摆放姿势：书在一层的最边上无处可靠时，会改为靠向另一侧或竖立。
+    let pose: BookshelfShelfPose
+    /// 未旋转时外框的左边和尺寸。
+    let boxX: CGFloat
+    let boxSize: CGSize
+    /// 在层板上占据的左右范围（用于拖动定位）。
+    let boardMinX: CGFloat
+    let boardMaxX: CGFloat
+    /// 竖直方向的高度（倾斜书靠在它上面时用）。
+    let height: CGFloat
+    /// 倾斜书在层板上的支点：左倾为左下角，右倾为右下角。
+    let pivotX: CGFloat
     var id: String { item.id }
 }
 
@@ -2263,19 +2269,31 @@ enum BookshelfShelfOrder {
     static func save(_ ids: [String]) { UserDefaults.standard.set(ids, forKey: storageKey) }
 }
 
+/// 放在平躺书上面的摆件：摆件 id → 书籍链接。
+enum ShelfOrnamentPerches {
+    static let storageKey = "shelfOrnamentPerches"
+    static func load() -> [String: String] {
+        UserDefaults.standard.dictionary(forKey: storageKey) as? [String: String] ?? [:]
+    }
+    static func save(_ value: [String: String]) { UserDefaults.standard.set(value, forKey: storageKey) }
+}
+
 /// 仿真书架：
-/// - 轻点一本书：书向外抽出，露出书页顶面和一部分封面，书脊上出现一个小按钮，点它可改摆放形态；
-/// - 抽出后再点一次这本书：打开阅读；点页面空白处：书恢复原状；
-/// - 长按书或摆件后拖动：左右（也可跨层）调整位置，黄色竖线指示放下的位置；
+/// - 书按现实摆放：竖立的书站在层板上；倾斜的书一角着地、靠在相邻的书或摆件上；平躺的书横放，上面可以放摆件；
+/// - 轻点一本书：书向外抽出，露出书页和一部分封面，书脊上出现小按钮，点它改摆放形态；再点这本书打开，点空白恢复；
+/// - 长按书或摆件拖动：放在两本书之间调整位置（黄线）；把书拖到另一本书正上方松手，两本书合并到一个分组；
+///   把摆件拖到平躺的书上松手，摆件就放在这本书上面；
 /// - 轻点摆件：调整大小或移出书架。
 private struct BookshelfShelfView: View {
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var library: BookLibraryModel
     let books: [Book]
     let onOpen: (BookshelfShelfDestination) -> Void
 
     @ObservedObject private var ornamentStore = ShelfOrnamentStore.shared
     @State private var poses: [String: Int] = BookshelfShelfPose.load()
     @State private var order: [String] = BookshelfShelfOrder.load()
+    @State private var perches: [String: String] = ShelfOrnamentPerches.load()
     @State private var selectedURL: String?
     @State private var showsPicker = false
     @State private var editingOrnament: ShelfOrnament?
@@ -2283,6 +2301,10 @@ private struct BookshelfShelfView: View {
     @State private var dragTranslation: CGSize = .zero
     @State private var insertionIndex: Int?
     @State private var insertionMarker: (row: Int, x: CGFloat)?
+    /// 拖动时手指停在哪本书正上方（合并分组或放摆件的目标）。
+    @State private var dropTargetURL: String?
+    @State private var pendingMerge: BookshelfMergeRequest?
+    @State private var toast: String?
     @GestureState private var dragGestureActive = false
 
     private let spacing: CGFloat = 4
@@ -2290,25 +2312,21 @@ private struct BookshelfShelfView: View {
     private let boardHeight: CGFloat = 8.5
     private static let pickerWidth: CGFloat = 176
     private static let coordinateSpace = "bookshelf.shelf"
+    private static let leanRadians = CGFloat(BookshelfSpine.leanAngle * .pi / 180)
 
     /// 书架内容宽度：书架页左右各留 24pt 边距，宽度在布局前就能确定，避免首帧高度跳动。
     private var contentWidth: CGFloat { max(UIScreen.main.bounds.width - 48, 120) }
     private var rowHeight: CGFloat { BookshelfSpine.maxHeight + 10 }
     private var rowPitch: CGFloat { rowHeight + boardHeight + rowSpacing }
 
-    private func pose(_ book: Book) -> BookshelfShelfPose {
+    private func requestedPose(_ book: Book) -> BookshelfShelfPose {
         BookshelfShelfPose(rawValue: poses[book.bookUrl] ?? 0) ?? .upright
     }
 
-    private func width(of item: BookshelfShelfItem) -> CGFloat {
-        switch item {
-        case .ornament(_, let size): size.width
-        case .book(let book): BookshelfSpine.footprint(for: book, pose: pose(book)).width
-        }
-    }
+    // MARK: 顺序与分层
 
     /// 摆件在前、书在后的默认顺序，再按用户拖动保存的顺序重排；新加入的放在最后。
-    private var items: [BookshelfShelfItem] {
+    private var allItems: [BookshelfShelfItem] {
         let ornaments = ornamentStore.placed.map {
             BookshelfShelfItem.ornament($0, ornamentStore.displaySize(for: $0, maxWidth: contentWidth * 0.5))
         }
@@ -2323,31 +2341,136 @@ private struct BookshelfShelfView: View {
         }.map(\.element)
     }
 
-    private func rows(_ items: [BookshelfShelfItem]) -> [[BookshelfShelfSlot]] {
-        var result: [[BookshelfShelfSlot]] = []
-        var current: [BookshelfShelfSlot] = []
-        var x: CGFloat = 0
-        for (index, item) in items.enumerated() {
-            let w = min(width(of: item), contentWidth)
-            if !current.isEmpty, x + w > contentWidth {
-                result.append(current)
-                current = []
-                x = 0
-            }
-            current.append(BookshelfShelfSlot(item: item, index: index, x: x, width: w))
-            x += w + spacing
+    /// 放在平躺书上面的摆件（书 → 摆件）。书不在当前书架或不再平躺时，摆件回到原来的位置。
+    private func perchedOrnaments(in items: [BookshelfShelfItem]) -> [String: (ShelfOrnament, CGSize)] {
+        var flatBooks = Set<String>()
+        for item in items {
+            if let book = item.book, requestedPose(book) == .flat { flatBooks.insert(book.bookUrl) }
         }
-        if !current.isEmpty { result.append(current) }
+        var result: [String: (ShelfOrnament, CGSize)] = [:]
+        for item in items {
+            guard case .ornament(let ornament, let size) = item,
+                  let url = perches[ornament.id], flatBooks.contains(url), result[url] == nil else { continue }
+            result[url] = (ornament, size)
+        }
         return result
     }
 
+    /// 按现实中的支撑关系摆一层：倾斜的书一角着地，上端刚好靠在相邻的书或摆件上。
+    private func layoutRow(_ entries: [(item: BookshelfShelfItem, index: Int)],
+                           perched: [String: (ShelfOrnament, CGSize)]) -> [BookshelfShelfPlacement] {
+        let t = Self.leanRadians
+        var result: [BookshelfShelfPlacement] = []
+        for (position, entry) in entries.enumerated() {
+            let previous = result.last
+            switch entry.item {
+            case .ornament(_, let size):
+                let left = previous.map { leftEdgeAfter($0, objectHeight: size.height) } ?? 0
+                result.append(.init(item: entry.item, index: entry.index, pose: .upright,
+                                    boxX: left, boxSize: size, boardMinX: left, boardMaxX: left + size.width,
+                                    height: size.height, pivotX: left))
+            case .book(let book):
+                let layout = BookshelfSpine.layout(for: book)
+                let w = layout.width, h = layout.height
+                var pose = requestedPose(book)
+                // 一层最边上的书没有东西可靠：改靠向另一侧；这一层只有它一本时竖立。
+                if pose == .leanLeft && position == 0 { pose = entries.count > 1 ? .leanRight : .upright }
+                if pose == .leanRight && position == entries.count - 1 { pose = entries.count > 1 ? .leanLeft : .upright }
+                switch pose {
+                case .upright:
+                    let left = previous.map { leftEdgeAfter($0, objectHeight: h) } ?? 0
+                    result.append(.init(item: entry.item, index: entry.index, pose: pose,
+                                        boxX: left, boxSize: CGSize(width: w, height: h),
+                                        boardMinX: left, boardMaxX: left + w, height: h, pivotX: left))
+                case .flat:
+                    let lying = w + (perched[book.bookUrl]?.1.height ?? 0)
+                    let left = previous.map { leftEdgeAfter($0, objectHeight: w) } ?? 0
+                    result.append(.init(item: entry.item, index: entry.index, pose: pose,
+                                        boxX: left, boxSize: CGSize(width: h, height: w),
+                                        boardMinX: left, boardMaxX: left + h, height: lying, pivotX: left))
+                case .leanLeft:
+                    // 左倾：左下角着地，左侧靠在前一个物体上。
+                    guard let previous else { continue }
+                    let pivot: CGFloat
+                    switch previous.pose {
+                    case .leanLeft where previous.item.book != nil:
+                        // 同向倾斜，两本书贴在一起。
+                        pivot = previous.pivotX + previous.boxSize.width / cos(t)
+                    case .leanRight where previous.item.book != nil:
+                        // 两本书相对倾斜，顶端互相抵住。
+                        pivot = previous.pivotX + (previous.boxSize.height + h) * sin(t)
+                    default:
+                        let gap = h * cos(t) <= previous.height ? h * sin(t) : previous.height * tan(t)
+                        pivot = previous.boardMaxX + gap
+                    }
+                    result.append(.init(item: entry.item, index: entry.index, pose: pose,
+                                        boxX: pivot, boxSize: CGSize(width: w, height: h),
+                                        boardMinX: pivot, boardMaxX: pivot + w * cos(t), height: h * cos(t), pivotX: pivot))
+                case .leanRight:
+                    // 右倾：右下角着地，右侧靠在后一个物体上（后一个物体按它摆放）。
+                    let left: CGFloat
+                    if let previous, previous.pose == .leanRight, previous.item.book != nil {
+                        // 同向倾斜：贴着前一本。
+                        let pivot = previous.pivotX + w / cos(t)
+                        left = pivot - w * cos(t)
+                    } else {
+                        left = (previous.map { $0.boardMaxX + spacing } ?? 0)
+                    }
+                    let pivot = left + w * cos(t)
+                    result.append(.init(item: entry.item, index: entry.index, pose: pose,
+                                        boxX: pivot - w, boxSize: CGSize(width: w, height: h),
+                                        boardMinX: left, boardMaxX: pivot, height: h * cos(t), pivotX: pivot))
+                }
+            }
+        }
+        return result
+    }
+
+    /// 竖直物体（竖立的书、平躺的书、摆件）放在 previous 后面时的左边位置。
+    private func leftEdgeAfter(_ previous: BookshelfShelfPlacement, objectHeight: CGFloat) -> CGFloat {
+        let t = Self.leanRadians
+        if previous.pose == .leanRight, previous.item.book != nil {
+            // 前一本右倾的书靠在这个物体上。
+            let h = previous.boxSize.height
+            let gap = h * cos(t) <= objectHeight ? h * sin(t) : objectHeight * tan(t)
+            return previous.pivotX + gap
+        }
+        return previous.boardMaxX + spacing
+    }
+
+    private func rows(_ items: [BookshelfShelfItem], perched: [String: (ShelfOrnament, CGSize)]) -> [[BookshelfShelfPlacement]] {
+        let perchedIDs = Set(perched.values.map { "o:" + $0.0.id })
+        let sequence = items.filter { !perchedIDs.contains($0.id) }
+        var result: [[BookshelfShelfPlacement]] = []
+        var current: [(item: BookshelfShelfItem, index: Int)] = []
+        var currentLayout: [BookshelfShelfPlacement] = []
+        for (index, item) in sequence.enumerated() {
+            let candidate = current + [(item, index)]
+            let candidateLayout = layoutRow(candidate, perched: perched)
+            let right = candidateLayout.map(\.boardMaxX).max() ?? 0
+            if !current.isEmpty, right > contentWidth {
+                result.append(currentLayout)
+                current = [(item, index)]
+                currentLayout = layoutRow(current, perched: perched)
+            } else {
+                current = candidate
+                currentLayout = candidateLayout
+            }
+        }
+        if !currentLayout.isEmpty { result.append(currentLayout) }
+        return result
+    }
+
+    // MARK: 视图
+
     var body: some View {
-        let allItems = items
-        let shelfRows = rows(allItems)
+        let items = allItems
+        let perched = perchedOrnaments(in: items)
+        let shelfRows = rows(items, perched: perched)
         VStack(alignment: .leading, spacing: rowSpacing) {
             ForEach(shelfRows.indices, id: \.self) { index in
-                shelfRow(shelfRows[index], rowIndex: index, allItems: allItems, rows: shelfRows)
-                    .zIndex(shelfRows[index].contains { $0.id == draggingID || $0.id == "b:" + (selectedURL ?? "") } ? 1 : 0)
+                shelfRow(shelfRows[index], rowIndex: index, rows: shelfRows, perched: perched)
+                    .zIndex(shelfRows[index].contains { isRaised($0, perched: perched) } ? 1 : 0)
             }
         }
         .coordinateSpace(name: Self.coordinateSpace)
@@ -2358,11 +2481,23 @@ private struct BookshelfShelfView: View {
                 .contentShape(Rectangle())
                 .onTapGesture { if selectedURL != nil { deselect() } }
         )
+        .overlay(alignment: .top) {
+            if let toast {
+                Text(toast)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.75), in: Capsule())
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .allowsHitTesting(false)
+            }
+        }
         .onChange(of: books.map(\.bookUrl)) { urls in
             if let selectedURL, !urls.contains(selectedURL) { deselect() }
         }
         .onChange(of: dragGestureActive) { active in
-            if !active { finishDrag(allItems: items) }
+            if !active { finishDrag() }
         }
         .onDisappear {
             selectedURL = nil
@@ -2371,6 +2506,22 @@ private struct BookshelfShelfView: View {
         .sheet(item: $editingOrnament) { ornament in
             ShelfOrnamentSettingsSheet(ornamentID: ornament.id)
         }
+        .sheet(item: $pendingMerge) { request in
+            BookshelfNewGroupSheet(request: request) { name in
+                pendingMerge = nil
+                Task { await createGroup(named: name, for: request) }
+            } onCancel: {
+                pendingMerge = nil
+            }
+        }
+    }
+
+    private func isRaised(_ placement: BookshelfShelfPlacement, perched: [String: (ShelfOrnament, CGSize)]) -> Bool {
+        if placement.id == draggingID || placement.id == "b:" + (selectedURL ?? "") { return true }
+        if let book = placement.item.book, let ornament = perched[book.bookUrl]?.0 {
+            return "o:" + ornament.id == draggingID
+        }
+        return false
     }
 
     private func deselect() {
@@ -2380,23 +2531,21 @@ private struct BookshelfShelfView: View {
         }
     }
 
-    private func shelfRow(_ row: [BookshelfShelfSlot], rowIndex: Int, allItems: [BookshelfShelfItem],
-                          rows: [[BookshelfShelfSlot]]) -> some View {
+    private func shelfRow(_ row: [BookshelfShelfPlacement], rowIndex: Int, rows: [[BookshelfShelfPlacement]],
+                          perched: [String: (ShelfOrnament, CGSize)]) -> some View {
         VStack(spacing: 0) {
-            HStack(alignment: .bottom, spacing: spacing) {
-                ForEach(row) { slot in
-                    slotView(slot, allItems: allItems, rows: rows)
-                        .zIndex(slot.id == draggingID ? 2 : (slot.id == "b:" + (selectedURL ?? "") ? 1 : 0))
-                }
-                Spacer(minLength: 0)
-            }
-            .frame(height: rowHeight, alignment: .bottom)
-            .background(
+            ZStack(alignment: .bottomLeading) {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { if selectedURL != nil { deselect() } }
-            )
-            .overlay(alignment: .bottomLeading) {
+                ForEach(row) { placement in
+                    placementView(placement, rows: rows)
+                        .zIndex(placement.id == draggingID ? 3 : (placement.id == "b:" + (selectedURL ?? "") ? 2 : 0))
+                    if let book = placement.item.book, let perch = perched[book.bookUrl] {
+                        perchedOrnamentView(perch.0, size: perch.1, on: placement, rows: rows)
+                            .zIndex("o:" + perch.0.id == draggingID ? 3 : 1)
+                    }
+                }
                 if let marker = insertionMarker, marker.row == rowIndex {
                     Capsule()
                         .fill(LinearGradient(colors: [Color.yellow.opacity(0.35), Color.yellow, Color.yellow.opacity(0.35)],
@@ -2406,14 +2555,15 @@ private struct BookshelfShelfView: View {
                         .offset(x: marker.x - 2)
                         .allowsHitTesting(false)
                         .transition(.opacity)
+                        .zIndex(4)
                 }
             }
+            .frame(width: contentWidth, height: rowHeight, alignment: .bottomLeading)
             .overlay(alignment: .topLeading) {
-                if showsPicker, let slot = row.first(where: { $0.id == "b:" + (selectedURL ?? "") }),
-                   case .book(let book) = slot.item {
+                if showsPicker, let placement = row.first(where: { $0.id == "b:" + (selectedURL ?? "") }),
+                   let book = placement.item.book {
                     posePicker(for: book)
-                        .offset(x: pickerX(for: slot),
-                                y: rowHeight - BookshelfSpine.footprint(for: book, pose: pose(book)).height - 44)
+                        .offset(x: pickerX(for: placement), y: max(rowHeight - placement.height - 46, -40))
                         .transition(.opacity.combined(with: .scale(scale: 0.92, anchor: .bottom)))
                 }
             }
@@ -2421,28 +2571,63 @@ private struct BookshelfShelfView: View {
         }
     }
 
-    private func pickerX(for slot: BookshelfShelfSlot) -> CGFloat {
-        let target = slot.x + slot.width / 2 - Self.pickerWidth / 2
-        return min(max(target, -4), contentWidth - Self.pickerWidth + 4)
+    private func pickerX(for placement: BookshelfShelfPlacement) -> CGFloat {
+        let center = (placement.boardMinX + placement.boardMaxX) / 2
+        return min(max(center - Self.pickerWidth / 2, -4), contentWidth - Self.pickerWidth + 4)
     }
 
     @ViewBuilder
-    private func slotView(_ slot: BookshelfShelfSlot, allItems: [BookshelfShelfItem], rows: [[BookshelfShelfSlot]]) -> some View {
-        let isDragging = slot.id == draggingID
+    private func placementView(_ placement: BookshelfShelfPlacement, rows: [[BookshelfShelfPlacement]]) -> some View {
+        let isDragging = placement.id == draggingID
+        let isTarget = placement.item.book.map { $0.bookUrl == dropTargetURL } ?? false
         Group {
-            switch slot.item {
+            switch placement.item {
             case .ornament(let ornament, let size):
-                ornamentView(ornament, size: size, drag: dragGesture(for: slot, rows: rows))
+                ornamentView(ornament, size: size, drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
             case .book(let book):
-                spine(book, drag: dragGesture(for: slot, rows: rows))
+                spine(book, pose: placement.pose, drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
+            }
+        }
+        .frame(width: placement.boxSize.width, height: placement.boxSize.height, alignment: .bottomLeading)
+        .overlay {
+            if isTarget {
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .strokeBorder(Color.yellow, lineWidth: 2)
+                    .shadow(color: Color.yellow.opacity(0.9), radius: 5)
+                    .rotationEffect(.degrees(rotationDegrees(placement.pose)),
+                                    anchor: placement.pose == .leanRight ? .bottomTrailing : .bottomLeading)
+                    .allowsHitTesting(false)
             }
         }
         .scaleEffect(isDragging ? 1.06 : 1, anchor: .bottom)
         .shadow(color: .black.opacity(isDragging ? 0.25 : 0), radius: isDragging ? 8 : 0, y: isDragging ? 6 : 0)
+        .offset(x: placement.boxX)
         .offset(isDragging ? dragTranslation : .zero)
     }
 
-    private func dragGesture(for slot: BookshelfShelfSlot, rows: [[BookshelfShelfSlot]]) -> some Gesture {
+    private func rotationDegrees(_ pose: BookshelfShelfPose) -> Double {
+        switch pose {
+        case .leanLeft: -BookshelfSpine.leanAngle
+        case .leanRight: BookshelfSpine.leanAngle
+        default: 0
+        }
+    }
+
+    private func perchedOrnamentView(_ ornament: ShelfOrnament, size: CGSize, on placement: BookshelfShelfPlacement,
+                                     rows: [[BookshelfShelfPlacement]]) -> some View {
+        let id = "o:" + ornament.id
+        let isDragging = id == draggingID
+        let x = placement.boxX + max((placement.boxSize.width - size.width) / 2, 0)
+        return ornamentView(ornament, size: size, drag: dragGesture(id: id, index: placement.index, rows: rows))
+            .scaleEffect(isDragging ? 1.06 : 1, anchor: .bottom)
+            .shadow(color: .black.opacity(isDragging ? 0.25 : 0), radius: isDragging ? 8 : 0, y: isDragging ? 6 : 0)
+            .offset(x: x, y: -placement.boxSize.height + (placement.id == "b:" + (selectedURL ?? "") ? -3 : 0))
+            .offset(isDragging ? dragTranslation : .zero)
+    }
+
+    // MARK: 拖动
+
+    private func dragGesture(id: String, index: Int, rows: [[BookshelfShelfPlacement]]) -> some Gesture {
         LongPressGesture(minimumDuration: 0.35)
             .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .named(Self.coordinateSpace)))
             .updating($dragGestureActive) { value, state, _ in
@@ -2455,58 +2640,166 @@ private struct BookshelfShelfView: View {
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                         selectedURL = nil
                         showsPicker = false
-                        draggingID = slot.id
+                        draggingID = id
                     }
-                    insertionIndex = slot.index
+                    insertionIndex = nil
+                    insertionMarker = nil
+                    dropTargetURL = nil
                 }
                 if let drag {
                     dragTranslation = drag.translation
-                    updateInsertion(at: drag.location, rows: rows)
+                    updateDropTarget(at: drag.location, rows: rows)
                 }
             }
     }
 
-    /// 根据手指位置算出放下的位置（第几个），并给出指示线所在的层和横坐标。
-    private func updateInsertion(at location: CGPoint, rows: [[BookshelfShelfSlot]]) {
-        guard !rows.isEmpty else { return }
+    /// 根据手指位置决定：插到两件东西之间（黄线），或者落在某本书上（合并分组 / 摆件放上平躺的书）。
+    private func updateDropTarget(at location: CGPoint, rows: [[BookshelfShelfPlacement]]) {
+        guard let draggingID, !rows.isEmpty else { return }
         let rowIndex = min(max(Int(floor(location.y / rowPitch)), 0), rows.count - 1)
-        let row = rows[rowIndex]
-        var index = (row.last?.index ?? 0) + 1
-        var markerX = row.last.map { $0.x + $0.width + spacing / 2 } ?? 0
-        for slot in row where slot.id != draggingID {
-            if location.x < slot.x + slot.width / 2 {
-                index = slot.index
-                markerX = max(slot.x - spacing / 2, 1)
+        let row = rows[rowIndex].filter { $0.id != draggingID }
+        let draggingBook = draggingID.hasPrefix("b:")
+
+        // 落在书上
+        var target: String?
+        for placement in row {
+            guard let book = placement.item.book else { continue }
+            let width = placement.boardMaxX - placement.boardMinX
+            if draggingBook {
+                // 手指在一本书中间一半的范围内：合并分组。
+                let inset = width * 0.25
+                if location.x > placement.boardMinX + inset, location.x < placement.boardMaxX - inset {
+                    target = book.bookUrl
+                    break
+                }
+            } else if placement.pose == .flat,
+                      location.x > placement.boardMinX, location.x < placement.boardMaxX {
+                // 摆件拖到平躺的书上：放在书上面。
+                target = book.bookUrl
                 break
             }
         }
-        if insertionIndex != index {
-            UISelectionFeedbackGenerator().selectionChanged()
+        if target != dropTargetURL {
+            if target != nil { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+            withAnimation(.easeOut(duration: 0.15)) { dropTargetURL = target }
         }
+        if target != nil {
+            insertionIndex = nil
+            insertionMarker = nil
+            return
+        }
+
+        // 插入位置
+        let all = rows[rowIndex]
+        var index = (all.last?.index ?? 0) + 1
+        var markerX = (row.last?.boardMaxX ?? 0) + spacing / 2
+        for (position, placement) in row.enumerated() {
+            if location.x < (placement.boardMinX + placement.boardMaxX) / 2 {
+                index = placement.index
+                let previousMax = position > 0 ? row[position - 1].boardMaxX : placement.boardMinX - spacing
+                markerX = max((previousMax + placement.boardMinX) / 2, 1)
+                break
+            }
+        }
+        if insertionIndex != index { UISelectionFeedbackGenerator().selectionChanged() }
         insertionIndex = index
         insertionMarker = (rowIndex, min(markerX, contentWidth - 2))
     }
 
-    private func finishDrag(allItems: [BookshelfShelfItem]) {
+    private func finishDrag() {
         guard let draggingID else { return }
-        var ids = allItems.map(\.id)
-        if let from = ids.firstIndex(of: draggingID), var to = insertionIndex {
-            to = min(max(to, 0), ids.count)
-            if to != from && to != from + 1 {
-                let moved = ids.remove(at: from)
-                if to > from { to -= 1 }
-                ids.insert(moved, at: to)
-                order = ids
-                BookshelfShelfOrder.save(ids)
+        let items = allItems
+        let perched = perchedOrnaments(in: items)
+        let perchedIDs = Set(perched.values.map { "o:" + $0.0.id })
+        let target = dropTargetURL
+        let insertion = insertionIndex
+
+        if let target {
+            if draggingID.hasPrefix("b:") {
+                let sourceURL = String(draggingID.dropFirst(2))
+                if sourceURL != target,
+                   let source = books.first(where: { $0.bookUrl == sourceURL }),
+                   let destination = books.first(where: { $0.bookUrl == target }) {
+                    merge(source, into: destination)
+                }
+            } else {
+                let ornamentID = String(draggingID.dropFirst(2))
+                perches = perches.filter { $0.value != target }
+                perches[ornamentID] = target
+                ShelfOrnamentPerches.save(perches)
             }
+        } else if let insertion {
+            // 序列里不含放在平躺书上的摆件；拖动的是它时先从书上拿下来。
+            var sequence = items.map(\.id).filter { !perchedIDs.contains($0) || $0 == draggingID }
+            if perchedIDs.contains(draggingID) {
+                sequence.removeAll { $0 == draggingID }
+                perches.removeValue(forKey: String(draggingID.dropFirst(2)))
+                ShelfOrnamentPerches.save(perches)
+                let to = min(max(insertion, 0), sequence.count)
+                sequence.insert(draggingID, at: to)
+            } else if let from = sequence.firstIndex(of: draggingID) {
+                var to = min(max(insertion, 0), sequence.count)
+                if to != from && to != from + 1 {
+                    sequence.remove(at: from)
+                    if to > from { to -= 1 }
+                    sequence.insert(draggingID, at: to)
+                }
+            }
+            let ids = sequence + items.map(\.id).filter { !sequence.contains($0) }
+            order = ids
+            BookshelfShelfOrder.save(ids)
         }
         withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
             self.draggingID = nil
             dragTranslation = .zero
             insertionIndex = nil
             insertionMarker = nil
+            dropTargetURL = nil
         }
     }
+
+    // MARK: 合并分组
+
+    @MainActor
+    private func merge(_ source: Book, into destination: Book) {
+        let custom = library.groups.filter { $0.groupId > 0 }.sorted { $0.order < $1.order }
+        if let group = custom.first(where: { destination.group & $0.groupId != 0 }) {
+            Task {
+                await library.setBook(source, in: group, included: true)
+                showToast("已把《\(source.name)》放入分组「\(group.groupName)」")
+            }
+        } else {
+            var index = 1
+            let names = Set(library.groups.map(\.groupName))
+            while names.contains("分组\(index)") { index += 1 }
+            pendingMerge = BookshelfMergeRequest(source: source, destination: destination, suggestedName: "分组\(index)")
+        }
+    }
+
+    @MainActor
+    private func createGroup(named name: String, for request: BookshelfMergeRequest) async {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        if !library.groups.contains(where: { $0.groupName == name }) {
+            await library.createGroup(name: name)
+        }
+        guard let group = library.groups.first(where: { $0.groupName == name && $0.groupId > 0 }) else { return }
+        await library.setBook(request.destination, in: group, included: true)
+        if let source = library.books.first(where: { $0.bookUrl == request.source.bookUrl }) {
+            await library.setBook(source, in: group, included: true)
+        }
+        showToast("已把两本书合并到分组「\(group.groupName)」")
+    }
+
+    @MainActor
+    private func showToast(_ text: String) {
+        withAnimation(.easeOut(duration: 0.2)) { toast = text }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) {
+            if toast == text { withAnimation(.easeIn(duration: 0.2)) { toast = nil } }
+        }
+    }
+
+    // MARK: 单个物件
 
     private func ornamentView<G: Gesture>(_ ornament: ShelfOrnament, size: CGSize, drag: G) -> some View {
         Group {
@@ -2527,9 +2820,9 @@ private struct BookshelfShelfView: View {
         .accessibilityHint("轻点调整大小或移出书架，长按拖动调整位置")
     }
 
-    private func spine<G: Gesture>(_ book: Book, drag: G) -> some View {
+    private func spine<G: Gesture>(_ book: Book, pose: BookshelfShelfPose, drag: G) -> some View {
         let isSelected = book.bookUrl == selectedURL
-        return BookshelfSpine(book: book, pose: pose(book), isSelected: isSelected)
+        return BookshelfSpine(book: book, pose: pose, isSelected: isSelected)
             .overlay(alignment: .top) {
                 if isSelected {
                     Button {
@@ -2545,7 +2838,7 @@ private struct BookshelfShelfView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .offset(x: -2, y: pose(book) == .flat ? -30 : 12)
+                    .offset(x: pose == .flat ? 0 : -2, y: pose == .flat ? -34 : 12)
                     .transition(.opacity.combined(with: .scale(scale: 0.6)))
                     .accessibilityLabel("修改摆放形态")
                 }
@@ -2563,11 +2856,11 @@ private struct BookshelfShelfView: View {
             }
             .gesture(drag)
             .accessibilityAddTraits(.isButton)
-            .accessibilityHint(isSelected ? "再次轻点打开阅读" : "轻点抽出，长按拖动调整位置")
+            .accessibilityHint(isSelected ? "再次轻点打开阅读" : "轻点抽出，长按拖动调整位置或拖到另一本书上合并分组")
     }
 
     private func posePicker(for book: Book) -> some View {
-        let current = pose(book)
+        let current = requestedPose(book)
         return HStack(spacing: 0) {
             ForEach(Array(BookshelfShelfPose.allCases.enumerated()), id: \.element.rawValue) { index, item in
                 if index > 0 {
@@ -2610,8 +2903,49 @@ private struct BookshelfShelfView: View {
                                      startPoint: .top, endPoint: .bottom))
                 .frame(height: 7)
         }
+        .frame(width: contentWidth)
         .shadow(color: .black.opacity(colorScheme == .dark ? 0.35 : 0.08), radius: 4, y: 3)
         .accessibilityHidden(true)
+    }
+}
+
+/// 把一本书拖到另一本（不在任何分组里的）书上时，询问新分组的名字。
+private struct BookshelfMergeRequest: Identifiable {
+    let source: Book
+    let destination: Book
+    let suggestedName: String
+    var id: String { source.bookUrl + "→" + destination.bookUrl }
+}
+
+private struct BookshelfNewGroupSheet: View {
+    let request: BookshelfMergeRequest
+    let onCreate: (String) -> Void
+    let onCancel: () -> Void
+    @State private var name = ""
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section {
+                    TextField("分组名称", text: $name)
+                } footer: {
+                    Text("《\(request.source.name)》和《\(request.destination.name)》会一起放进这个分组，可在书架顶部的分组里查看。")
+                }
+            }
+            .navigationTitle("合并到新分组")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("创建") { onCreate(name) }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+        .onAppear { if name.isEmpty { name = request.suggestedName } }
     }
 }
 
@@ -2703,20 +3037,6 @@ private struct BookshelfSpine: View {
 
     static func layout(for book: Book) -> BookshelfSpineLayout {
         BookshelfSpineLayout(title: book.name.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    /// 在层板上占用的宽高（倾斜、平躺后会变宽）。
-    static func footprint(for book: Book, pose: BookshelfShelfPose) -> CGSize {
-        let layout = layout(for: book)
-        let size = CGSize(width: layout.width, height: layout.height)
-        let radians = CGFloat(leanAngle * .pi / 180)
-        switch pose {
-        case .upright: return size
-        case .flat: return CGSize(width: size.height, height: size.width)
-        case .leanLeft, .leanRight:
-            return CGSize(width: size.width * cos(radians) + size.height * sin(radians) + 2,
-                          height: size.width * sin(radians) + size.height * cos(radians))
-        }
     }
 
     private var layout: BookshelfSpineLayout { Self.layout(for: book) }
@@ -2825,8 +3145,6 @@ private struct BookshelfSpine: View {
     }
 
     var body: some View {
-        let footprint = Self.footprint(for: book, pose: pose)
-        let height = layout.height
         Group {
             switch pose {
             case .upright:
@@ -2834,13 +3152,12 @@ private struct BookshelfSpine: View {
             case .flat:
                 flat
             case .leanLeft:
+                // 左下角着地，向左靠在相邻的书上（位置由书架按支撑关系算好）。
                 upright
                     .rotationEffect(.degrees(-Self.leanAngle), anchor: .bottomLeading)
-                    .frame(width: footprint.width, height: height, alignment: .bottomTrailing)
             case .leanRight:
                 upright
                     .rotationEffect(.degrees(Self.leanAngle), anchor: .bottomTrailing)
-                    .frame(width: footprint.width, height: height, alignment: .bottomLeading)
             }
         }
         .shadow(color: .black.opacity(isSelected ? 0.25 : 0.12), radius: isSelected ? 4 : 1, x: isSelected ? -1 : 0.5, y: isSelected ? 3 : 0.5)
@@ -3002,15 +3319,9 @@ private struct ShelfOrnamentSettingsSheet: View {
                         .foregroundStyle(ReadingTheme.coral)
                 }
             }
-            HStack(spacing: 12) {
-                Text("等比大小")
-                    .font(.subheadline)
-                Slider(value: $size, in: ShelfOrnamentStore.sizeRange, step: 1)
-                    .tint(ReadingTheme.ink)
-                Text("\(Int(size))pt")
-                    .font(.subheadline.monospacedDigit())
-                    .frame(width: 48, alignment: .trailing)
-            }
+            AdjustableSlider(title: "等比大小", value: $size, range: ShelfOrnamentStore.sizeRange,
+                             format: { "\(Int($0))pt" })
+                .tint(ReadingTheme.ink)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 24)

@@ -484,3 +484,170 @@ struct CachedCoverImage<Placeholder: View>: View {
         }
     }
 }
+
+// MARK: - 可精确调整的滑杆
+
+/// 滑杆两边带「−」「＋」按钮，每点一下按步长调整一次，长按连续调整。
+struct AdjustableSlider: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    var step: Double = 1
+    var format: (Double) -> String
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(format(value)).monospacedDigit().foregroundStyle(.secondary)
+            }
+            HStack(spacing: 10) {
+                AdjustableStepButton(systemName: "minus", label: "\(title)减少",
+                                     enabled: value > range.lowerBound + step / 2) { adjust(by: -1) }
+                Slider(value: $value, in: range, step: step)
+                    .accessibilityLabel(title)
+                AdjustableStepButton(systemName: "plus", label: "\(title)增加",
+                                     enabled: value < range.upperBound - step / 2) { adjust(by: 1) }
+            }
+        }
+    }
+
+    private func adjust(by steps: Double) {
+        let current = ((value - range.lowerBound) / step).rounded()
+        var next = range.lowerBound + (current + steps) * step
+        next = min(max(next, range.lowerBound), range.upperBound)
+        // 去掉浮点误差，例如 0.1 + 0.2。
+        value = (next * 1_000_000).rounded() / 1_000_000
+    }
+}
+
+/// 「−」「＋」小圆按钮：轻点调整一次，按住不放每 0.1 秒连续调整。
+struct AdjustableStepButton: View {
+    let systemName: String
+    let label: String
+    var enabled: Bool = true
+    let action: () -> Void
+
+    @State private var repeatTask: Task<Void, Never>?
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.5))
+            .frame(width: 30, height: 30)
+            .background(Color.secondary.opacity(0.14), in: Circle())
+            .frame(width: 36, height: 36)
+            .contentShape(Rectangle())
+            .onTapGesture { if enabled { action() } }
+            .onLongPressGesture(minimumDuration: 0.4, pressing: { pressing in
+                if !pressing { stopRepeating() }
+            }, perform: {
+                guard enabled else { return }
+                startRepeating()
+            })
+            .onDisappear { stopRepeating() }
+            .accessibilityElement()
+            .accessibilityLabel(label)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { if enabled { action() } }
+    }
+
+    private func startRepeating() {
+        stopRepeating()
+        let action = self.action
+        repeatTask = Task { @MainActor in
+            action()
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                if Task.isCancelled { break }
+                action()
+            }
+        }
+    }
+
+    private func stopRepeating() {
+        repeatTask?.cancel()
+        repeatTask = nil
+    }
+}
+
+// MARK: - 段落缩进
+
+/// 段落缩进按「几个字符」设置：可点 0～4 快速选择，也可以用「−」「＋」或直接输入 0～10。
+/// 存储仍是缩进字符串（每个字符为一个全角空格），与旧设置兼容。
+struct ParagraphIndentControl: View {
+    @Binding var indent: String
+    static let maxCharacters = 10
+
+    /// 旧设置可能是半角空格或其它字符：全角空格算 1 个，半角空格两个算 1 个，其它字符各算 1 个。
+    static func characterCount(of indent: String) -> Int {
+        var full = 0
+        var half = 0
+        for character in indent {
+            if character == " " { half += 1 } else { full += 1 }
+        }
+        return full + (half + 1) / 2
+    }
+
+    static func indentString(characters: Int) -> String {
+        String(repeating: "　", count: min(max(characters, 0), maxCharacters))
+    }
+
+    private var count: Int { Self.characterCount(of: indent) }
+
+    private var countBinding: Binding<Int> {
+        Binding(get: { count }, set: { indent = Self.indentString(characters: $0) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text("段落缩进")
+                Spacer()
+                AdjustableStepButton(systemName: "minus", label: "段落缩进减少", enabled: count > 0) {
+                    countBinding.wrappedValue = count - 1
+                }
+                TextField("0", text: textBinding)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.center)
+                    .font(.body.monospacedDigit())
+                    .frame(width: 44, height: 32)
+                    .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityLabel("段落缩进字符数")
+                Text("字符").foregroundStyle(.secondary)
+                AdjustableStepButton(systemName: "plus", label: "段落缩进增加", enabled: count < Self.maxCharacters) {
+                    countBinding.wrappedValue = count + 1
+                }
+            }
+            HStack(spacing: 8) {
+                ForEach(0...4, id: \.self) { value in
+                    Text(value == 0 ? "不缩进" : "\(value) 字")
+                        .font(.subheadline.weight(count == value ? .semibold : .regular))
+                        .foregroundStyle(count == value ? Color.white : Color.primary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(count == value ? ReadingTheme.accent : Color.secondary.opacity(0.12), in: Capsule())
+                        .contentShape(Capsule())
+                        .onTapGesture { countBinding.wrappedValue = value }
+                        .accessibilityAddTraits(count == value ? [.isButton, .isSelected] : .isButton)
+                }
+            }
+            Text("每段开头空出几个汉字的宽度，默认 2 个字符，可输入 0～\(Self.maxCharacters)。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// 手动输入：只取数字，超过上限按上限。
+    private var textBinding: Binding<String> {
+        Binding(
+            get: { String(count) },
+            set: { text in
+                let digits = text.filter(\.isNumber)
+                let number = Int(digits.suffix(2)) ?? 0
+                indent = Self.indentString(characters: number)
+            }
+        )
+    }
+}

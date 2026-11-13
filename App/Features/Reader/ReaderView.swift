@@ -1153,18 +1153,15 @@ struct ReaderView: View {
         ReadingNavigationStack {
             Form {
                 Section {
-                    HStack {
-                        Text("自动翻页速度")
-                        Spacer()
-                        Text("\(autoReadSpeed)s").monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    Slider(
+                    AdjustableSlider(
+                        title: "自动翻页速度",
                         value: Binding(
                             get: { Double(autoReadSpeed) },
                             set: { autoReadSpeed = max(1, min(Int($0.rounded()), 120)) }
                         ),
-                        in: 1...120,
-                        step: 1
+                        range: 1...120,
+                        step: 1,
+                        format: { "\(Int($0))s" }
                     )
                 } footer: {
                     Text("数值表示自动阅读一屏所用的秒数，范围 1–120 秒。")
@@ -1346,15 +1343,7 @@ struct ReaderView: View {
                         Text("粗体").tag(1)
                         Text("细体").tag(2)
                     }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("段落缩进")
-                        TextField("请输入缩进字符", text: $paragraphIndent)
-                            .textInputAutocapitalization(.never)
-                            .accessibilityLabel("段落缩进字符")
-                        Text("控制每段开头的缩进，默认两个全角空格；清空后不缩进。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    ParagraphIndentControl(indent: $paragraphIndent)
                     Button(fontPath.isEmpty ? "选择字体文件" : "更换字体文件", systemImage: "textformat") {
                         showsFontImporter = true
                     }
@@ -1616,14 +1605,7 @@ struct ReaderView: View {
         step: Double = 1,
         format: @escaping (Double) -> String
     ) -> some View {
-        VStack(spacing: 6) {
-            HStack {
-                Text(title)
-                Spacer()
-                Text(format(value.wrappedValue)).monospacedDigit().foregroundStyle(.secondary)
-            }
-            Slider(value: value, in: range, step: step)
-        }
+        AdjustableSlider(title: title, value: value, range: range, step: step, format: format)
     }
 
     private static let readerTipChoices: [(Int, String)] = [
