@@ -46,7 +46,9 @@ struct AppFontStyle {
         default: ui = .body
         }
         let base = semantic(style, ui)
-        return Self(original: .system(style, design: design, weight: weight), size: base.size,
+        // Font.system(_:design:weight:) 需要 iOS 16；用 iOS 13 可用的组合写法保持同样效果。
+        let systemFont = Font.system(style, design: design)
+        return Self(original: weight.map { systemFont.weight($0) } ?? systemFont, size: base.size,
                     relativeTo: style, uiStyle: ui, fontWeight: weight ?? (ui == .headline ? .semibold : .regular))
     }
     func weight(_ weight: Font.Weight) -> Self {
