@@ -1,5 +1,7 @@
 import SwiftUI
+#if SWIFT_PACKAGE
 import LegadoCore
+#endif
 
 /// One row of the table of contents, computed once per chapter list so the
 /// sheet never walks the whole chapter array while rendering a row.
