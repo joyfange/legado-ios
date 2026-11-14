@@ -391,6 +391,12 @@ extension View {
             .background { ReadingCanvasBackground(grouped: true).ignoresSafeArea() }
     }
 
+    /// 自绘的底部弹窗（没有导航栏、标题行在列表外面）整体铺主题底色：
+    /// 否则标题区是系统白/黑，列表区是主题色，上下两截颜色对不上。
+    func readingSheetCanvas() -> some View {
+        background { ReadingCanvasBackground(grouped: true).ignoresSafeArea() }
+    }
+
     /// 让这一组列表行使用主题卡片底（界面效果、卡片背景、玻璃模式都会生效）。
     func readingRowBackground() -> some View {
         listRowBackground(ThemeListRowBackground())

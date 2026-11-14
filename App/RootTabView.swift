@@ -938,7 +938,8 @@ private struct BookshelfManagerSheet: View {
                     ids.move(fromOffsets: offsets, toOffset: destination)
                     Task { await library.reorderGroups(ids) }
                 }
-            }.readingThemedListBackground()
+            }
+            .readingScrollContentBackgroundHidden()
             .listStyle(.plain)
             if deleting {
                 Button {
@@ -985,6 +986,7 @@ private struct BookshelfManagerSheet: View {
         } message: {
             Text("只删除书架本身，书仍在「全部」里。")
         }
+        .readingSheetCanvas()
         .readingPresentationDragIndicator()
     }
 
@@ -3966,7 +3968,7 @@ private struct BookshelfShelfView: View {
         return ornamentView(ornament, size: size, drag: dragGesture(id: id, index: placement.index, rows: rows))
             .scaleEffect(isDragging ? 1.06 : 1, anchor: .bottom)
             .shadow(color: .black.opacity(isDragging ? 0.25 : 0), radius: isDragging ? 8 : 0, y: isDragging ? 6 : 0)
-            .offset(x: x, y: -placement.boxSize.height + (placement.id == "b:" + (selectedURL ?? "") ? -3 : 0))
+            .offset(x: x, y: -placement.boxSize.height)
             .offset(isDragging ? dragTranslation : .zero)
     }
 
@@ -4222,28 +4224,9 @@ private struct BookshelfShelfView: View {
 
     private func spine<G: Gesture>(_ book: Book, pose: BookshelfShelfPose, drag: G) -> some View {
         let isSelected = book.bookUrl == selectedURL
-        return BookshelfSpine(book: book, pose: pose, isSelected: isSelected, style: style)
-            .overlay(alignment: .top) {
-                if isSelected {
-                    Button {
-                        withAnimation(.easeOut(duration: 0.18)) { showsPicker.toggle() }
-                    } label: {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(AppFontStyle.system(size: 10, weight: .semibold).themed)
-                            .foregroundStyle(Color.white)
-                            .frame(width: 22, height: 22)
-                            .background(Color.black.opacity(0.55), in: Circle())
-                            .overlay(Circle().strokeBorder(Color.white.opacity(0.5), lineWidth: 0.5))
-                            .opacity(style.hideRotateButtons ? 0.011 : 1)
-                            .frame(width: 36, height: 36)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .offset(x: pose == .flat ? 0 : -2, y: pose == .flat ? -34 : 12)
-                    .transition(.opacity.combined(with: .scale(scale: 0.6)))
-                    .accessibilityLabel("修改摆放形态")
-                }
-            }
+        return BookshelfSpine(book: book, pose: pose, isSelected: isSelected, style: style) {
+            withAnimation(.easeOut(duration: 0.18)) { showsPicker.toggle() }
+        }
             .onTapGesture {
                 if isSelected {
                     onOpen(.read(book))
@@ -4435,19 +4418,60 @@ private struct BookshelfSpineLayout {
 
 /// 从封面里取书脊颜色：缩小封面后按色相分组，取占比最大、颜色最鲜明的一组的平均色。
 @MainActor
+/// 书脊主色缓存。提取结果同时写入 UserDefaults：冷启动时书脊直接用上次算好的颜色，
+/// 不会先显示默认色、等封面加载完再变色（打开 App 时书脊「闪一下」变色）。
+@MainActor
 final class BookshelfSpineTintCache {
     static let shared = BookshelfSpineTintCache()
+    private static let storageKey = "bookshelf.spineTints.v1"
+    private static let maxStored = 600
     private var tints: [String: UIColor] = [:]
     private var failed = Set<String>()
+    private var stored: [String: String]
+    private var saveScheduled = false
+
+    private init() {
+        stored = UserDefaults.standard.dictionary(forKey: Self.storageKey) as? [String: String] ?? [:]
+    }
+
+    /// data: 封面可能很长，用稳定的 FNV-1a 摘要做键（String.hashValue 每次启动都会变）。
+    private static func storageID(_ key: String) -> String {
+        guard key.count > 160 else { return key }
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in key.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        return "h:" + String(hash, radix: 16) + ":" + String(key.utf8.count)
+    }
 
     func cached(_ key: String?) -> UIColor? {
-        guard let key else { return nil }
-        return tints[key]
+        guard let key, !key.isEmpty else { return nil }
+        if let tint = tints[key] { return tint }
+        guard let text = stored[Self.storageID(key)] else { return nil }
+        let parts = text.split(separator: ",").compactMap { Double($0) }
+        guard parts.count == 3 else { return nil }
+        let tint = UIColor(red: parts[0], green: parts[1], blue: parts[2], alpha: 1)
+        tints[key] = tint
+        return tint
+    }
+
+    private func remember(_ tint: UIColor, for key: String) {
+        tints[key] = tint
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard tint.getRed(&r, green: &g, blue: &b, alpha: &a) else { return }
+        if stored.count >= Self.maxStored { stored.removeAll(keepingCapacity: true) }
+        stored[Self.storageID(key)] = String(format: "%.4f,%.4f,%.4f", Double(r), Double(g), Double(b))
+        guard !saveScheduled else { return }
+        saveScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard let self else { return }
+            self.saveScheduled = false
+            UserDefaults.standard.set(self.stored, forKey: Self.storageKey)
+        }
     }
 
     func tint(for urlString: String?) async -> UIColor? {
         guard let urlString, !urlString.isEmpty, !failed.contains(urlString) else { return nil }
-        if let tint = tints[urlString] { return tint }
+        if let tint = cached(urlString) { return tint }
         var image: UIImage?
         if urlString.hasPrefix("data:image/"), let comma = urlString.firstIndex(of: ","),
            let data = Data(base64Encoded: String(urlString[urlString.index(after: comma)...])) {
@@ -4459,7 +4483,7 @@ final class BookshelfSpineTintCache {
             if image != nil { failed.insert(urlString) }
             return nil
         }
-        tints[urlString] = tint
+        remember(tint, for: urlString)
         return tint
     }
 
@@ -4521,23 +4545,27 @@ private struct BookshelfSpine: View {
     let pose: BookshelfShelfPose
     let isSelected: Bool
     let style: BookshelfShelfStyle
+    /// 抽出时书脊上的旋转按钮（修改摆放形态）；为 nil 时不显示（文件夹里的小书）。
+    var onRotate: (() -> Void)?
     @State private var tint: UIColor?
 
     static let leanAngle: Double = 10
     private static let depth: CGFloat = 8
     /// 竖立的书被抽出时侧面露出的宽度（能看到一部分封面）。
-    private static let pulledDepth: CGFloat = 16
+    private static let pulledDepth: CGFloat = 14
 
     private static let palette: [(CGFloat, CGFloat, CGFloat)] = [
         (0.25, 0.18, 0.12), (0.17, 0.20, 0.27), (0.30, 0.21, 0.13), (0.22, 0.17, 0.14),
         (0.15, 0.17, 0.21), (0.27, 0.19, 0.15)
     ]
 
-    init(book: Book, pose: BookshelfShelfPose, isSelected: Bool, style: BookshelfShelfStyle) {
+    init(book: Book, pose: BookshelfShelfPose, isSelected: Bool, style: BookshelfShelfStyle,
+         onRotate: (() -> Void)? = nil) {
         self.book = book
         self.pose = pose
         self.isSelected = isSelected
         self.style = style
+        self.onRotate = onRotate
         _tint = State(initialValue: BookshelfSpineTintCache.shared.cached(book.coverUrl))
     }
 
@@ -4656,23 +4684,30 @@ private struct BookshelfSpine: View {
         .frame(width: width, height: height)
     }
 
-    /// 抽出时露出的顶面（书页）与右侧面：右侧面画的是这本书封面靠书脊的一部分。
+    /// 抽出时露出的顶面（书页）与右侧面（封面靠书脊的一条）。
+    /// 斜二测投影：横向露出 dx、纵向只抬高 dy = dx/2，顶面很薄，书底与层板齐平，
+    /// 看起来是书被抽出站在层板上，而不是整本书被抬到半空。
     private var uprightDepthFaces: some View {
-        let w = style.bookWidth, h = style.bookHeight, d = Self.pulledDepth
+        let w = style.bookWidth, h = style.bookHeight
+        let dx = Self.pulledDepth, dy = (Self.pulledDepth * 0.5).rounded()
         return ZStack(alignment: .topLeading) {
-            BookshelfFace(points: [CGPoint(x: 0, y: d), CGPoint(x: d, y: 0), CGPoint(x: w + d, y: 0), CGPoint(x: w, y: d)])
+            BookshelfFace(points: [CGPoint(x: 0, y: dy), CGPoint(x: dx, y: 0), CGPoint(x: w + dx, y: 0), CGPoint(x: w, y: dy)])
                 .fill(pageColor)
-            BookshelfFace(points: [CGPoint(x: 2, y: d - 2), CGPoint(x: d - 2, y: 2), CGPoint(x: w + d - 3, y: 2), CGPoint(x: w - 3, y: d - 2)])
-                .stroke(Color.black.opacity(0.08), lineWidth: 0.5)
+            // 书页的几道细线
+            ForEach(1..<4) { i in
+                let t = CGFloat(i) / 4
+                BookshelfFace(points: [CGPoint(x: dx * t, y: dy * (1 - t)), CGPoint(x: w + dx * t, y: dy * (1 - t))])
+                    .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
+            }
             BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
-                             width: max(h * 0.7, d), height: h)
-                .frame(width: d, height: h, alignment: .leading)
+                             width: max(h * 0.7, dx), height: h)
+                .frame(width: dx, height: h, alignment: .leading)
                 .clipped()
-                .overlay(LinearGradient(colors: [Color.black.opacity(0.28), Color.black.opacity(0.05)],
+                .overlay(LinearGradient(colors: [Color.black.opacity(0.3), Color.black.opacity(0.06)],
                                         startPoint: .leading, endPoint: .trailing))
-                .transformEffect(CGAffineTransform(a: 1, b: -1, c: 0, d: 1, tx: w, ty: d))
+                .transformEffect(CGAffineTransform(a: 1, b: -dy / dx, c: 0, d: 1, tx: w, ty: dy))
         }
-        .frame(width: w + d, height: h + d, alignment: .topLeading)
+        .frame(width: w + dx, height: h + dy, alignment: .topLeading)
     }
 
     /// 平躺：书脊朝外横放，书名横排。
@@ -4721,6 +4756,27 @@ private struct BookshelfSpine: View {
         .frame(width: w + d, height: h + d, alignment: .topLeading)
     }
 
+    /// 抽出时的旋转按钮：固定画在书脊正面里（跟着书一起倾斜），
+    /// 竖立/倾斜时在书脊顶部往下一点的正中，平躺时在书脊左端的正中，位置不再随姿势乱跑。
+    @ViewBuilder private var rotateButton: some View {
+        if isSelected, let onRotate {
+            Button(action: onRotate) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(AppFontStyle.system(size: 10, weight: .semibold).themed)
+                    .foregroundStyle(Color.white)
+                    .frame(width: 22, height: 22)
+                    .background(Color.black.opacity(0.55), in: Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.5), lineWidth: 0.5))
+                    .opacity(style.hideRotateButtons ? 0.011 : 1)
+                    .frame(width: 34, height: 34)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            .accessibilityLabel("修改摆放形态")
+        }
+    }
+
     private var upright: some View {
         uprightFront
             .overlay(alignment: .bottomLeading) {
@@ -4728,9 +4784,12 @@ private struct BookshelfSpine: View {
                     uprightDepthFaces.allowsHitTesting(false)
                 }
             }
-            // 抽出时书顶向外倾一点。
-            .rotation3DEffect(.degrees(isSelected ? -9 : 0), axis: (x: 1, y: 0, z: 0), anchor: .bottom, perspective: 0.45)
-            // 点击区域跟着书一起旋转：倾斜的书点哪里都有反应，不只是靠近底部的一小块。
+            .overlay(alignment: .top) {
+                rotateButton.offset(y: min(10, style.bookHeight * 0.08) - 6)
+            }
+            // 抽出：书底仍然压在层板上，只是整本书朝外挪出一点（略放大、露出书顶和封面侧面），
+            // 不再绕底边前倾——前倾加透视会让书看起来离开层板、悬在半空。
+            .scaleEffect(isSelected ? 1.035 : 1, anchor: .bottom)
             .contentShape(Rectangle())
     }
 
@@ -4741,6 +4800,10 @@ private struct BookshelfSpine: View {
                     flatDepthFaces.allowsHitTesting(false)
                 }
             }
+            .overlay(alignment: .leading) {
+                rotateButton.offset(x: -4)
+            }
+            .scaleEffect(isSelected ? 1.03 : 1, anchor: .bottom)
             .contentShape(Rectangle())
     }
 
@@ -4760,8 +4823,8 @@ private struct BookshelfSpine: View {
                     .rotationEffect(.degrees(Self.leanAngle), anchor: .bottomTrailing)
             }
         }
-        .shadow(color: .black.opacity(isSelected ? 0.25 : 0.14), radius: isSelected ? 4 : 1, x: isSelected ? -1 : 0.6, y: isSelected ? 3 : 0.6)
-        .offset(x: isSelected ? -2 : 0, y: isSelected ? -3 : 0)
+        .shadow(color: .black.opacity(isSelected ? 0.28 : 0.14), radius: isSelected ? 3 : 1,
+                x: isSelected ? 1.5 : 0.6, y: isSelected ? 1.5 : 0.6)
         .overlay(alignment: .topTrailing) {
             if book.lastCheckCount > 0, pose == .upright {
                 Circle().fill(ReadingTheme.coral).frame(width: 6, height: 6).offset(x: 2, y: -2)
@@ -4776,6 +4839,7 @@ private struct BookshelfSpine: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(book.name)，\(pose.title)")
+        .accessibilityAction(named: "修改摆放形态") { if isSelected { onRotate?() } }
     }
 }
 
@@ -5251,6 +5315,7 @@ struct BookshelfShelfSettingsSheet: View {
             .animation(.easeOut(duration: 0.2), value: bookshelfLayout)
         }
         .tint(ReadingTheme.ink)
+        .readingSheetCanvas()
         .readingLivePreviewSheet()
         .readingPresentationDragIndicator()
     }
@@ -5511,6 +5576,7 @@ private struct ShelfOrnamentSettingsSheet: View {
         .onAppear { size = store.ornament(id: ornamentID)?.size ?? 64 }
         .onChange(of: size) { store.setSize($0, for: ornamentID) }
         .readingLivePreviewSheet()
+        .readingSheetCanvas()
         .readingPresentationDragIndicator()
     }
 }
@@ -5559,6 +5625,7 @@ struct ShelfOrnamentManagerSheet: View {
             .ignoresSafeArea()
         }
         .readingPresentationDetents([.medium, .large])
+        .readingSheetCanvas()
         .readingPresentationDragIndicator()
     }
 

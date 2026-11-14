@@ -110,6 +110,12 @@ final class ReadingActivityModel: ObservableObject {
         await persistBookmarks(updated)
     }
 
+    func removeBookmarks(_ targets: [Bookmark]) async {
+        guard !targets.isEmpty else { return }
+        let ids = Set(targets.map(\.id))
+        await persistBookmarks(bookmarks.filter { !ids.contains($0.id) })
+    }
+
     func updateBookmark(_ bookmark: Bookmark) async {
         var updated = bookmarks
         if let index = updated.firstIndex(where: { $0.id == bookmark.id }) {

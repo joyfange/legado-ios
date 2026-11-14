@@ -38,6 +38,7 @@ struct BubbleStyleSettingsView: View {
                 if let error { Text(error).foregroundStyle(.red) }
             }
         }
+        .readingThemedListBackground()
         .navigationTitle("段评气泡")
         .sheet(item: $draft) { style in BubbleStyleEditor(store: store, draft: style) }
         .alert("删除这个气泡样式？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
@@ -124,6 +125,7 @@ struct BubbleStyleEditor: View {
                     Text("显示 42 · 保存后选用，取消不改变原设置").font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity).padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
+            .readingThemedListBackground()
             .navigationTitle("新建/编辑气泡").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }

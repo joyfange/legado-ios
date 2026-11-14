@@ -861,9 +861,9 @@ struct ReaderView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             readerChromeIconButton(bookmarkSaved ? "bookmark.fill" : "bookmark", label: "书签") {
-                addBookmark()
+                toggleBookmark()
             }
-            .accessibilityValue(bookmarkSaved ? "已添加" : "添加当前位置")
+            .accessibilityValue(bookmarkSaved ? "已添加，轻点取消" : "添加当前位置")
             .disabled(isSavingBookmark)
             readerMoreMenu
         }
@@ -872,7 +872,10 @@ struct ReaderView: View {
         .padding(.vertical, 4)
         .frame(maxWidth: .infinity)
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-        .background { readerChromeBackground.ignoresSafeArea(edges: .top) }
+        // 工具栏整条（含按钮之间的空白和状态栏区域）都吃掉点击，避免点空白处穿透到正文触发翻页。
+        .contentShape(Rectangle())
+        .onTapGesture {}
+        .background { readerChromeBackground.ignoresSafeArea(edges: .top).contentShape(Rectangle()).onTapGesture {} }
         .overlay(alignment: .bottom) {
             Rectangle().fill(Color(uiColor: .separator).opacity(0.35)).frame(height: 0.5)
         }
@@ -948,7 +951,9 @@ struct ReaderView: View {
         .padding(.bottom, 10)
         .frame(maxWidth: .infinity)
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-        .background { readerChromeBackground.ignoresSafeArea(edges: .bottom) }
+        .contentShape(Rectangle())
+        .onTapGesture {}
+        .background { readerChromeBackground.ignoresSafeArea(edges: .bottom).contentShape(Rectangle()).onTapGesture {} }
         .overlay(alignment: .top) {
             Rectangle().fill(Color(uiColor: .separator).opacity(0.35)).frame(height: 0.5)
         }
@@ -2016,10 +2021,28 @@ struct ReaderView: View {
         }
     }
 
-    private var bookmarkSaved: Bool {
+    private var bookmarksOnCurrentPage: [Bookmark] {
         let page = currentPage - 1
         let range = pageAnimation != 3 && readerPageRanges.indices.contains(page) ? readerPageRanges[page] : nil
-        return !model.bookmarks(at: readerPosition, in: activity.bookmarks, pageRange: range).isEmpty
+        return model.bookmarks(at: readerPosition, in: activity.bookmarks, pageRange: range)
+    }
+
+    private var bookmarkSaved: Bool { !bookmarksOnCurrentPage.isEmpty }
+
+    /// 书签按钮是开关：当前页没有书签时添加，已有书签时再点一次取消（删除这一页上的书签）。
+    private func toggleBookmark() {
+        guard !isSavingBookmark else { return }
+        let existing = bookmarksOnCurrentPage
+        guard !existing.isEmpty else {
+            addBookmark()
+            return
+        }
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        isSavingBookmark = true
+        Task {
+            defer { isSavingBookmark = false }
+            await activity.removeBookmarks(existing)
+        }
     }
 
     private func addBookmark() {
