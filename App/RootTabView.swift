@@ -4417,7 +4417,6 @@ private struct BookshelfSpineLayout {
 }
 
 /// 从封面里取书脊颜色：缩小封面后按色相分组，取占比最大、颜色最鲜明的一组的平均色。
-@MainActor
 /// 书脊主色缓存。提取结果同时写入 UserDefaults：冷启动时书脊直接用上次算好的颜色，
 /// 不会先显示默认色、等封面加载完再变色（打开 App 时书脊「闪一下」变色）。
 @MainActor
