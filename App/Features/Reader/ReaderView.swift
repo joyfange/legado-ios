@@ -863,7 +863,8 @@ struct ReaderView: View {
             readerChromeIconButton(bookmarkSaved ? "bookmark.fill" : "bookmark", label: "书签") {
                 toggleBookmark()
             }
-            .accessibilityValue(bookmarkSaved ? "已添加，轻点取消" : "添加当前位置")
+            .accessibilityValue(bookmarkSaved ? "已添加" : "添加当前位置")
+            .accessibilityHint(bookmarkSaved ? "轻点取消本页书签" : "")
             .disabled(isSavingBookmark)
             readerMoreMenu
         }
