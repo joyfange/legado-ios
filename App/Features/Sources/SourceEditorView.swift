@@ -66,21 +66,21 @@ struct SourceEditorView: View {
                                         }
                                     }
                                 }
-                            }
+                            }.readingRowBackground()
                             Section {
                                 Text("点击字段可全屏编辑规则。支持 @css:、XPath、$. JSONPath、@js:、{{key}}、{{page}} 和 ## 替换语法。未识别的扩展字段保留在 JSON 中。")
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            }
+                                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+                            }.readingRowBackground()
                         }
                         if !validation.isEmpty {
                             Section("静态检查") {
                                 ForEach(validation) { issue in
                                     Label("\(issue.field)：\(issue.message)", systemImage: issue.severity == .error ? "xmark.circle" : "exclamationmark.triangle")
-                                        .font(.footnote).foregroundStyle(issue.severity == .error ? .red : .orange)
+                                        .font(AppFontStyle.footnote.themed).foregroundStyle(issue.severity == .error ? .red : .orange)
                                 }
-                            }
+                            }.readingRowBackground()
                         }
-                    }
+                    }.readingThemedListBackground()
                 }
             }
             .navigationTitle(original == nil ? "新建书源" : "编辑书源")
@@ -133,14 +133,14 @@ struct SourceEditorView: View {
                     set: { document.set(.number(Double($0)), at: "bookSourceType") })) {
                     Text("文本").tag(0); Text("音频").tag(1); Text("图片").tag(2); Text("文件").tag(3); Text("视频").tag(4)
                 }
-            }
+            }.readingRowBackground()
             Section("开关") {
                 Toggle("启用书源", isOn: boolean("enabled", fallback: true))
                 Toggle("启用发现", isOn: boolean("enabledExplore", fallback: true))
                 Toggle("Cookie Jar", isOn: boolean("enabledCookieJar", fallback: true))
                 Toggle("事件监听", isOn: boolean("eventListener"))
                 Toggle("定制按钮", isOn: boolean("customButton"))
-            }
+            }.readingRowBackground()
             Section("排序与状态") {
                 ForEach(["customOrder", "weight", "lastUpdateTime", "respondTime"], id: \.self) { key in
                     HStack {
@@ -148,7 +148,7 @@ struct SourceEditorView: View {
                         TextField(key, text: number(key)).keyboardType(.numbersAndPunctuation).multilineTextAlignment(.trailing)
                     }
                 }
-            }
+            }.readingRowBackground()
         }
     }
 

@@ -34,25 +34,25 @@ struct LocalBookDetailView: View {
             VStack(spacing: 16) {
                 VStack(spacing: 14) {
                     BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.customCoverUrl ?? book.coverUrl, width: 108, height: 154)
-                    Text(book.name).font(.title2.bold())
-                    if !book.author.isEmpty { Text(book.author).font(.subheadline).foregroundStyle(.secondary) }
+                    Text(book.name).font(AppFontStyle.title2.bold().themed)
+                    if !book.author.isEmpty { Text(book.author).font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary) }
                     HStack {
                         StatusPill(text: "本地 " + (URL(string: book.bookUrl)?.pathExtension.uppercased() ?? "TXT"), systemImage: "doc.text.fill")
                         if let charset = book.charset { StatusPill(text: charset, color: ReadingTheme.coral, systemImage: "character") }
                     }
-                    Text(book.originName).font(.caption).foregroundStyle(.secondary)
+                    Text(book.originName).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 }
                 .padding(.top, 12)
 
                 if let intro = book.intro, !intro.isEmpty {
-                    ReadingCard { Text(intro).font(.subheadline).frame(maxWidth: .infinity, alignment: .leading) }
+                    ReadingCard { Text(intro).font(AppFontStyle.subheadline.themed).frame(maxWidth: .infinity, alignment: .leading) }
                 }
                 ReadingCard {
                     VStack(alignment: .leading, spacing: 0) {
                         HStack {
-                            Label("目录", systemImage: "list.bullet.rectangle.portrait.fill").font(.headline)
+                            Label("目录", systemImage: "list.bullet.rectangle.portrait.fill").font(AppFontStyle.headline.themed)
                             Spacer()
-                            Text("\(model.chapters.count) 章").font(.caption).foregroundStyle(.secondary)
+                            Text("\(model.chapters.count) 章").font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                         }
                         .padding(.bottom, 12)
                         if model.isLoading {
@@ -68,9 +68,9 @@ struct LocalBookDetailView: View {
                                     HStack(spacing: 12) {
                                         Text(String(format: "%02d", chapter.index + 1))
                                             .font(.caption.monospacedDigit()).foregroundStyle(.tertiary).frame(width: 28)
-                                        Text(chapter.title).font(.subheadline).foregroundStyle(.primary).lineLimit(2)
+                                        Text(chapter.title).font(AppFontStyle.subheadline.themed).foregroundStyle(.primary).lineLimit(2)
                                         Spacer()
-                                        Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+                                        Image(systemName: "chevron.right").font(AppFontStyle.caption.bold().themed).foregroundStyle(.tertiary)
                                     }
                                     .padding(.vertical, 12)
                                 }
@@ -141,8 +141,8 @@ private struct LocalBookTableOfContentsView: View {
                         }
                     }
                 }
-            }
-            .searchable(text: $query, prompt: "搜索目录")
+            }.readingThemedListBackground()
+            .readingInlineSearch(text: $query, prompt: "搜索目录")
             .navigationTitle("目录")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

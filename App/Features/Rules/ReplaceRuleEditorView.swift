@@ -28,7 +28,7 @@ struct ReplaceRuleEditorView: View {
             VStack(spacing: 0) {
                 Picker("模式", selection: $mode) { Text("编辑规则").tag(0); Text("测试规则").tag(1) }
                     .pickerStyle(.segmented).padding()
-                Form { if mode == 0 { configuration } else { testForm } }
+                Form { if mode == 0 { configuration } else { testForm } }.readingThemedListBackground()
             }
             .navigationTitle(rule.name.isEmpty ? "净化规则" : rule.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -85,7 +85,7 @@ struct ReplaceRuleEditorView: View {
                 TextField("名称", text: $rule.name)
                 TextField("分组", text: optional(\.group))
                 Toggle("启用", isOn: $rule.isEnabled)
-            }
+            }.readingRowBackground()
             Section("匹配与替换") {
                 Toggle("使用正则表达式", isOn: $rule.isRegex)
                 NavigationLink {
@@ -96,14 +96,14 @@ struct ReplaceRuleEditorView: View {
                         language: rule.isRegex && rule.replacement.hasPrefix("@js:") ? .javascript : .regex)
                 } label: { fieldPreview("替换为（留空即删除）", value: rule.replacement) }
                 Text("正则替换使用 $1、$2 引用捕获组；以 @js: 开头可运行 JavaScript，result 为当前匹配文本，可读取 book 和 chapter。普通文本替换按字面匹配。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
+                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+            }.readingRowBackground()
             Section("作用范围") {
                 Toggle("章节标题", isOn: $rule.scopeTitle)
                 Toggle("正文", isOn: $rule.scopeContent)
                 ReadingTextField("限定书名或书源（留空为全部）", text: optional(\.scope), axis: .vertical)
                 ReadingTextField("排除书名或书源", text: optional(\.excludeScope), axis: .vertical)
-            }
+            }.readingRowBackground()
             Section("执行设置") {
                 HStack {
                     Text("超时 (ms)")
@@ -116,8 +116,8 @@ struct ReplaceRuleEditorView: View {
                         .keyboardType(.numbersAndPunctuation).multilineTextAlignment(.trailing)
                 }
                 Text("超时小于等于 0 时使用 3000 ms。单次正则最多运行 60 秒。规则按排序编号依次执行；资源超限或超时会保留原文并报告错误。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
+                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+            }.readingRowBackground()
         }
     }
 
@@ -130,13 +130,13 @@ struct ReplaceRuleEditorView: View {
                 NavigationLink {
                     RuleCodeFieldView(title: "测试正文", path: "测试输入", text: $testContent)
                 } label: { fieldPreview("正文", value: testContent) }
-            }
+            }.readingRowBackground()
             Section {
                 Button { runTest() } label: {
                     HStack { Label(isTesting ? "测试中…" : "运行当前草稿", systemImage: "play.fill"); Spacer(); if isTesting { ProgressView() } }
                 }.disabled(isTesting)
-                if !rule.isEnabled { Text("规则处于停用状态，结果将保持原文。可在编辑页启用后测试。").font(.footnote).foregroundStyle(.secondary) }
-            }
+                if !rule.isEnabled { Text("规则处于停用状态，结果将保持原文。可在编辑页启用后测试。").font(AppFontStyle.footnote.themed).foregroundStyle(.secondary) }
+            }.readingRowBackground()
             if let result = testResult {
                 Section("测试结果 · \(result.elapsedMilliseconds.formatted(.number.precision(.fractionLength(1)))) ms") {
                     Label(result.report.effectiveRuleIDs.isEmpty ? "未改变文本（请检查匹配、启用状态及作用范围）" : "规则已生效",
@@ -144,11 +144,11 @@ struct ReplaceRuleEditorView: View {
                     ReadingLabeledContent("标题", value: result.report.title)
                     Text(result.report.content.isEmpty ? "（正文为空）" : result.report.content)
                         .font(.body.monospaced()).textSelection(.enabled)
-                }
+                }.readingRowBackground()
                 if !result.report.diagnostics.isEmpty {
                     Section("执行错误") {
                         ForEach(result.report.diagnostics) { diagnostic in Text(diagnostic.message).foregroundStyle(.red) }
-                    }
+                    }.readingRowBackground()
                 }
             }
         }

@@ -238,7 +238,7 @@ private struct BookshelfView: View {
                         if let book = recentBook {
                             VStack(alignment: .leading, spacing: 12) {
                                 Text("继续阅读")
-                                    .font(.subheadline.weight(.medium))
+                                    .font(AppFontStyle.subheadline.weight(.medium).themed)
                                     .foregroundStyle(.secondary)
                                 NavigationLink {
                                     BookshelfBookDestination(book: book, source: sources.sources.first { $0.bookSourceUrl == book.origin })
@@ -355,10 +355,10 @@ private struct BookshelfView: View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(selectedGroupID == BookGroup.idAll ? "全部书籍" : selectedGroup.groupName)
-                    .font(.title3.bold())
+                    .font(AppFontStyle.title3.bold().themed)
                     .accessibilityAddTraits(.isHeader)
                 Text("\(displayedBooks.count)本")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
             }
             Spacer()
         }
@@ -476,7 +476,7 @@ private struct BookshelfView: View {
                     withAnimation(.easeOut(duration: 0.2)) { selectedGroupID = group.id }
                 } label: {
                     Text(Self.verticalLabel(group.groupName))
-                        .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular))
+                        .font(AppFontStyle.system(size: 10.5, weight: isSelected ? .semibold : .regular).themed)
                         .multilineTextAlignment(.center)
                         .lineSpacing(0)
                         .foregroundStyle(isSelected ? ReadingTheme.onAccent : Color.secondary)
@@ -535,7 +535,7 @@ private struct BookshelfView: View {
             HStack(spacing: 24) {
                 ForEach(library.visibleGroups) { group in
                     Button(group.groupName) { selectedGroupID = group.id }
-                        .font(.subheadline.weight(selectedGroup.id == group.id ? .semibold : .regular))
+                        .font(AppFontStyle.subheadline.weight(selectedGroup.id == group.id ? .semibold : .regular).themed)
                         .foregroundStyle(selectedGroup.id == group.id ? Color.primary : .secondary)
                         .frame(minHeight: 44)
                         .overlay(alignment: .bottom) {
@@ -547,7 +547,7 @@ private struct BookshelfView: View {
                 }
                 Button { showsGroupManager = true } label: {
                     Image(systemName: "slider.horizontal.below.rectangle")
-                        .font(.system(size: 14))
+                        .font(AppFontStyle.system(size: 14).themed)
                         .foregroundStyle(.secondary)
                         .frame(minWidth: 32, minHeight: 44)
                 }
@@ -663,11 +663,11 @@ private struct BookshelfGridItem: View {
                         .frame(height: height * 0.5)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(book.name)
-                                .font(.system(size: width < 90 ? 11 : 12.5, weight: .semibold))
+                                .font(AppFontStyle.system(size: width < 90 ? 11 : 12.5, weight: .semibold).themed)
                                 .foregroundStyle(Color.white)
                                 .lineLimit(2)
                             Text(book.author.isEmpty ? "未知作者" : book.author)
-                                .font(.system(size: width < 90 ? 9 : 10))
+                                .font(AppFontStyle.system(size: width < 90 ? 9 : 10).themed)
                                 .foregroundStyle(Color.white.opacity(0.78))
                                 .lineLimit(1)
                         }
@@ -720,12 +720,12 @@ private struct BookshelfFolderGridTile: View {
             .overlay(alignment: .bottomLeading) {
                 if !hideTitles {
                     HStack(spacing: 4) {
-                        Image(systemName: "folder.fill").font(.system(size: 9))
+                        Image(systemName: "folder.fill").font(AppFontStyle.system(size: 9).themed)
                         Text(folder.name).lineLimit(1)
                         Spacer(minLength: 2)
                         Text("\(books.count)").monospacedDigit()
                     }
-                    .font(.system(size: width < 90 ? 10 : 11, weight: .semibold))
+                    .font(AppFontStyle.system(size: width < 90 ? 10 : 11, weight: .semibold).themed)
                     .foregroundStyle(Color.white)
                     .padding(.horizontal, 7)
                     .frame(height: 22)
@@ -753,19 +753,19 @@ private struct BookshelfFolderRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.fill")
-                        .font(.caption)
+                        .font(AppFontStyle.caption.themed)
                         .foregroundStyle(ReadingTheme.accent)
                     Text(folder.name)
-                        .font(.body.weight(.medium))
+                        .font(AppFontStyle.body.weight(.medium).themed)
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
                 Text("\(books.count) 本 · " + books.prefix(3).map(\.name).joined(separator: "、"))
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(AppFontStyle.caption.weight(.semibold).themed)
                 .foregroundStyle(.tertiary)
         }
         .padding(.vertical, compact ? 10 : 12)
@@ -799,11 +799,11 @@ private struct ContinueReadingCard: View {
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(book.name)
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppFontStyle.subheadline.weight(.semibold).themed)
                     .foregroundStyle(ReadingTheme.ink)
                     .lineLimit(1)
                 Text(BookReadingPresentation.position(book))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                     .lineLimit(1)
                 if book.totalChapterNum > 0 {
                     HStack(spacing: 8) {
@@ -820,7 +820,7 @@ private struct ContinueReadingCard: View {
                 Text("继续")
                 Image(systemName: "arrow.right")
             }
-            .font(.caption.weight(.semibold))
+            .font(AppFontStyle.caption.weight(.semibold).themed)
             .foregroundStyle(ReadingTheme.onAccent)
             .padding(.horizontal, 12)
             .frame(minHeight: 32)
@@ -867,14 +867,14 @@ private struct BookshelfManagerSheet: View {
                     ids.move(fromOffsets: offsets, toOffset: destination)
                     Task { await library.reorderGroups(ids) }
                 }
-            }
+            }.readingThemedListBackground()
             .listStyle(.plain)
             if deleting {
                 Button {
                     confirmsDelete = true
                 } label: {
                     Text(marked.isEmpty ? "选择要删除的书架" : "删除所选书架（\(marked.count)）")
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(AppFontStyle.system(size: 15, weight: .semibold).themed)
                         .foregroundStyle(marked.isEmpty ? Color.secondary : Color.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 46)
@@ -920,7 +920,7 @@ private struct BookshelfManagerSheet: View {
     private var header: some View {
         HStack(spacing: 4) {
             Text("管理书架")
-                .font(.title3.bold())
+                .font(AppFontStyle.title3.bold().themed)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
             Button {
@@ -929,7 +929,7 @@ private struct BookshelfManagerSheet: View {
                 showsCreate = true
             } label: {
                 Image(systemName: "folder.badge.plus")
-                    .font(.system(size: 17))
+                    .font(AppFontStyle.system(size: 17).themed)
                     .frame(width: 40, height: 40)
             }
             .accessibilityLabel("新建书架")
@@ -939,9 +939,9 @@ private struct BookshelfManagerSheet: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: deleting ? "xmark" : "trash")
-                        .font(.system(size: 14))
+                        .font(AppFontStyle.system(size: 14).themed)
                     Text(deleting ? "取消" : "批量删除")
-                        .font(.system(size: 14))
+                        .font(AppFontStyle.system(size: 14).themed)
                 }
                 .frame(minHeight: 40)
             }
@@ -960,7 +960,7 @@ private struct BookshelfManagerSheet: View {
                     if isMarked { marked.remove(group.groupId) } else { marked.insert(group.groupId) }
                 } label: {
                     Image(systemName: isMarked ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 19))
+                        .font(AppFontStyle.system(size: 19).themed)
                         .foregroundStyle(isMarked ? ReadingTheme.coral : Color.secondary.opacity(isCustom ? 1 : 0.35))
                         .frame(width: 26, height: 44)
                 }
@@ -968,7 +968,7 @@ private struct BookshelfManagerSheet: View {
                 .accessibilityLabel(isCustom ? (isMarked ? "取消选择" : "选择") : "系统书架不能删除")
             } else {
                 Image(systemName: "line.3.horizontal")
-                    .font(.system(size: 14, weight: .medium))
+                    .font(AppFontStyle.system(size: 14, weight: .medium).themed)
                     .foregroundStyle(.secondary)
                     .frame(width: 26, height: 44)
                     .accessibilityHidden(true)
@@ -984,7 +984,7 @@ private struct BookshelfManagerSheet: View {
                 }
             } label: {
                 Text(group.groupName)
-                    .font(.body)
+                    .font(AppFontStyle.body.themed)
                     .foregroundStyle(group.show ? Color.primary : Color.secondary)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
@@ -1000,7 +1000,7 @@ private struct BookshelfManagerSheet: View {
                 Task { await library.setGroupVisible(group, visible: !group.show) }
             } label: {
                 Image(systemName: group.show ? "eye" : "eye.slash")
-                    .font(.system(size: 15))
+                    .font(AppFontStyle.system(size: 15).themed)
                     .foregroundStyle(group.show ? Color.primary : Color.secondary)
                     .frame(width: 36, height: 44)
                     .contentShape(Rectangle())
@@ -1017,26 +1017,26 @@ private struct BookshelfManagerSheet: View {
                 .onTapGesture { closeDialog() }
             VStack(alignment: .leading, spacing: 16) {
                 Text(editingGroup == nil ? "新建书架" : "重命名书架")
-                    .font(.system(size: 17, weight: .semibold))
+                    .font(AppFontStyle.system(size: 17, weight: .semibold).themed)
                 TextField("输入书架名称", text: $draft)
-                    .font(.system(size: 15))
+                    .font(AppFontStyle.system(size: 15).themed)
                     .padding(.horizontal, 14)
                     .frame(height: 44)
                     .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     .onChange(of: draft) { _ in dialogError = nil }
                 if let dialogError {
                     Text(dialogError)
-                        .font(.system(size: 12))
+                        .font(AppFontStyle.system(size: 12).themed)
                         .foregroundStyle(ReadingTheme.coral)
                 }
                 HStack(spacing: 8) {
                     Spacer()
                     Button("取消") { closeDialog() }
-                        .font(.system(size: 15))
+                        .font(AppFontStyle.system(size: 15).themed)
                         .foregroundStyle(.primary)
                         .frame(width: 64, height: 38)
                     Button(editingGroup == nil ? "创建" : "保存") { submit() }
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(AppFontStyle.system(size: 15, weight: .semibold).themed)
                         .foregroundStyle(ReadingTheme.accent)
                         .frame(width: 64, height: 38)
                 }
@@ -1104,7 +1104,7 @@ private struct BookGroupSelectView: View {
                         if selected.contains(group.id) { Image(systemName: "checkmark").foregroundStyle(ReadingTheme.accent) }
                     }
                 }
-            }
+            }.readingThemedListBackground()
             .overlay {
                 if customGroups.isEmpty {
                     ReadingUnavailableView("没有自定义书架", systemImage: "rectangle.3.group", description: Text("在「管理书架」里新建书架。"))
@@ -1154,11 +1154,11 @@ private struct LocalBookImportReviewView: View {
                             .foregroundStyle(selectedPaths.contains(url.path) ? ReadingTheme.accent : .secondary)
                         VStack(alignment: .leading) {
                             Text(url.deletingPathExtension().lastPathComponent).foregroundStyle(.primary)
-                            Text(url.lastPathComponent).font(.caption).foregroundStyle(.secondary)
+                            Text(url.lastPathComponent).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                         }
                     }
                 }
-            }
+            }.readingThemedListBackground()
             .overlay { if isImporting { ProgressView("正在导入…") } }
             .navigationTitle("导入本地书")
             .navigationBarTitleDisplayMode(.inline)
@@ -1201,13 +1201,13 @@ private struct EmptyBookshelfHero: View {
     var body: some View {
         VStack(spacing: 24) {
             Image(systemName: "books.vertical")
-                .font(.system(size: 40, weight: .ultraLight))
+                .font(AppFontStyle.system(size: 40, weight: .ultraLight).themed)
                 .foregroundStyle(ReadingTheme.accent)
                 .accessibilityHidden(true)
             VStack(spacing: 10) {
-                Text("书架还是空的").font(.title3.weight(.semibold))
+                Text("书架还是空的").font(AppFontStyle.title3.weight(.semibold).themed)
                 Text("导入本地书，或添加书源后搜索书籍。")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
             VStack(spacing: 12) {
@@ -1215,7 +1215,7 @@ private struct EmptyBookshelfHero: View {
                     .readingProminentButtonStyle()
                     .controlSize(.large)
                 NavigationLink("添加书源") { SourceManagementView() }
-                    .font(.subheadline)
+                    .font(AppFontStyle.subheadline.themed)
                     .frame(minHeight: 44)
             }
         }
@@ -1291,7 +1291,7 @@ private struct ReaderOpeningPlaceholder: View {
             if showsSpinner {
                 Button { dismiss() } label: {
                     Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(AppFontStyle.system(size: 17, weight: .semibold).themed)
                         .foregroundStyle(Color(uiColor: style.foreground))
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
@@ -1336,7 +1336,7 @@ private struct BookshelfRow: View {
             VStack(alignment: .leading, spacing: 5) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(book.name)
-                        .font(.body.weight(.medium))
+                        .font(AppFontStyle.body.weight(.medium).themed)
                         .foregroundStyle(.primary)
                         .lineLimit(2)
                     Spacer(minLength: 0)
@@ -1349,10 +1349,10 @@ private struct BookshelfRow: View {
                     }
                 }
                 Text(book.author.isEmpty ? "未知作者" : book.author)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
                 if !compact {
                     Text(readingPosition)
-                        .font(.caption)
+                        .font(AppFontStyle.caption.themed)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -1382,7 +1382,6 @@ struct SearchView: View {
     @State private var selectedGroups = Set<String>()
     @State private var selectedSourceID: String?
     @State private var didStartInitialSearch = false
-    @State private var didAutoFocus = false
     @State private var confirmsClearHistory = false
     @FocusState private var fieldFocused: Bool
     @AppStorage("precisionSearch") private var precisionSearch = false
@@ -1445,14 +1444,9 @@ struct SearchView: View {
         .task {
             normalizeScope()
             await model.loadSearchKeywords()
-            if initialKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                // 只在首次进入时自动聚焦，并等推入动画结束后再弹出键盘；从书籍详情返回时不再弹出。
-                guard !didAutoFocus else { return }
-                didAutoFocus = true
-                try? await Task.sleep(nanoseconds: 450_000_000)
-                guard !Task.isCancelled, model.state == .idle else { return }
-                fieldFocused = true
-            } else if !library.sources.isEmpty, !didStartInitialSearch {
+            // 进入搜索页不自动弹出键盘，点输入框再输入。
+            if !initialKeyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               !library.sources.isEmpty, !didStartInitialSearch {
                 didStartInitialSearch = true
                 startSearch()
             }
@@ -1465,9 +1459,7 @@ struct SearchView: View {
                             .accessibilityIdentifier("search.stop")
                     }
                     Menu {
-                        Toggle("精准搜索", isOn: $precisionSearch)
-                        Toggle("不聚合", isOn: $noAggregate)
-                        Button("分组或书源", systemImage: "scope") { showsScope = true }
+                        Button("选择分组或书源", systemImage: "scope") { showsScope = true }
                         NavigationLink {
                             SourceManagementView()
                         } label: {
@@ -1491,7 +1483,7 @@ struct SearchView: View {
         .sheet(isPresented: $showsScope) {
             SearchScopeSheet(
                 sources: library.sources.filter(\.enabled),
-                groups: library.groups,
+                groups: library.visibleGroups,
                 selectedGroups: $selectedGroups,
                 selectedSourceID: $selectedSourceID
             )
@@ -1529,7 +1521,7 @@ struct SearchView: View {
                     .accessibilityLabel("清除输入")
                 }
             }
-            .font(.body)
+            .font(AppFontStyle.body.themed)
             .padding(.leading, 14)
             .padding(.trailing, keyword.isEmpty ? 14 : 6)
             .frame(minHeight: 44)
@@ -1567,10 +1559,10 @@ struct SearchView: View {
 
     private func optionLabel(_ title: String, symbol: String, active: Bool) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+            Image(systemName: symbol).font(AppFontStyle.system(size: 12, weight: .semibold).themed)
             Text(title).lineLimit(1).minimumScaleFactor(0.75)
         }
-        .font(.footnote)
+        .font(AppFontStyle.footnote.themed)
         .foregroundStyle(active ? palette.accent : palette.primary)
         .padding(.horizontal, 6)
         .frame(maxWidth: .infinity, minHeight: 34)
@@ -1598,7 +1590,8 @@ struct SearchView: View {
         var seen = Set<String>()
         var out: [String] = []
         for source in searchableSources {
-            for group in source.groups where !group.isEmpty && seen.insert(group).inserted {
+            for group in source.groups where !group.isEmpty && !library.hiddenGroups.contains(group)
+                && seen.insert(group).inserted {
                 out.append(group)
             }
         }
@@ -1642,9 +1635,9 @@ struct SearchView: View {
     @ViewBuilder
     private var idleContent: some View {
         HStack(spacing: 6) {
-            Image(systemName: "books.vertical").font(.caption)
+            Image(systemName: "books.vertical").font(AppFontStyle.caption.themed)
             Text("\(searchableSourceCount) 个书源 · \(scopeDisplay)")
-                .font(.caption)
+                .font(AppFontStyle.caption.themed)
             Spacer(minLength: 0)
         }
         .foregroundStyle(palette.secondary)
@@ -1659,17 +1652,17 @@ struct SearchView: View {
                     HStack(spacing: 12) {
                         ProgressView().controlSize(.regular)
                         VStack(alignment: .leading, spacing: 3) {
-                            Text("正在搜索“\(model.submittedKeyword)”").font(.headline)
-                            Text(searchProgressText).font(.caption).foregroundStyle(.secondary)
+                            Text("正在搜索“\(model.submittedKeyword)”").font(AppFontStyle.headline.themed)
+                            Text(searchProgressText).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Button("停止", role: .destructive) { model.cancel() }
-                            .font(.subheadline.weight(.medium))
+                            .font(AppFontStyle.subheadline.weight(.medium).themed)
                     }
                     ProgressView(value: searchProgress)
                         .tint(ReadingTheme.accent)
                     Text("结果会在书源返回后立即显示，无需等待全部完成。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 }
             }
             ForEach(0..<2, id: \.self) { _ in SearchLoadingRow() }
@@ -1681,11 +1674,11 @@ struct SearchView: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("“\(model.submittedKeyword)”").font(.headline).lineLimit(1)
+                        Text("“\(model.submittedKeyword)”").font(AppFontStyle.headline.themed).lineLimit(1)
                         Text(model.isShowingCachedResults
                              ? (model.state == .searching ? "已显示缓存结果，正在更新书源" : "已显示缓存结果")
                              : resultSummary)
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if model.isPaused {
@@ -1721,13 +1714,13 @@ struct SearchView: View {
             if model.isLoadingMore {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
-                    Text("正在查找更多结果…").font(.subheadline).foregroundStyle(.secondary)
+                    Text("正在查找更多结果…").font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
             } else if !model.hasMore, model.state == .finished {
                 Text("已经到底了")
-                    .font(.caption).foregroundStyle(.tertiary)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.tertiary)
                     .frame(maxWidth: .infinity).padding(.vertical, 8)
             }
         }
@@ -1807,7 +1800,7 @@ struct SearchView: View {
                     HStack(alignment: .top) {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(diagnostic.message).font(.subheadline)
+                            Text(diagnostic.message).font(AppFontStyle.subheadline.themed)
                             Text(diagnostic.code).font(.caption.monospaced()).foregroundStyle(.secondary)
                         }
                     }
@@ -1823,18 +1816,18 @@ struct SearchView: View {
         ReadingCard {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text("搜索历史").font(.subheadline.weight(.semibold))
+                    Text("搜索历史").font(AppFontStyle.subheadline.weight(.semibold).themed)
                     Spacer()
                     if !model.searchKeywords.isEmpty {
                         Button("清空") { confirmsClearHistory = true }
-                            .font(.subheadline)
+                            .font(AppFontStyle.subheadline.themed)
                             .buttonStyle(.plain)
                             .foregroundStyle(palette.accent)
                             .accessibilityIdentifier("searchHistory.clear")
                     }
                 }
                 if model.searchKeywords.isEmpty {
-                    Text("暂无搜索记录").font(.subheadline).foregroundStyle(palette.secondary)
+                    Text("暂无搜索记录").font(AppFontStyle.subheadline.themed).foregroundStyle(palette.secondary)
                         .accessibilityIdentifier("searchHistory.empty")
                 } else if #available(iOS 16.0, *) {
                     SearchHistoryFlow(spacing: 8) {
@@ -1853,7 +1846,7 @@ struct SearchView: View {
     private func historyChip(_ query: String) -> some View {
         HStack(spacing: 2) {
             Button { keyword = query; startSearch() } label: {
-                Text(query).font(.subheadline).foregroundStyle(palette.primary)
+                Text(query).font(AppFontStyle.subheadline.themed).foregroundStyle(palette.primary)
                     .lineLimit(1).truncationMode(.middle)
                     .padding(.leading, 13).padding(.trailing, 4).padding(.vertical, 8)
                     .contentShape(Rectangle())
@@ -1862,7 +1855,7 @@ struct SearchView: View {
             .accessibilityLabel("再次搜索：" + query)
             .accessibilityIdentifier("searchHistory.query." + query)
             Button { Task { await model.deleteSearchKeyword(query) } } label: {
-                Image(systemName: "xmark").font(.system(size: 10, weight: .semibold))
+                Image(systemName: "xmark").font(AppFontStyle.system(size: 10, weight: .semibold).themed)
                     .foregroundStyle(palette.secondary)
                     .frame(width: 22, height: 22).contentShape(Rectangle())
             }
@@ -1969,13 +1962,13 @@ private struct SearchStateCard<Actions: View>: View {
         ReadingCard {
             VStack(spacing: 14) {
                 Image(systemName: systemImage)
-                    .font(.system(size: 32))
+                    .font(AppFontStyle.system(size: 32).themed)
                     .foregroundStyle(ReadingTheme.accent)
                     .frame(width: 64, height: 64)
                     .background(ReadingTheme.accentSoft.opacity(0.5), in: Circle())
                 VStack(spacing: 5) {
-                    Text(title).font(.headline).multilineTextAlignment(.center)
-                    Text(detail).font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(title).font(AppFontStyle.headline.themed).multilineTextAlignment(.center)
+                    Text(detail).font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 HStack(spacing: 10) { actions }
             }
@@ -1999,12 +1992,12 @@ private struct SearchBookRow: View {
                 height: 74
             )
             VStack(alignment: .leading, spacing: 6) {
-                Text(book.name).font(.body.weight(.medium)).foregroundStyle(.primary).lineLimit(2)
+                Text(book.name).font(AppFontStyle.body.weight(.medium).themed).foregroundStyle(.primary).lineLimit(2)
                 Text(book.author.isEmpty ? "未知作者" : book.author)
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 if let latest = book.latestChapterTitle, !latest.isEmpty {
                     Text(latest)
-                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
                 }
                 HStack(spacing: 6) {
                     Text(book.origins.count > 1
@@ -2016,11 +2009,11 @@ private struct SearchBookRow: View {
                         Text(wordCount).lineLimit(1)
                     }
                 }
-                .font(.caption)
+                .font(AppFontStyle.caption.themed)
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(AppFontStyle.caption.bold().themed).foregroundStyle(.tertiary)
         }
         .padding(14)
         .background {
@@ -2033,6 +2026,7 @@ private struct SearchBookRow: View {
 }
 
 private struct SettingsView: View {
+    @ThemePalette private var palette
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeMode") private var themeMode = "0"
     @ScaledMetric(relativeTo: .body) private var rowHeight = 52
@@ -2087,11 +2081,11 @@ private struct SettingsView: View {
     private func profileHeader(topInset: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("我的")
-                .font(.largeTitle.bold())
+                .font(AppFontStyle.largeTitle.bold().themed)
                 .foregroundStyle(ProfileTheme.ink)
                 .accessibilityAddTraits(.isHeader)
             Text("按照你的方式阅读")
-                .font(.subheadline)
+                .font(AppFontStyle.subheadline.themed)
                 .foregroundStyle(ProfileTheme.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -2113,17 +2107,17 @@ private struct SettingsView: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(AppIdentity.name)
-                        .font(.headline)
+                        .font(AppFontStyle.headline.themed)
                         .foregroundStyle(ProfileTheme.ink)
                         .fixedSize(horizontal: false, vertical: true)
                     Text("快速搜书，自由阅读")
-                        .font(.footnote)
+                        .font(AppFontStyle.footnote.themed)
                         .foregroundStyle(ProfileTheme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(AppFontStyle.system(size: 13, weight: .medium).themed)
                     .foregroundStyle(ProfileTheme.ink.opacity(0.75))
                     .frame(width: 26, height: 26)
                     .background(ProfileTheme.detail.opacity(0.10), in: Circle())
@@ -2132,17 +2126,11 @@ private struct SettingsView: View {
             .padding(14)
             .frame(maxWidth: .infinity, minHeight: 86, alignment: .leading)
             .background {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .fill(LinearGradient(
-                        colors: [ProfileTheme.surface, ProfileTheme.appCardTint],
-                        startPoint: .topLeading, endPoint: .bottomTrailing
-                    ))
+                // 跟随主题的界面效果 / 卡片背景 / 圆角边框 / 玻璃模式。
+                ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: 16), style: .continuous),
+                             isCard: true)
             }
-            .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(ProfileTheme.surface.opacity(0.9), lineWidth: 0.75)
-            }
-            .shadow(color: .black.opacity(0.035), radius: 18, x: 0, y: 8)
+            .shadow(color: .black.opacity(palette.cardBackground ? 0.035 : 0), radius: 18, x: 0, y: 8)
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
@@ -2228,12 +2216,16 @@ private struct SettingsView: View {
     private func settingSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Text(title)
-                .font(.body)
+                .font(AppFontStyle.body.themed)
                 .foregroundStyle(ProfileTheme.secondary)
                 .accessibilityAddTraits(.isHeader)
             VStack(spacing: 0, content: content)
-                .background(ProfileTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                .shadow(color: .black.opacity(0.025), radius: 20, x: 0, y: 8)
+                .background {
+                    ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: 18), style: .continuous),
+                                 isCard: true)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: palette.cornerRadius(default: 18), style: .continuous))
+                .shadow(color: .black.opacity(palette.cardBackground ? 0.025 : 0), radius: 20, x: 0, y: 8)
         }
     }
 
@@ -2263,13 +2255,13 @@ private struct SettingsView: View {
                 .frame(width: 26, height: 24)
                 .accessibilityHidden(true)
             Text(title)
-                .font(.body)
+                .font(AppFontStyle.body.themed)
                 .foregroundStyle(ProfileTheme.ink)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if let value {
                 Text(value)
-                    .font(.footnote)
+                    .font(AppFontStyle.footnote.themed)
                     .foregroundStyle(ProfileTheme.secondary)
                     .multilineTextAlignment(.trailing)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2282,7 +2274,7 @@ private struct SettingsView: View {
                     }
             }
             Image(systemName: isExternal ? "arrow.up.right" : "chevron.right")
-                .font(.caption.weight(.medium))
+                .font(AppFontStyle.caption.weight(.medium).themed)
                 .foregroundStyle(ProfileTheme.secondary.opacity(0.65))
                 .accessibilityHidden(true)
         }
@@ -2333,8 +2325,8 @@ private struct ProfileSettingIcon: View {
         Group {
             if systemName == "textformat.size" {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text("A").font(.system(size: 24, weight: .light)).foregroundStyle(ProfileTheme.ink)
-                    Text("A").font(.system(size: 13, weight: .medium)).foregroundStyle(ProfileTheme.detail)
+                    Text("A").font(AppFontStyle.system(size: 24, weight: .light).themed).foregroundStyle(ProfileTheme.ink)
+                    Text("A").font(AppFontStyle.system(size: 13, weight: .medium).themed).foregroundStyle(ProfileTheme.detail)
                 }
             } else if ["circle.lefthalf.filled", "waveform", "bookmark", "clock", "globe"].contains(systemName) {
                 Canvas { context, size in
@@ -2344,7 +2336,7 @@ private struct ProfileSettingIcon: View {
                 .frame(width: 22, height: 22)
             } else {
                 Image(systemName: systemName)
-                    .font(.system(size: 20, weight: .regular))
+                    .font(AppFontStyle.system(size: 20, weight: .regular).themed)
                     .symbolRenderingMode(.palette)
                     .foregroundStyle(ProfileTheme.ink, ProfileTheme.detail)
             }
@@ -2440,10 +2432,10 @@ private struct AllBookmarksView: View {
                                     Button("编辑书签", systemImage: "square.and.pencil") { editingBookmark = bookmark }
                                 }
                         }
-                    }
+                    }.readingRowBackground()
                 }
             }
-        }
+        }.readingThemedListBackground()
         .navigationTitle("书签")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -2493,12 +2485,12 @@ private struct AllBookmarksView: View {
     private func bookmarkRow(_ bookmark: Bookmark) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(bookmark.chapterName.isEmpty ? "第 \(bookmark.chapterIndex + 1) 章" : bookmark.chapterName)
-                .font(.headline).foregroundStyle(ReadingTheme.coral)
+                .font(AppFontStyle.headline.themed).foregroundStyle(ReadingTheme.coral)
             if !bookmark.bookText.isEmpty {
-                Text(bookmark.bookText).font(.footnote).foregroundStyle(.secondary).lineLimit(3)
+                Text(bookmark.bookText).font(AppFontStyle.footnote.themed).foregroundStyle(.secondary).lineLimit(3)
             }
             if !bookmark.content.isEmpty {
-                Label(bookmark.content, systemImage: "note.text").font(.caption).lineLimit(2)
+                Label(bookmark.content, systemImage: "note.text").font(AppFontStyle.caption.themed).lineLimit(2)
             }
         }
         .padding(.vertical, 5)
@@ -2564,14 +2556,14 @@ private struct BookmarkEditorView: View {
     var body: some View {
         ReadingNavigationStack {
             Form {
-                Section("原文") { TextEditor(text: $bookText).frame(minHeight: 150) }
-                Section("摘要") { TextEditor(text: $content).frame(minHeight: 120) }
+                Section("原文") { TextEditor(text: $bookText).frame(minHeight: 150) }.readingRowBackground()
+                Section("摘要") { TextEditor(text: $content).frame(minHeight: 120) }.readingRowBackground()
                 Section {
                     Button("删除书签", role: .destructive) {
                         Task { await activity.removeBookmark(bookmark); dismiss() }
                     }
-                }
-            }
+                }.readingRowBackground()
+            }.readingThemedListBackground()
             .navigationTitle(bookmark.chapterName.isEmpty ? "编辑书签" : bookmark.chapterName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -2731,7 +2723,7 @@ private struct SearchScopeSheet: View {
                                 if workingGroups.contains(group) { Image(systemName: "checkmark") }
                             }
                         }
-                    }
+                    }.readingRowBackground()
                 } else {
                     ForEach(filteredSources) { source in
                         Button {
@@ -2742,15 +2734,15 @@ private struct SearchScopeSheet: View {
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(source.bookSourceName).foregroundStyle(.primary)
-                                    Text(source.bookSourceUrl).font(.caption).foregroundStyle(.secondary)
+                                    Text(source.bookSourceUrl).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                                 }
                                 Spacer()
                                 if workingSourceID == source.id { Image(systemName: "checkmark") }
                             }
                         }
-                    }
+                    }.readingRowBackground()
                 }
-            }
+            }.readingThemedListBackground()
             .navigationTitle("分组或书源")
             .navigationBarTitleDisplayMode(.inline)
             .readingSearchable(text: $sourceFilter, isPresented: $filterIsPresented, prompt: "筛选书源")
@@ -2815,13 +2807,13 @@ private struct ReadingPreferencesView: View {
                     Text("实线").tag(1)
                     Text("虚线").tag(2)
                 }
-            }
+            }.readingRowBackground()
             Section("正文边距") {
                 paddingSlider("左边距", value: $paddingLeft)
                 paddingSlider("右边距", value: $paddingRight)
                 paddingSlider("上边距", value: $paddingTop)
                 paddingSlider("下边距", value: $paddingBottom)
-            }
+            }.readingRowBackground()
             Section("章节标题") {
                 Picker("标题模式", selection: $titleMode) {
                     Text("左对齐").tag(0)
@@ -2831,7 +2823,7 @@ private struct ReadingPreferencesView: View {
                 AdjustableSlider(title: "字号增量", value: $titleSize, range: -10...30, format: { String(format: "%+.0f", $0) })
                 AdjustableSlider(title: "上间距", value: $titleTopSpacing, range: 0...100, format: { String(Int($0)) })
                 AdjustableSlider(title: "下间距", value: $titleBottomSpacing, range: 0...100, format: { String(Int($0)) })
-            }
+            }.readingRowBackground()
             Section("翻页") {
                 Picker("翻页模式", selection: $pageAnimation) {
                     Text("覆盖").tag(0)
@@ -2840,11 +2832,11 @@ private struct ReadingPreferencesView: View {
                     Text("滚动").tag(3)
                     Text("无动画").tag(4)
                 }
-            }
+            }.readingRowBackground()
             Section("屏幕") {
                 Toggle("阅读时不自动锁屏", isOn: $keepScreenOn)
                 Toggle("阅读时隐藏小横条", isOn: $hideHomeIndicator)
-            }
+            }.readingRowBackground()
             Section("阅读背景") {
                 ForEach(ReaderStylePreset.legadoDefaults) { preset in
                     Button {
@@ -2865,17 +2857,17 @@ private struct ReadingPreferencesView: View {
                         }
                     }
                 }
-            }
+            }.readingRowBackground()
             Section("预览") {
                 Text("雨落在旧城的瓦檐上，故事从一束灯光开始。")
                     .tracking(letterSpacing * fontSize)
-                    .font(.system(size: fontSize, design: .serif))
+                    .font(AppFontStyle.system(size: fontSize, design: .serif).themed)
                     .lineSpacing(lineSpacing)
                     .foregroundStyle(Color(uiColor: ReaderStylePreset.resolve(theme).foreground))
                     .padding(.vertical, 12)
                     .listRowBackground(Color(uiColor: ReaderStylePreset.resolve(theme).background))
-            }
-        }
+            }.readingRowBackground()
+        }.readingThemedListBackground()
         .navigationTitle("阅读设置")
     }
 
@@ -3386,7 +3378,7 @@ private struct BookshelfFolderBox: View {
             }
             // 顶部标签：文件夹名
             Text(folder.name)
-                .font(.system(size: 8, weight: .semibold))
+                .font(AppFontStyle.system(size: 8, weight: .semibold).themed)
                 .foregroundStyle(colors.label)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
@@ -3411,7 +3403,7 @@ private struct BookshelfFolderBox: View {
             .allowsHitTesting(false)
             // 底部标签
             Text(footer)
-                .font(.system(size: 6.5, weight: .medium, design: folder.style == 1 ? .monospaced : .default))
+                .font(AppFontStyle.system(size: 6.5, weight: .medium, design: folder.style == 1 ? .monospaced : .default).themed)
                 .foregroundStyle(colors.label.opacity(0.9))
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)
@@ -3423,7 +3415,7 @@ private struct BookshelfFolderBox: View {
             // 旋转按钮整块放在文件夹外框之内：之前按钮向外偏移，超出外框的部分
             // 会被外框的点击形状裁掉、被相邻的书盖住，导致大多数时候点不中。
             Image(systemName: "arrow.triangle.2.circlepath")
-                .font(.system(size: 7.5, weight: .bold))
+                .font(AppFontStyle.system(size: 7.5, weight: .bold).themed)
                 .foregroundStyle(colors.label)
                 .frame(width: 15, height: 15)
                 .background(Color.black.opacity(0.4), in: Circle())
@@ -3771,7 +3763,7 @@ private struct BookshelfShelfView: View {
         .overlay(alignment: .top) {
             if let toast {
                 Text(toast)
-                    .font(.footnote.weight(.medium))
+                    .font(AppFontStyle.footnote.weight(.medium).themed)
                     .foregroundStyle(Color.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
@@ -4174,7 +4166,7 @@ private struct BookshelfShelfView: View {
                         withAnimation(.easeOut(duration: 0.18)) { showsPicker.toggle() }
                     } label: {
                         Image(systemName: "arrow.triangle.2.circlepath")
-                            .font(.system(size: 10, weight: .semibold))
+                            .font(AppFontStyle.system(size: 10, weight: .semibold).themed)
                             .foregroundStyle(Color.white)
                             .frame(width: 22, height: 22)
                             .background(Color.black.opacity(0.55), in: Circle())
@@ -4224,7 +4216,7 @@ private struct BookshelfShelfView: View {
                     BookshelfShelfPose.save(poses)
                 } label: {
                     Text(item.title)
-                        .font(.system(size: 11, weight: item == current ? .semibold : .regular))
+                        .font(AppFontStyle.system(size: 11, weight: item == current ? .semibold : .regular).themed)
                         .foregroundStyle(Color.white.opacity(item == current ? 1 : 0.85))
                         .frame(maxWidth: .infinity)
                         .frame(height: 24)
@@ -4240,7 +4232,7 @@ private struct BookshelfShelfView: View {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { folderStore.toggleStyle(folderID) }
                 } label: {
                     Text("换装")
-                        .font(.system(size: 11))
+                        .font(AppFontStyle.system(size: 11).themed)
                         .foregroundStyle(Color.white.opacity(0.85))
                         .frame(maxWidth: .infinity)
                         .frame(height: 24)
@@ -4556,7 +4548,7 @@ private struct BookshelfSpine: View {
                         // 竖排从右往左读，第一列放在最右边。
                         ForEach(Array(layout.columns.enumerated().reversed()), id: \.offset) { _, column in
                             Text(column)
-                                .font(.system(size: layout.fontSize, weight: .semibold, design: .serif))
+                                .font(AppFontStyle.system(size: layout.fontSize, weight: .semibold, design: .serif).themed)
                                 .lineSpacing(0)
                                 .multilineTextAlignment(.center)
                                 .fixedSize()
@@ -4566,7 +4558,7 @@ private struct BookshelfSpine: View {
                     Spacer(minLength: 0)
                     if let author = layout.author {
                         Text(author)
-                            .font(.system(size: layout.authorFontSize, weight: .regular))
+                            .font(AppFontStyle.system(size: layout.authorFontSize, weight: .regular).themed)
                             .lineSpacing(0)
                             .multilineTextAlignment(.center)
                             .fixedSize()
@@ -4858,13 +4850,13 @@ private struct BookshelfFolderPanel: View {
             } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.fill")
-                        .font(.system(size: 14))
+                        .font(AppFontStyle.system(size: 14).themed)
                         .foregroundStyle(ReadingTheme.accent)
                     Text(folder.name)
-                        .font(.system(size: 17, weight: .semibold))
+                        .font(AppFontStyle.system(size: 17, weight: .semibold).themed)
                         .lineLimit(1)
                     Image(systemName: "pencil")
-                        .font(.system(size: 11, weight: .semibold))
+                        .font(AppFontStyle.system(size: 11, weight: .semibold).themed)
                         .foregroundStyle(.secondary)
                 }
                 .frame(minHeight: 36)
@@ -4873,7 +4865,7 @@ private struct BookshelfFolderPanel: View {
             .buttonStyle(.plain)
             .accessibilityLabel("文件夹名称 \(folder.name)，轻点修改")
             Text("\(books.count) 本")
-                .font(.caption)
+                .font(AppFontStyle.caption.themed)
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
             Button(selecting ? "完成" : "多选") {
@@ -4882,17 +4874,17 @@ private struct BookshelfFolderPanel: View {
                     selected.removeAll()
                 }
             }
-            .font(.system(size: 13))
+            .font(AppFontStyle.system(size: 13).themed)
             .foregroundStyle(.primary)
             .frame(minWidth: 40, minHeight: 36)
             Button("解散") { dissolve() }
-                .font(.system(size: 13))
+                .font(AppFontStyle.system(size: 13).themed)
                 .foregroundStyle(.primary)
                 .frame(minWidth: 40, minHeight: 36)
                 .accessibilityHint("把书放回书架并删除这个文件夹")
             Button { close() } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(AppFontStyle.system(size: 13, weight: .semibold).themed)
                     .frame(width: 28, height: 28)
                     .background(Color.secondary.opacity(0.12), in: Circle())
                     .frame(width: 36, height: 36)
@@ -4930,7 +4922,7 @@ private struct BookshelfFolderPanel: View {
                 .overlay(alignment: .bottomTrailing) {
                     if selecting {
                         Image(systemName: isChecked ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 18, weight: .semibold))
+                            .font(AppFontStyle.system(size: 18, weight: .semibold).themed)
                             .foregroundStyle(isChecked ? ReadingTheme.accent : Color.white)
                             .background(Circle().fill(isChecked ? Color.white : Color.black.opacity(0.25)))
                             .padding(5)
@@ -4938,12 +4930,12 @@ private struct BookshelfFolderPanel: View {
                     }
                 }
             Text(book.name)
-                .font(.caption.weight(.medium))
+                .font(AppFontStyle.caption.weight(.medium).themed)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .frame(width: width, alignment: .leading)
             Text(book.author.isEmpty ? "未知作者" : book.author)
-                .font(.caption2)
+                .font(AppFontStyle.caption2.themed)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(width: width, alignment: .leading)
@@ -4994,7 +4986,7 @@ private struct BookshelfFolderPanel: View {
                 removeFromFolder(selected)
             } label: {
                 Text(selected.isEmpty ? "选择要移出的书" : "移出文件夹（\(selected.count)）")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(AppFontStyle.system(size: 14, weight: .semibold).themed)
                     .foregroundStyle(selected.isEmpty ? Color.secondary : Color.white)
                     .frame(maxWidth: .infinity)
                     .frame(height: 42)
@@ -5004,7 +4996,7 @@ private struct BookshelfFolderPanel: View {
             .disabled(selected.isEmpty)
         } else {
             Text(isOutside ? "松手移出文件夹" : "长按书封拖到面板外 = 移出文件夹")
-                .font(.system(size: 11))
+                .font(AppFontStyle.system(size: 11).themed)
                 .foregroundStyle(isOutside ? ReadingTheme.coral : Color.secondary)
                 .frame(maxWidth: .infinity)
                 .frame(height: 20)
@@ -5018,9 +5010,9 @@ private struct BookshelfFolderPanel: View {
                 .onTapGesture { withAnimation(.easeOut(duration: 0.2)) { renaming = false } }
             VStack(alignment: .leading, spacing: 14) {
                 Text("文件夹名称")
-                    .font(.system(size: 16, weight: .semibold))
+                    .font(AppFontStyle.system(size: 16, weight: .semibold).themed)
                 TextField("输入名称", text: $draft)
-                    .font(.system(size: 15))
+                    .font(AppFontStyle.system(size: 15).themed)
                     .padding(.horizontal, 14)
                     .frame(height: 44)
                     .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -5033,19 +5025,19 @@ private struct BookshelfFolderPanel: View {
                 HStack {
                     if let renameError {
                         Text(renameError)
-                            .font(.system(size: 11))
+                            .font(AppFontStyle.system(size: 11).themed)
                             .foregroundStyle(ReadingTheme.coral)
                             .lineLimit(1)
                     }
                     Spacer(minLength: 4)
                     Text("\(draft.count)/\(BookshelfFolderStore.nameLimit)")
-                        .font(.system(size: 11))
+                        .font(AppFontStyle.system(size: 11).themed)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 12) {
                     Spacer()
                     Button("取消") { withAnimation(.easeOut(duration: 0.2)) { renaming = false } }
-                        .font(.system(size: 14))
+                        .font(AppFontStyle.system(size: 14).themed)
                         .foregroundStyle(.primary)
                         .frame(width: 64, height: 38)
                     Button {
@@ -5056,7 +5048,7 @@ private struct BookshelfFolderPanel: View {
                         }
                     } label: {
                         Text("保存")
-                            .font(.system(size: 14, weight: .semibold))
+                            .font(AppFontStyle.system(size: 14, weight: .semibold).themed)
                             .foregroundStyle(Color.white)
                             .frame(width: 64, height: 38)
                             .background(Color(white: 0.15), in: Capsule())
@@ -5125,7 +5117,7 @@ struct BookshelfShelfSettingsSheet: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 Text("书架设置")
-                    .font(.title3.bold())
+                    .font(AppFontStyle.title3.bold().themed)
                     .accessibilityAddTraits(.isHeader)
                 toggleRow(title: "移除同时删除本地文件",
                           detail: "从书架移除后，若该书不在其他书架，删除其本地文件（含导入的原文件），不可恢复",
@@ -5171,9 +5163,9 @@ struct BookshelfShelfSettingsSheet: View {
                 } else {
                     toggleRow(title: "隐藏书名/作者", detail: "网格与仿真视图隐藏书名作者与遮罩蒙版（纯净书脊）", isOn: $hideTitles)
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("仿真书大小").font(.headline)
+                        Text("仿真书大小").font(AppFontStyle.headline.themed)
                         Text("统一调整书高与书宽，书脊与文件夹文字一并等比缩放")
-                            .font(.caption).foregroundStyle(.secondary)
+                            .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                         AdjustableSlider(title: "书宽", value: $bookWidth, range: BookshelfShelfSettings.widthRange,
                                          format: { "\(Int($0)) pt" })
                         AdjustableSlider(title: "书高", value: $bookHeight, range: BookshelfShelfSettings.heightRange,
@@ -5182,7 +5174,7 @@ struct BookshelfShelfSettingsSheet: View {
                             bookWidth = BookshelfShelfSettings.defaultWidth
                             bookHeight = BookshelfShelfSettings.defaultHeight
                         }
-                        .font(.footnote)
+                        .font(AppFontStyle.footnote.themed)
                         .foregroundStyle(ReadingTheme.accent)
                     }
                     toggleRow(title: "封面书脊", detail: "书脊直接显示封面截取图案（关闭后按封面主色装帧）", isOn: $coverSpine)
@@ -5232,8 +5224,8 @@ struct BookshelfShelfSettingsSheet: View {
     private func row<Accessory: View>(title: String, detail: String, @ViewBuilder accessory: () -> Accessory) -> some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
-                Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(title).font(AppFontStyle.headline.themed)
+                Text(detail).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
             accessory()
@@ -5243,8 +5235,8 @@ struct BookshelfShelfSettingsSheet: View {
     private func toggleRow(title: String, detail: String, isOn: Binding<Bool>) -> some View {
         Toggle(isOn: isOn) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.headline)
-                Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(title).font(AppFontStyle.headline.themed)
+                Text(detail).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
         }
         .tint(ReadingTheme.toggleTint)
@@ -5253,7 +5245,7 @@ struct BookshelfShelfSettingsSheet: View {
     private func layoutChoice(_ systemName: String, selected: Bool, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .medium))
+                .font(AppFontStyle.system(size: 14, weight: .medium).themed)
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: 36, height: 30)
                 .background(selected ? Color(UIColor.systemBackground) : Color.clear, in: Capsule())
@@ -5267,7 +5259,7 @@ struct BookshelfShelfSettingsSheet: View {
     private func textChoice(_ title: String, selected: Bool, width: CGFloat = 44, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 13, weight: selected ? .semibold : .regular))
+                .font(AppFontStyle.system(size: 13, weight: selected ? .semibold : .regular).themed)
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: width, height: 30)
                 .background(selected ? Color(UIColor.systemBackground) : Color.clear, in: Capsule())
@@ -5288,7 +5280,7 @@ private struct BookshelfCoverStyleSample: View {
             .frame(width: 18, height: 26)
             .overlay {
                 Image(systemName: "book.closed.fill")
-                    .font(.system(size: 8))
+                    .font(AppFontStyle.system(size: 8).themed)
                     .foregroundStyle(Color.white.opacity(0.85))
             }
             .overlay(alignment: .leading) {
@@ -5435,14 +5427,14 @@ private struct ShelfOrnamentSettingsSheet: View {
         VStack(alignment: .leading, spacing: 24) {
             HStack {
                 Label("摆件设置", systemImage: "leaf")
-                    .font(.headline)
+                    .font(AppFontStyle.headline.themed)
                 Spacer()
                 Button(role: .destructive) {
                     store.setOnShelf(false, for: ornamentID)
                     dismiss()
                 } label: {
                     Label("移出书架", systemImage: "trash")
-                        .font(.subheadline)
+                        .font(AppFontStyle.subheadline.themed)
                         .foregroundStyle(ReadingTheme.coral)
                 }
             }
@@ -5476,7 +5468,7 @@ struct ShelfOrnamentManagerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
-                Text("书架摆件").font(.title3.weight(.semibold))
+                Text("书架摆件").font(AppFontStyle.title3.weight(.semibold).themed)
                 Spacer()
                 Picker("", selection: $tab) {
                     Text("我的摆件 \(store.ornaments.count)").tag(0)
@@ -5487,7 +5479,7 @@ struct ShelfOrnamentManagerSheet: View {
             }
             if tab == 0 { myOrnaments } else { addOrnament }
             if let message {
-                Text(message).font(.footnote).foregroundStyle(.secondary)
+                Text(message).font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -5511,7 +5503,7 @@ struct ShelfOrnamentManagerSheet: View {
         ScrollView {
             if store.ornaments.isEmpty {
                 Text("还没有摆件，去「添加新摆件」里添加吧")
-                    .font(.subheadline).foregroundStyle(.secondary)
+                    .font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity).padding(.top, 40)
             }
             LazyVGrid(columns: columns, spacing: 12) {
@@ -5527,7 +5519,7 @@ struct ShelfOrnamentManagerSheet: View {
                             }
                             if ornament.onShelf {
                                 Image(systemName: "checkmark.circle.fill")
-                                    .font(.system(size: 16))
+                                    .font(AppFontStyle.system(size: 16).themed)
                                     .foregroundStyle(ReadingTheme.ink, ReadingTheme.canvas)
                                     .padding(6)
                             }
@@ -5553,7 +5545,7 @@ struct ShelfOrnamentManagerSheet: View {
                 }
             }
             Text("轻点摆件放上或取下书架，长按可删除。在书架上轻点摆件可调整大小，长按后拖动可调整位置。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 12)
         }
@@ -5572,14 +5564,14 @@ struct ShelfOrnamentManagerSheet: View {
                         Image(systemName: "photo.badge.plus")
                         Text("点击选取本地图片（支持多选）")
                     }
-                    .font(.subheadline.weight(.medium))
+                    .font(AppFontStyle.subheadline.weight(.medium).themed)
                     .foregroundStyle(ReadingTheme.ink)
                     .frame(maxWidth: .infinity, minHeight: 96)
                     .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                 }
                 .buttonStyle(.plain)
                 Text("建议使用透明背景的 PNG 图片，摆在书架上更自然。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
             } else {
                 TextField("https://…/图片.png", text: $linkText)
                     .keyboardType(.URL)
@@ -5594,7 +5586,7 @@ struct ShelfOrnamentManagerSheet: View {
                         if isDownloading { ProgressView().controlSize(.small) }
                         Text(isDownloading ? "正在下载…" : "添加")
                     }
-                    .font(.subheadline.weight(.semibold))
+                    .font(AppFontStyle.subheadline.weight(.semibold).themed)
                     .foregroundStyle(ReadingTheme.onAccent)
                     .frame(maxWidth: .infinity, minHeight: 44)
                     .background(ReadingTheme.accentFill, in: Capsule())

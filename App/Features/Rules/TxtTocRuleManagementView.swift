@@ -115,7 +115,7 @@ struct TxtTocRuleManagementView: View {
             }
             .onDelete { offsets in Task { await model.remove(at: offsets) } }
             .onMove { offsets, destination in Task { await model.move(from: offsets, to: destination) } }
-        }
+        }.readingThemedListBackground()
         .navigationTitle("TXT目录规则")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -194,8 +194,8 @@ private struct TxtTocRuleEditView: View {
                 Section("测试文本") {
                     TextEditor(text: $sample).frame(minHeight: 130)
                     Text(testResult).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-            }
+                }.readingRowBackground()
+            }.readingThemedListBackground()
             .navigationTitle("TXT目录规则")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

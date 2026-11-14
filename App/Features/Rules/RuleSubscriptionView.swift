@@ -14,11 +14,11 @@ struct RuleSubscriptionView: View {
             ForEach(visibleValues) { value in
                 Button { open(value) } label: {
                     HStack(spacing: 12) {
-                        Text(typeName(value.type)).font(.caption.bold()).foregroundStyle(ReadingTheme.accent).frame(width: 48)
-                        VStack(alignment: .leading, spacing: 4) { Text(value.name.isEmpty ? value.url : value.name).foregroundStyle(.primary); Text(value.url).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                        Text(typeName(value.type)).font(AppFontStyle.caption.bold().themed).foregroundStyle(ReadingTheme.accent).frame(width: 48)
+                        VStack(alignment: .leading, spacing: 4) { Text(value.name.isEmpty ? value.url : value.name).foregroundStyle(.primary); Text(value.url).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1) }
                         Spacer()
                         if value.autoUpdate { Image(systemName: value.silentUpdate ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.triangle.2.circlepath.circle").foregroundStyle(.secondary) }
-                        if model.pendingIDs.contains(value.id) { Text("有更新").font(.caption2).foregroundStyle(.orange) }
+                        if model.pendingIDs.contains(value.id) { Text("有更新").font(AppFontStyle.caption2.themed).foregroundStyle(.orange) }
                     }
                 }.swipeActions(edge: .leading) { Button("编辑", systemImage: "pencil") { editing = value }.tint(.blue) }
             }.onDelete { offsets in
@@ -26,7 +26,7 @@ struct RuleSubscriptionView: View {
                 let sourceOffsets = IndexSet(model.values.indices.filter { ids.contains(model.values[$0].id) })
                 Task { await model.remove(at: sourceOffsets) }
             }
-        }
+        }.readingThemedListBackground()
         .navigationTitle("规则订阅")
         .toolbar { ToolbarItem(placement: .primaryAction) { Button("新建", systemImage: "plus") { editing = RuleSub() } }; ToolbarItem(placement: .primaryAction) { EditButton() } }
         .task { await model.load() }
@@ -63,7 +63,7 @@ private struct RuleSubscriptionEditView: View {
                     Stepper("更新间隔：\(value.updateInterval) 小时", value: $value.updateInterval, in: 1...720)
                     Toggle("静默更新", isOn: $value.silentUpdate)
                 }
-            }.navigationTitle("规则订阅").toolbar {
+            }.readingThemedListBackground().navigationTitle("规则订阅").toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button(saving ? "保存中…" : "保存") { saving = true; Task { if await save(value) { dismiss() }; saving = false } }.disabled(saving || value.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }

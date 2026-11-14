@@ -209,10 +209,31 @@ enum AppThemeRuntime {
     nonisolated(unsafe) private static var cached: [Bool: Tokens] = [:]
     private static let lock = NSLock()
 
+    nonisolated(unsafe) private static var resolvedFontName: String?
+
     static func update(_ value: AppTheme) {
         lock.lock(); defer { lock.unlock() }
         theme = value
         cached = [:]
+        resolvedFontName = nil
+    }
+
+    /// 导入新字体后让界面字体重新解析。
+    static func invalidateFont() {
+        lock.lock(); resolvedFontName = nil; lock.unlock()
+    }
+
+    /// 主题选择的界面字体 PostScript 名；空字符串表示系统字体。
+    static var fontName: String {
+        lock.lock()
+        if let value = resolvedFontName { lock.unlock(); return value }
+        let requested = theme.customization?.fontPostScriptName ?? ""
+        lock.unlock()
+        // 先让字体管理器注册导入的字体文件，再判断字体是否可用。
+        _ = ReadingFontManager.shared
+        let value = !requested.isEmpty && UIFont(name: requested, size: 17) != nil ? requested : ""
+        lock.lock(); resolvedFontName = value; lock.unlock()
+        return value
     }
 
     static var current: AppTheme {
@@ -267,12 +288,56 @@ enum AppThemeRuntime {
 /// 页面底色：纯色主题直接用底色；渐变或背景图片的主题画出完整画布。
 struct ReadingCanvasBackground: View {
     @Environment(\.appTheme) private var theme
+    var grouped = false
     var body: some View {
         if theme.backgroundStyle == .gradient || theme.customization?.pageBackgroundImage != nil {
             AppThemeCanvas()
+        } else if grouped {
+            ReadingTheme.groupedCanvas
         } else {
             ReadingTheme.canvas
         }
+    }
+}
+
+/// 列表（List / Form）每一行的底：跟随主题的「界面效果」「卡片背景」和全局「玻璃模式」。
+/// 透明：直接透出页面背景；玻璃：毛玻璃 + 主题卡片色；不透明或关闭玻璃模式：主题卡片实色。
+struct ThemeListRowBackground: View {
+    @ThemePalette private var palette
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
+
+    var body: some View {
+        Group {
+            if !palette.cardBackground {
+                Color.clear
+            } else if reduceTransparency {
+                palette.surface
+            } else {
+                switch palette.interfaceEffect ?? .frosted {
+                case .transparent:
+                    ZStack {
+                        Color.clear
+                        if palette.glowIntensity > 0 {
+                            palette.accent.opacity(0.06 * palette.glowIntensity)
+                        }
+                    }
+                case .frosted:
+                    if glassEnabled {
+                        ZStack {
+                            Rectangle().fill(.ultraThinMaterial)
+                            palette.surface.opacity(0.35 + 0.45 * palette.surfaceOpacity)
+                        }
+                    } else {
+                        palette.surface
+                    }
+                case .opaque:
+                    palette.surface
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 
@@ -280,6 +345,77 @@ extension View {
     /// 页面级背景，跟随主题的纯色 / 渐变 / 背景图片。
     func readingCanvas() -> some View {
         background { ReadingCanvasBackground().ignoresSafeArea() }
+    }
+
+    /// 列表页背景：隐藏系统底色，画出主题页面背景（纯色 / 渐变 / 图片）。
+    func readingThemedListBackground() -> some View {
+        readingScrollContentBackgroundHidden()
+            .background { ReadingCanvasBackground(grouped: true).ignoresSafeArea() }
+    }
+
+    /// 让这一组列表行使用主题卡片底（界面效果、卡片背景、玻璃模式都会生效）。
+    func readingRowBackground() -> some View {
+        listRowBackground(ThemeListRowBackground())
+    }
+
+    /// 页面顶部常驻的搜索框，代替系统搜索栏（系统搜索栏在部分系统上会在左上角留下一个搜索图标）。
+    func readingInlineSearch(text: Binding<String>, prompt: String, onSubmit: (() -> Void)? = nil) -> some View {
+        modifier(ReadingInlineSearchModifier(text: text, prompt: prompt, submit: onSubmit))
+    }
+}
+
+private struct ReadingInlineSearchModifier: ViewModifier {
+    @Binding var text: String
+    let prompt: String
+    let submit: (() -> Void)?
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content.safeAreaInset(edge: .top, spacing: 0) {
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(ReadingTheme.secondaryInk)
+                        .accessibilityHidden(true)
+                    TextField(prompt, text: $text)
+                        .focused($focused)
+                        .textInputAutocapitalization(.never)
+                        .disableAutocorrection(true)
+                        .submitLabel(.search)
+                        .onSubmit {
+                            focused = false
+                            submit?()
+                        }
+                        .accessibilityIdentifier("inlineSearch.field")
+                    if !text.isEmpty {
+                        Button { text = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(ReadingTheme.secondaryInk)
+                                .frame(width: 28, height: 28)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("清除搜索")
+                    }
+                }
+                .padding(.leading, 12)
+                .padding(.trailing, text.isEmpty ? 12 : 4)
+                .frame(minHeight: 40)
+                .background { ThemeSurface(shape: Capsule(), isCard: true) }
+                if focused {
+                    Button("取消") {
+                        text = ""
+                        focused = false
+                    }
+                    .transition(.opacity)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 8)
+            .background { ReadingCanvasBackground(grouped: true).ignoresSafeArea(edges: .horizontal) }
+            .animation(.easeOut(duration: 0.15), value: focused)
+        }
     }
 }
 

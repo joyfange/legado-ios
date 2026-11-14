@@ -270,7 +270,7 @@ struct RuleCodeFieldView: View {
             Text(path).font(.caption.monospaced()).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading).padding(12)
             if let help {
-                Text(help).font(.footnote).foregroundStyle(.secondary)
+                Text(help).font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 12).padding(.bottom, 10)
             }
             SyntaxCodeEditor(text: $text, language: language)
@@ -278,7 +278,7 @@ struct RuleCodeFieldView: View {
                 Text("\(text.components(separatedBy: "\n").count) 行 · \(text.utf16.count) 字符")
                 Spacer()
                 if language == .rule { Text("CSS · XPath · JSONPath · JS") }
-            }.font(.caption).foregroundStyle(.secondary).padding(12)
+            }.font(AppFontStyle.caption.themed).foregroundStyle(.secondary).padding(12)
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)

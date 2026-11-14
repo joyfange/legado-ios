@@ -56,6 +56,10 @@ struct AppFontStyle {
     }
     func bold() -> Self { weight(.bold) }
 
+    /// 当前主题的界面字体（主题「颜色与字体」里选择的字体）。系统默认时与原字体完全一致。
+    /// 切换主题后根视图整体刷新，所以这里直接读取运行时快照即可。
+    var themed: Font { resolve(AppThemeRuntime.fontName) }
+
     func resolve(_ name: String) -> Font {
         guard !name.isEmpty, UIFont(name: name, size: size) != nil else { return original }
         return .custom(name, size: size, relativeTo: relativeTo).weight(fontWeight)

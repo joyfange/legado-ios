@@ -21,7 +21,7 @@ struct QRCodeImportView: View {
                     cameraScanner
                         .clipShape(RoundedRectangle(cornerRadius: 18))
                         .overlay(alignment: .bottom) {
-                            Text("将书源或净化规则二维码放入取景框").font(.footnote)
+                            Text("将书源或净化规则二维码放入取景框").font(AppFontStyle.footnote.themed)
                                 .padding(10).background(.ultraThinMaterial, in: Capsule()).padding()
                         }
                 } else {
@@ -41,11 +41,11 @@ struct QRCodeImportView: View {
                         .frame(maxWidth: .infinity)
                 }.readingProminentButtonStyle().disabled(isReading)
                 Text("支持 HTTP(S) 链接、Legado 导入深链和 JSON 内容。识别后进入导入流程。")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
                 if values.count > 1 {
                     List(values, id: \.self) { value in
-                        Button { accept(value) } label: { Text(value).font(.caption).lineLimit(3) }
-                    }.frame(maxHeight: 220)
+                        Button { accept(value) } label: { Text(value).font(AppFontStyle.caption.themed).lineLimit(3) }
+                    }.readingThemedListBackground().frame(maxHeight: 220)
                 }
             }
             .padding()

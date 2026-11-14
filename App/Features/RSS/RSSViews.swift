@@ -24,7 +24,7 @@ struct RSSHomeView: View {
         })
         let navigation = AnyView(content
             .navigationTitle("RSS")
-            .searchable(text: $searchText, prompt: section == 0 ? "搜索订阅源" : "搜索文章"))
+            .readingInlineSearch(text: $searchText, prompt: section == 0 ? "搜索订阅源" : "搜索文章"))
         let actions = AnyView(navigation.toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu("RSS操作", systemImage: "ellipsis.circle") {
@@ -83,9 +83,9 @@ struct RSSHomeView: View {
             ForEach(filteredSources) { source in
                 NavigationLink { RSSSourceDestinationView(sourceURL: source.sourceUrl) } label: {
                     VStack(alignment: .leading, spacing: 4) {
-                        HStack { Text(source.sourceName).font(.headline); Spacer(); if !source.enabled { Text("停用").font(.caption).foregroundStyle(.secondary) } }
-                        Text(source.sourceUrl).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        if let group = source.sourceGroup, !group.isEmpty { Text(group).font(.caption2).foregroundStyle(ReadingTheme.accent) }
+                        HStack { Text(source.sourceName).font(AppFontStyle.headline.themed); Spacer(); if !source.enabled { Text("停用").font(AppFontStyle.caption.themed).foregroundStyle(.secondary) } }
+                        Text(source.sourceUrl).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
+                        if let group = source.sourceGroup, !group.isEmpty { Text(group).font(AppFontStyle.caption2.themed).foregroundStyle(ReadingTheme.accent) }
                     }.padding(.vertical, 3)
                 }
                 .swipeActions(edge: .leading) {
@@ -100,7 +100,7 @@ struct RSSHomeView: View {
                 .moveDisabled(!searchText.isEmpty)
             }
             .onMove { offsets, destination in Task { await library.moveSources(from: offsets, to: destination) } }
-        }.listStyle(.plain)
+        }.readingThemedListBackground().listStyle(.plain)
     }
 
     private var starList: some View {
@@ -115,14 +115,14 @@ struct RSSHomeView: View {
                 let values = offsets.map { filteredStars[$0] }
                 Task { for value in values { await library.removeStar(value) } }
             }
-        }.overlay { if filteredStars.isEmpty { ReadingUnavailableView("没有收藏", systemImage: "star") } }.listStyle(.plain)
+        }.readingThemedListBackground().overlay { if filteredStars.isEmpty { ReadingUnavailableView("没有收藏", systemImage: "star") } }.listStyle(.plain)
     }
     private var recordList: some View {
         List(filteredRecords) { record in
             if let source = library.sources.first(where: { $0.sourceUrl == record.origin }) {
                 NavigationLink { RSSArticleDetailView(article: record.article, source: source) } label: { RSSArticleRow(article: record.article) }
             } else { RSSArticleRow(article: record.article) }
-        }.overlay { if filteredRecords.isEmpty { ReadingUnavailableView("没有阅读记录", systemImage: "clock") } }.listStyle(.plain)
+        }.readingThemedListBackground().overlay { if filteredRecords.isEmpty { ReadingUnavailableView("没有阅读记录", systemImage: "clock") } }.listStyle(.plain)
     }
     private var filteredSources: [RssSource] { library.sources.filter { searchText.isEmpty || $0.sourceName.localizedCaseInsensitiveContains(searchText) || $0.sourceUrl.localizedCaseInsensitiveContains(searchText) || ($0.sourceGroup ?? "").localizedCaseInsensitiveContains(searchText) } }
     private var filteredStars: [RssStar] { library.stars.filter { searchText.isEmpty || $0.title.localizedCaseInsensitiveContains(searchText) } }
@@ -150,8 +150,7 @@ private struct RSSArticleListView: View {
         }
         .overlay { if library.articles.isEmpty, !library.isWorking { ReadingUnavailableView("没有文章", systemImage: "newspaper") } }
         .navigationTitle(source.sourceName)
-        .searchable(text: $searchKey, prompt: "源内搜索")
-        .onSubmit(of: .search) { Task { await refresh() } }
+        .readingInlineSearch(text: $searchKey, prompt: "源内搜索") { Task { await refresh() } }
         .refreshable { await refresh() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) { Button("刷新", systemImage: "arrow.clockwise") { Task { await refresh() } } }
@@ -178,7 +177,7 @@ private struct RSSArticleListView: View {
         if source.articleStyle == 0 {
             List(library.articles) { article in
                 NavigationLink { RSSArticleDetailView(article: article, source: source) } label: { RSSArticleRow(article: article) }
-            }.listStyle(.plain)
+            }.readingThemedListBackground().listStyle(.plain)
         } else {
             ScrollView {
                 LazyVGrid(columns: articleColumns, spacing: source.articleStyle == 3 ? 20 : 8) {
@@ -265,9 +264,9 @@ private struct RSSArticleRow: View {
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 5) {
-                Text(article.title).font(.headline).foregroundStyle(article.read ? .secondary : .primary)
-                if let description = article.description, !description.isEmpty { Text(description).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-                if let date = article.pubDate, !date.isEmpty { Text(date).font(.caption2).foregroundStyle(.tertiary) }
+                Text(article.title).font(AppFontStyle.headline.themed).foregroundStyle(article.read ? .secondary : .primary)
+                if let description = article.description, !description.isEmpty { Text(description).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(2) }
+                if let date = article.pubDate, !date.isEmpty { Text(date).font(AppFontStyle.caption2.themed).foregroundStyle(.tertiary) }
             }
             Spacer()
             if article.type == 1 { Image(systemName: "photo") }
@@ -289,7 +288,7 @@ private struct RSSArticleCard: View {
                 .lineLimit(style == 3 ? 9 : 2)
                 .padding(.horizontal, style == 1 ? 12 : 6).padding(.top, 10)
             if let date = article.pubDate, !date.isEmpty {
-                Text(date).font(.caption2).foregroundStyle(.secondary).lineLimit(style == 3 ? 39 : 1)
+                Text(date).font(AppFontStyle.caption2.themed).foregroundStyle(.secondary).lineLimit(style == 3 ? 39 : 1)
                     .padding(.horizontal, style == 1 ? 12 : 6).padding(.top, 8).padding(.bottom, 10)
             } else { Spacer().frame(height: 10) }
         }
@@ -451,8 +450,8 @@ private struct RSSDownloadView: View {
             if loading { ProgressView("正在下载…") }
             else if let errorMessage { ReadingUnavailableView("下载失败", systemImage: "exclamationmark.arrow.triangle.2.circlepath", description: Text(errorMessage)) }
             else {
-                Image(systemName: "doc.badge.arrow.up").font(.system(size: 48)).foregroundStyle(ReadingTheme.accent)
-                Text(fileName).font(.headline)
+                Image(systemName: "doc.badge.arrow.up").font(AppFontStyle.system(size: 48).themed).foregroundStyle(ReadingTheme.accent)
+                Text(fileName).font(AppFontStyle.headline.themed)
                 Text(ByteCountFormatter.string(fromByteCount: Int64(data.count), countStyle: .file)).foregroundStyle(.secondary)
                 Button("选择保存位置", systemImage: "folder") { showsExporter = true }.readingProminentButtonStyle()
             }
@@ -628,7 +627,7 @@ private struct RSSStarEditSheet: View {
                 TextField("标题", text: $value.title)
                 TextField("分组", text: $value.group)
                 ReadingLabeledContent("链接", value: value.link).textSelection(.enabled)
-            }.navigationTitle("编辑RSS收藏").toolbar {
+            }.readingThemedListBackground().navigationTitle("编辑RSS收藏").toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save(value); dismiss() }.disabled(value.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
             }

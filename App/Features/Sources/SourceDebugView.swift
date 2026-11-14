@@ -54,13 +54,13 @@ struct SourceDebugView: View {
         ReadingCard {
             HStack(spacing: 13) {
                 Image(systemName: "stethoscope")
-                    .font(.title2).foregroundStyle(ReadingTheme.coral)
+                    .font(AppFontStyle.title2.themed).foregroundStyle(ReadingTheme.coral)
                     .frame(width: 46, height: 46)
                     .background(ReadingTheme.coral.opacity(0.11), in: RoundedRectangle(cornerRadius: 14))
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(source.bookSourceName).font(.headline)
+                    Text(source.bookSourceName).font(AppFontStyle.headline.themed)
                     Text("依次验证搜索 → 详情 → 目录 → 第一章正文")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
@@ -71,7 +71,7 @@ struct SourceDebugView: View {
     private var runCard: some View {
         ReadingCard {
             VStack(alignment: .leading, spacing: 12) {
-                Text("样本关键词").font(.caption.bold()).foregroundStyle(.secondary)
+                Text("样本关键词").font(AppFontStyle.caption.bold().themed).foregroundStyle(.secondary)
                 TextField("输入该书源能搜到的书名", text: $model.keyword)
                     .textFieldStyle(.roundedBorder)
                     .textInputAutocapitalization(.never)
@@ -79,7 +79,7 @@ struct SourceDebugView: View {
                     .onSubmit { model.run(source: source) }
                 Button { model.run(source: source) } label: {
                     Label(model.isRunning ? "正在调试…" : "运行完整链路", systemImage: "play.fill")
-                        .font(.headline).frame(maxWidth: .infinity)
+                        .font(AppFontStyle.headline.themed).frame(maxWidth: .infinity)
                 }
                 .readingProminentButtonStyle()
                 .disabled(model.isRunning || model.keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -92,9 +92,9 @@ struct SourceDebugView: View {
             HStack(spacing: 12) {
                 ProgressView()
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("端到端检查进行中").font(.subheadline.bold())
+                    Text("端到端检查进行中").font(AppFontStyle.subheadline.bold().themed)
                     Text("请求只发送给这个书源，最多读取 5 页目录与正文。")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 }
                 Spacer()
             }
@@ -106,13 +106,13 @@ struct SourceDebugView: View {
         ReadingCard {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(report.passed ? "完整链路通过" : "发现兼容问题").font(.headline)
+                    Text(report.passed ? "完整链路通过" : "发现兼容问题").font(AppFontStyle.headline.themed)
                     Text(report.passed ? "该样本已成功读取到正文" : "展开失败阶段查看规则诊断")
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Image(systemName: report.passed ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                    .font(.title2).foregroundStyle(report.passed ? .green : .orange)
+                    .font(AppFontStyle.title2.themed).foregroundStyle(report.passed ? .green : .orange)
             }
         }
         VStack(spacing: 10) {
@@ -122,8 +122,8 @@ struct SourceDebugView: View {
             ReadingCard {
                 VStack(alignment: .leading, spacing: 9) {
                     Label(report.sampleChapterTitle ?? "正文样本", systemImage: "text.quote")
-                        .font(.headline)
-                    Text(preview).font(.footnote).foregroundStyle(.secondary).lineSpacing(3)
+                        .font(AppFontStyle.headline.themed)
+                    Text(preview).font(AppFontStyle.footnote.themed).foregroundStyle(.secondary).lineSpacing(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
@@ -251,7 +251,7 @@ struct SourceBatchTestView: View {
                 Toggle("只看失败", isOn: $onlyShowsFailed)
             } footer: {
                 Text("快速测试以搜索是否能返回结果为准。部分正常书源可能不收录当前关键词，删除前请复核或更换关键词重测。")
-            }
+            }.readingRowBackground()
 
             if model.totalCount > 0 {
                 Section {
@@ -263,7 +263,7 @@ struct SourceBatchTestView: View {
                             .foregroundStyle(model.failedCount == 0 ? Color.secondary : Color.red)
                     }
                     .font(.subheadline.monospacedDigit())
-                }
+                }.readingRowBackground()
             }
 
             Section("书源") {
@@ -275,8 +275,8 @@ struct SourceBatchTestView: View {
                         onToggle: { model.toggleSelection(source.id) }
                     )
                 }
-            }
-        }
+            }.readingRowBackground()
+        }.readingThemedListBackground()
         .navigationTitle("书源测试")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -298,7 +298,7 @@ struct SourceBatchTestView: View {
                     Spacer()
                     Button("删除所选", systemImage: "trash", role: .destructive) { cleanupAction = .delete }
                 }
-                .font(.subheadline.weight(.semibold))
+                .font(AppFontStyle.subheadline.weight(.semibold).themed)
                 .padding(.horizontal, 18).padding(.vertical, 12)
                 .background(.ultraThinMaterial)
             }
@@ -333,14 +333,14 @@ private struct SourceBatchTestRow: View {
                 .foregroundStyle(color)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 3) {
-                Text(source.bookSourceName).font(.headline)
-                Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(source.bookSourceName).font(AppFontStyle.headline.themed)
+                Text(detail).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(2)
             }
             Spacer()
             if case .failed = status {
                 Button(action: onToggle) {
                     Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                        .font(.title3)
+                        .font(AppFontStyle.title3.themed)
                 }
                 .buttonStyle(.plain)
             }
@@ -382,14 +382,14 @@ private struct DebugStepCard: View {
         DisclosureGroup {
             if step.diagnostics.isEmpty {
                 Text("该阶段没有规则诊断。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.top, 8)
             } else {
                 VStack(alignment: .leading, spacing: 9) {
                     ForEach(step.diagnostics) { diagnostic in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(diagnostic.message).font(.caption)
+                            Text(diagnostic.message).font(AppFontStyle.caption.themed)
                             Text(diagnostic.code).font(.caption2.monospaced()).foregroundStyle(.tertiary)
                         }
                     }
@@ -404,8 +404,8 @@ private struct DebugStepCard: View {
                     .frame(width: 34, height: 34)
                     .background(color.opacity(0.1), in: Circle())
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(step.stage.title).font(.subheadline.bold())
-                    Text(step.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    Text(step.stage.title).font(AppFontStyle.subheadline.bold().themed)
+                    Text(step.summary).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Spacer()
                 if step.elapsedMilliseconds > 0 {

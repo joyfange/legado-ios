@@ -28,8 +28,8 @@ struct BookDetailView: View {
                 Divider()
                 if let intro = MetadataTextSanitizer().clean(model.book.intro), !intro.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("简介").font(.headline)
-                        Text(intro).font(.subheadline).foregroundStyle(.secondary).lineSpacing(5)
+                        Text("简介").font(AppFontStyle.headline.themed)
+                        Text(intro).font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary).lineSpacing(5)
                     }
                     Divider()
                 }
@@ -132,7 +132,7 @@ struct BookDetailView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Label(model.isCaching ? "正在缓存章节" : "章节缓存完成", systemImage: model.isCaching ? "arrow.down.circle.fill" : "checkmark.circle.fill")
-                        .font(.headline)
+                        .font(AppFontStyle.headline.themed)
                     Spacer()
                     Text("\(model.cacheCompleted)/\(model.cacheTotal)")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
@@ -141,7 +141,7 @@ struct BookDetailView: View {
                     .tint(ReadingTheme.accent)
                 if model.isCaching {
                     Button("停止缓存", role: .destructive) { model.cancelCaching() }
-                        .font(.subheadline)
+                        .font(AppFontStyle.subheadline.themed)
                 }
             }
         }
@@ -158,20 +158,20 @@ struct BookDetailView: View {
                     height: 126
                 )
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(model.book.name).font(.title2.weight(.semibold)).lineLimit(3)
+                    Text(model.book.name).font(AppFontStyle.title2.weight(.semibold).themed).lineLimit(3)
                     Text(model.book.author.isEmpty ? "未知作者" : model.book.author)
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary)
                     if let kind = model.book.kind, !kind.isEmpty {
-                        Text(kind).font(.caption).foregroundStyle(.secondary)
+                        Text(kind).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                     }
                     Text(model.source.bookSourceName)
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 0)
             }
             if let latest = model.book.latestChapterTitle, !latest.isEmpty {
                 Text("更新至 \(latest)")
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(2)
             }
             Group {
                 if dynamicTypeSize.isAccessibilitySize {
@@ -191,7 +191,7 @@ struct BookDetailView: View {
             readingDestination
         } label: {
             Text(model.book.durChapterIndex > 0 || model.book.durChapterPos > 0 ? "继续阅读" : "开始阅读")
-                .font(.body.weight(.medium))
+                .font(AppFontStyle.body.weight(.medium).themed)
                 .frame(maxWidth: .infinity, minHeight: 28)
         }
         .readingProminentButtonStyle()
@@ -207,7 +207,7 @@ struct BookDetailView: View {
                 library.contains(model.book) ? "已在书架" : "加入书架",
                 systemImage: library.contains(model.book) ? "checkmark" : "plus"
             )
-            .font(.subheadline)
+            .font(AppFontStyle.subheadline.themed)
             .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil, minHeight: 28)
         }
         .readingSecondaryButtonStyle()
@@ -233,9 +233,9 @@ struct BookDetailView: View {
     private var chapterCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                Text("目录").font(.headline)
+                Text("目录").font(AppFontStyle.headline.themed)
                 Spacer()
-                Text("\(model.chapters.count) 章").font(.caption).foregroundStyle(.secondary)
+                Text("\(model.chapters.count) 章").font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
             }
             .padding(.bottom, 12)
             if model.state == .loading || model.state == .idle {
@@ -254,7 +254,7 @@ struct BookDetailView: View {
                 ForEach(Array(model.chapters.filter { !$0.isVolume }.prefix(8).enumerated()), id: \.element.id) { offset, chapter in
                     if offset > 0 { Divider() }
                     if chapter.isVolume {
-                        Text(chapter.title).font(.subheadline.bold()).foregroundStyle(ReadingTheme.accent)
+                        Text(chapter.title).font(AppFontStyle.subheadline.bold().themed).foregroundStyle(ReadingTheme.accent)
                             .padding(.vertical, 12)
                     } else {
                         NavigationLink {
@@ -268,10 +268,10 @@ struct BookDetailView: View {
                             HStack(spacing: 12) {
                                 Text(String(format: "%02d", chapter.index + 1))
                                     .font(.caption.monospacedDigit()).foregroundStyle(.tertiary).frame(width: 28)
-                                Text(chapter.title).font(.subheadline).foregroundStyle(.primary).lineLimit(2)
+                                Text(chapter.title).font(AppFontStyle.subheadline.themed).foregroundStyle(.primary).lineLimit(2)
                                 Spacer()
-                                if chapter.isVip { Image(systemName: "lock.fill").font(.caption).foregroundStyle(.orange) }
-                                Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+                                if chapter.isVip { Image(systemName: "lock.fill").font(AppFontStyle.caption.themed).foregroundStyle(.orange) }
+                                Image(systemName: "chevron.right").font(AppFontStyle.caption.bold().themed).foregroundStyle(.tertiary)
                             }
                             .padding(.vertical, 12)
                         }
@@ -312,7 +312,7 @@ private struct BookTableOfContentsView: View {
         ReadingNavigationStack {
             List(displayedChapters) { chapter in
                 if chapter.isVolume {
-                    Text(chapter.title).font(.headline).foregroundStyle(ReadingTheme.accent)
+                    Text(chapter.title).font(AppFontStyle.headline.themed).foregroundStyle(ReadingTheme.accent)
                 } else {
                     NavigationLink {
                         ReaderView(book: book, chapters: chapters, initialIndex: chapter.index, source: source)
@@ -329,8 +329,8 @@ private struct BookTableOfContentsView: View {
                         }
                     }
                 }
-            }
-            .searchable(text: $searchText, prompt: "搜索目录")
+            }.readingThemedListBackground()
+            .readingInlineSearch(text: $searchText, prompt: "搜索目录")
             .navigationTitle("目录")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -348,7 +348,7 @@ private struct BookTableOfContentsView: View {
                     Text("\(min(book.durChapterIndex + 1, chapters.count))/\(chapters.count)")
                         .monospacedDigit().foregroundStyle(.secondary)
                 }
-                .font(.caption)
+                .font(AppFontStyle.caption.themed)
                 .padding(.horizontal, 16).padding(.vertical, 10)
                 .background(.bar)
             }

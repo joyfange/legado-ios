@@ -154,12 +154,12 @@ struct ExploreView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack(spacing: 16) {
                         Image(systemName: "safari")
-                            .font(.system(size: 30, weight: .ultraLight))
+                            .font(AppFontStyle.system(size: 30, weight: .ultraLight).themed)
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("从喜欢的书源开始").font(.headline)
+                            Text("从喜欢的书源开始").font(AppFontStyle.headline.themed)
                             Text("浏览分类与榜单，发现更多故事")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 0)
                     }
@@ -168,10 +168,10 @@ struct ExploreView: View {
                     .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 20))
 
                     HStack(alignment: .firstTextBaseline) {
-                        Text("分类与榜单").font(.title3.bold())
+                        Text("分类与榜单").font(AppFontStyle.title3.bold().themed)
                             .accessibilityAddTraits(.isHeader)
                         Spacer()
-                        Text("\(sources.count)个书源").font(.caption).foregroundStyle(.secondary)
+                        Text("\(sources.count)个书源").font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                     }
                     if sources.isEmpty {
                         ReadingUnavailableView {
@@ -190,7 +190,7 @@ struct ExploreView: View {
                                         ExploreSourceRow(source: source)
                                         Spacer(minLength: 0)
                                         Image(systemName: "chevron.right")
-                                            .font(.caption).foregroundStyle(.tertiary)
+                                            .font(AppFontStyle.caption.themed).foregroundStyle(.tertiary)
                                     }
                                     .padding(.vertical, 8)
                                     .contentShape(Rectangle())
@@ -206,14 +206,14 @@ struct ExploreView: View {
                     NavigationLink { SourceManagementView() } label: {
                         HStack(spacing: 14) {
                             Image(systemName: "slider.horizontal.3")
-                                .font(.system(size: 20))
+                                .font(AppFontStyle.system(size: 20).themed)
                                 .frame(width: 40, height: 44)
                             VStack(alignment: .leading, spacing: 5) {
-                                Text("管理书源").font(.subheadline.weight(.semibold))
-                                Text("添加与整理阅读来源").font(.caption).foregroundStyle(.secondary)
+                                Text("管理书源").font(AppFontStyle.subheadline.weight(.semibold).themed)
+                                Text("添加与整理阅读来源").font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                             }
                             Spacer(minLength: 0)
-                            Image(systemName: "arrow.up.right").font(.subheadline)
+                            Image(systemName: "arrow.up.right").font(AppFontStyle.subheadline.themed)
                         }
                         .foregroundStyle(ReadingTheme.ink)
                         .padding(18)
@@ -236,18 +236,18 @@ private struct ExploreSourceRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: source.bookSourceType == 1 ? "headphones" : "books.vertical")
-                .font(.system(size: 20))
+                .font(AppFontStyle.system(size: 20).themed)
                 .foregroundStyle(ReadingTheme.accent)
                 .frame(width: 44, height: 48)
                 .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(source.bookSourceName)
-                    .font(.body.weight(.medium))
+                    .font(AppFontStyle.body.weight(.medium).themed)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
                 Text(source.groups.isEmpty ? (URL(string: source.bookSourceUrl)?.host ?? source.bookSourceUrl) : source.groups.joined(separator: " · "))
-                    .font(.caption)
+                    .font(AppFontStyle.caption.themed)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -286,7 +286,7 @@ private struct ExploreSourceView: View {
             HStack(spacing: 8) {
                 ForEach(model.kinds) { kind in
                     Button(kind.title) { Task { await model.select(kind: kind) } }
-                        .font(.subheadline.weight(.medium))
+                        .font(AppFontStyle.subheadline.weight(.medium).themed)
                         .padding(.horizontal, 12)
                         .frame(minHeight: 44)
                         .foregroundStyle(model.selectedKind?.id == kind.id ? Color.primary : .secondary)
@@ -344,29 +344,29 @@ private struct ExploreBookRow: View {
             BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverURL, width: 52, height: 74)
             VStack(alignment: .leading, spacing: 6) {
                 Text(book.name)
-                    .font(.body.weight(.medium))
+                    .font(AppFontStyle.body.weight(.medium).themed)
                     .foregroundStyle(ReadingTheme.ink)
                     .lineLimit(2)
                 Text(book.author.isEmpty ? "未知作者" : book.author)
-                    .font(.caption)
+                    .font(AppFontStyle.caption.themed)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 if let kind = book.kind, !kind.isEmpty {
                     Text(kind)
-                        .font(.caption)
+                        .font(AppFontStyle.caption.themed)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 if let intro = book.intro, !intro.isEmpty {
                     Text(intro)
-                        .font(.caption)
+                        .font(AppFontStyle.caption.themed)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
+                .font(AppFontStyle.caption.weight(.semibold).themed)
                 .foregroundStyle(.tertiary)
                 .padding(.top, 4)
         }

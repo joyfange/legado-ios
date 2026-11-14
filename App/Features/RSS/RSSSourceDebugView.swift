@@ -28,14 +28,14 @@ struct RSSSourceDebugView: View {
     var body: some View {
         List {
             Section("调试输入") {
-                Text(source.sourceName).font(.headline)
+                Text(source.sourceName).font(AppFontStyle.headline.themed)
                 TextField("关键词，或 分类::地址", text: $model.input)
                     .textInputAutocapitalization(.never).disableAutocorrection(true)
                     .onSubmit { model.run(source) }
                 Button { model.run(source) } label: { Label(model.running ? "正在调试…" : "运行完整链路", systemImage: "play.fill") }
                     .disabled(model.running)
-            }
-            if model.running { Section { HStack { ProgressView(); Text("正在请求并解析列表与正文") } } }
+            }.readingRowBackground()
+            if model.running { Section { HStack { ProgressView(); Text("正在请求并解析列表与正文") } }.readingRowBackground() }
             if let report = model.report {
                 Section(report.passed ? "调试通过" : "发现兼容问题") {
                     ForEach(report.steps) { step in
@@ -45,16 +45,16 @@ struct RSSSourceDebugView: View {
                                 VStack(alignment: .leading) { Text(item.message); Text(item.code).font(.caption.monospaced()).foregroundStyle(.secondary) }
                             }
                         } label: {
-                            Label { VStack(alignment: .leading) { Text(step.stage.title); Text(step.summary).font(.caption).foregroundStyle(.secondary).lineLimit(2) } } icon: { Image(systemName: icon(step.status)).foregroundStyle(color(step.status)) }
+                            Label { VStack(alignment: .leading) { Text(step.stage.title); Text(step.summary).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(2) } } icon: { Image(systemName: icon(step.status)).foregroundStyle(color(step.status)) }
                         }
                     }
-                }
+                }.readingRowBackground()
                 if !report.articles.isEmpty {
-                    Section("文章样本") { ForEach(report.articles.prefix(10)) { Text($0.title) } }
+                    Section("文章样本") { ForEach(report.articles.prefix(10)) { Text($0.title) } }.readingRowBackground()
                 }
-                if let preview = report.contentPreview { Section("正文样本") { Text(preview).textSelection(.enabled) } }
+                if let preview = report.contentPreview { Section("正文样本") { Text(preview).textSelection(.enabled) }.readingRowBackground() }
             }
-        }
+        }.readingThemedListBackground()
         .navigationTitle("RSS源调试")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

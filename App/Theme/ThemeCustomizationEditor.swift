@@ -16,10 +16,8 @@ struct ThemeEditorView: View {
     @State private var errorMessage: String?
     @State private var isSaving = false
     @State private var imageTarget: ThemeEditorImageKind?
-    @State private var pendingImage: (url: URL, kind: ThemeEditorImageKind)?
     @State private var newlyImportedIDs: Set<String> = []
     @State private var iconImportTab: LibraryTab?
-    @State private var pendingIcon: (url: URL, tab: LibraryTab)?
     @FocusState private var nameFocused: Bool
 
     init(theme: AppTheme, store: AppThemeStore = .shared,
@@ -123,16 +121,24 @@ struct ThemeEditorView: View {
         .tint(Color.primary)
         .interactiveDismissDisabled(hasChanges || !newlyImportedIDs.isEmpty)
         .modifier(AppTypographyRoot())
-        .sheet(item: $imageTarget, onDismiss: importPendingImage) { target in
-            ThemeImagePicker(onPick: { url in
-                pendingImage = (url, target); imageTarget = nil
-            }, onCancel: { pendingImage = nil; imageTarget = nil })
+        .sheet(item: $imageTarget) { target in
+            ThemePhotoPicker(onPick: { data in
+                imageTarget = nil
+                importImage(data, kind: target)
+            }, onCancel: { imageTarget = nil }, onFailure: { message in
+                imageTarget = nil
+                errorMessage = message
+            })
                 .ignoresSafeArea()
         }
-        .sheet(item: $iconImportTab, onDismiss: importPendingIcon) { tab in
-            ThemeImagePicker(onPick: { url in
-                pendingIcon = (url, tab); iconImportTab = nil
-            }, onCancel: { pendingIcon = nil; iconImportTab = nil })
+        .sheet(item: $iconImportTab) { tab in
+            ThemePhotoPicker(onPick: { data in
+                iconImportTab = nil
+                importIcon(data, tab: tab)
+            }, onCancel: { iconImportTab = nil }, onFailure: { message in
+                iconImportTab = nil
+                errorMessage = message
+            })
                 .ignoresSafeArea()
         }
         .alert("放弃更改？", isPresented: $showingDiscardConfirmation) {
@@ -195,22 +201,18 @@ struct ThemeEditorView: View {
                 draft = theme
             })
     }
-    private func importPendingIcon() {
-        guard let pendingIcon else { return }
-        self.pendingIcon = nil
+    private func importIcon(_ data: Data, tab: LibraryTab) {
         do {
-            let id = try ThemeAssetStore.shared.importIconFile(pendingIcon.url)
+            let id = try ThemeAssetStore.shared.importIconData(data)
             newlyImportedIDs.insert(id)
-            tabIconBinding(for: pendingIcon.tab).wrappedValue = id
+            tabIconBinding(for: tab).wrappedValue = id
         } catch { errorMessage = error.localizedDescription }
     }
-    private func importPendingImage() {
-        guard let pendingImage else { return }
-        self.pendingImage = nil
+    private func importImage(_ data: Data, kind: ThemeEditorImageKind) {
         do {
-            let id = try ThemeAssetStore.shared.importFile(pendingImage.url)
+            let id = try ThemeAssetStore.shared.importData(data)
             newlyImportedIDs.insert(id)
-            $draft.themeSetting(pendingImage.kind.keyPath).wrappedValue = id
+            $draft.themeSetting(kind.keyPath).wrappedValue = id
         } catch { errorMessage = error.localizedDescription }
     }
     private func requestClose() {
@@ -403,7 +405,7 @@ struct ThemeCustomizationEditor: View {
                     tabIconRow(tab)
                 }
             }
-            note("每个标签可导入自定义 PNG 图标；图片不超过 20 MB，最长边 2000 像素。恢复默认后使用应用原有图标。")
+            note("每个标签可从相册导入自定义图标（透明 PNG 效果最好）；图片不超过 20 MB，最长边 2000 像素。恢复默认后使用应用原有图标。")
         }
     }
     private func tabIconRow(_ tab: LibraryTab) -> some View {
@@ -525,7 +527,7 @@ struct ThemeEditorTabIconPicker: View {
                     .frame(width: 56, height: 56).padding(20).themeEditorSurface()
                 VStack(alignment: .leading, spacing: 8) {
                     Button(action: importIcon) {
-                        Label("从文件选择图片", systemImage: "folder")
+                        Label("从相册选择图片", systemImage: "photo.on.rectangle")
                             .appFont(.body).frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .buttonStyle(.borderedProminent)

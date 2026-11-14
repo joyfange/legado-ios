@@ -84,8 +84,70 @@ final class SourceLibraryModel: ObservableObject {
     private var saveGeneration = 0
     private var persistedSources: [BookSource] = []
 
+    /// 用户手动建立的分组（可以暂时没有书源）与被隐藏的分组，保存在本机。
+    @Published private(set) var customGroups: [String] = SourceGroupPreferences.customGroups
+    @Published private(set) var hiddenGroups: Set<String> = SourceGroupPreferences.hiddenGroups
+
+    /// 全部分组：书源里出现过的分组 + 手动建立的空分组。
     var groups: [String] {
-        Array(Set(sources.flatMap(\.groups))).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        var seen = Set<String>()
+        let all = (sources.flatMap(\.groups) + customGroups).filter { !$0.isEmpty && seen.insert($0).inserted }
+        return all.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// 未隐藏的分组，用于书源页分组栏和搜索范围。
+    var visibleGroups: [String] { groups.filter { !hiddenGroups.contains($0) } }
+
+    func sourceCount(inGroup group: String) -> Int {
+        sources.filter { $0.hasGroup(group) }.count
+    }
+
+    /// 新建一个空分组；之后可以手动把书源移进来。
+    @discardableResult
+    func createGroup(_ name: String) -> String? {
+        guard let value = BookSource.parseGroups(name).first else { return nil }
+        if !groups.contains(value) {
+            customGroups.append(value)
+            SourceGroupPreferences.customGroups = customGroups
+        }
+        notice = .init(kind: .success, title: "已创建分组 \(value)", detail: "")
+        return value
+    }
+
+    func setGroupHidden(_ group: String, hidden: Bool) {
+        if hidden { hiddenGroups.insert(group) } else { hiddenGroups.remove(group) }
+        SourceGroupPreferences.hiddenGroups = hiddenGroups
+    }
+
+    /// 把书源移到某个分组（每个书源只属于一个分组）；nil 表示移出分组。
+    func moveSources(_ sourceIDs: Set<String>, toGroup group: String?) async {
+        guard !sourceIDs.isEmpty else { return }
+        let value = group.flatMap { BookSource.parseGroups($0).first }
+        if let value, !groups.contains(value) {
+            customGroups.append(value)
+            SourceGroupPreferences.customGroups = customGroups
+        }
+        var updated = sources
+        for index in updated.indices where sourceIDs.contains(updated[index].id) {
+            updated[index].bookSourceGroup = value
+        }
+        await persist(updated, successTitle: value.map { "已移到分组 \($0)" } ?? "已移出分组")
+    }
+
+    /// 导入的书源只保留分组里的第一个词（如「书旗,小说,APP,AI」只建「书旗」分组）。
+    nonisolated static func primaryGroupOnly(_ source: BookSource) -> BookSource {
+        var value = source
+        value.bookSourceGroup = BookSource.parseGroups(source.bookSourceGroup).first
+        return value
+    }
+
+    /// 一次性整理已导入的书源：多标签分组只保留第一个词。
+    private func migratePrimaryGroupsIfNeeded() async {
+        let key = "sourceGroups.primaryOnly.v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        UserDefaults.standard.set(true, forKey: key)
+        guard sources.contains(where: { $0.groups.count > 1 }) else { return }
+        await persist(sources.map(Self.primaryGroupOnly), successTitle: nil)
     }
 
     init(repository: any BookSourceRepository, importTransport: any HTTPTransport = URLSessionHTTPTransport.shared) {
@@ -114,6 +176,7 @@ final class SourceLibraryModel: ObservableObject {
         do {
             sources = try await repository.load()
             persistedSources = sources
+            await migratePrimaryGroupsIfNeeded()
         } catch {
             notice = .init(kind: .error, title: "无法读取书源", detail: error.localizedDescription)
         }
@@ -133,7 +196,7 @@ final class SourceLibraryModel: ObservableObject {
                 let result = try await Task.detached(priority: .userInitiated) { [importer, existing = combined] in
                     try importer.prepare(data: Data(contentsOf: url), existing: existing, duplicatePolicy: .replace)
                 }.value
-                combined = result.sources
+                combined = result.sources.map(Self.primaryGroupOnly)
                 inserted += result.inserted
                 replaced += result.replaced
                 warnings += result.warnings.count
@@ -294,7 +357,7 @@ final class SourceLibraryModel: ObservableObject {
         var inserted = 0
         var replaced = 0
         for item in pendingImport.items where selectedIDs.contains(item.id) {
-            var source = item.source
+            var source = Self.primaryGroupOnly(item.source)
             if let existing = item.existing {
                 if keepOriginalName { source.bookSourceName = existing.bookSourceName }
                 if keepOriginalGroup { source.bookSourceGroup = existing.bookSourceGroup }
@@ -304,9 +367,9 @@ final class SourceLibraryModel: ObservableObject {
                 }
                 source.customOrder = existing.customOrder
             }
-            if let customGroup, !BookSource.parseGroups(customGroup).isEmpty {
-                if addCustomGroup { source.addGroups(customGroup) }
-                else { source.bookSourceGroup = BookSource.joinGroups(BookSource.parseGroups(customGroup)) }
+            if let customGroup, let value = BookSource.parseGroups(customGroup).first {
+                // 每个书源只进一个分组：填写了自定义分组就直接放进该分组。
+                source.bookSourceGroup = value
             }
             if let index = updated.firstIndex(where: { $0.id == source.id }) {
                 updated[index] = source
@@ -389,7 +452,13 @@ final class SourceLibraryModel: ObservableObject {
     }
 
     func renameGroup(_ oldValue: String, to newValue: String) async {
-        guard !BookSource.parseGroups(newValue).isEmpty else { return }
+        guard let renamed = BookSource.parseGroups(newValue).first else { return }
+        customGroups = customGroups.map { $0 == oldValue ? renamed : $0 }
+        SourceGroupPreferences.customGroups = customGroups
+        if hiddenGroups.remove(oldValue) != nil {
+            hiddenGroups.insert(renamed)
+            SourceGroupPreferences.hiddenGroups = hiddenGroups
+        }
         var updated = sources
         for index in updated.indices where updated[index].hasGroup(oldValue) {
             updated[index].replaceGroup(oldValue, with: newValue)
@@ -398,6 +467,9 @@ final class SourceLibraryModel: ObservableObject {
     }
 
     func deleteGroup(_ group: String) async {
+        customGroups.removeAll { $0 == group }
+        SourceGroupPreferences.customGroups = customGroups
+        if hiddenGroups.remove(group) != nil { SourceGroupPreferences.hiddenGroups = hiddenGroups }
         var updated = sources
         for index in updated.indices where updated[index].hasGroup(group) {
             updated[index].removeGroups(group)
@@ -431,7 +503,7 @@ final class SourceLibraryModel: ObservableObject {
         let result = try await Task.detached(priority: .userInitiated) { [importer, existing = sources] in
             try importer.prepare(data: data, existing: existing, duplicatePolicy: .replace)
         }.value
-        try await saveSources(result.sources)
+        try await saveSources(result.sources.map(Self.primaryGroupOnly))
         notice = .init(
             kind: .success,
             title: successTitle,
@@ -479,5 +551,22 @@ final class SourceLibraryModel: ObservableObject {
             .sorted { $0.bookSourceName.localizedStandardCompare($1.bookSourceName) == .orderedAscending }
             .map { .init(source: $0, existing: existingByID[$0.id]) },
             invalidItems: invalidItems)
+    }
+}
+
+
+/// 书源分组的本机偏好：手动建立的分组与隐藏的分组。
+enum SourceGroupPreferences {
+    private static let customKey = "sourceGroups.custom.v1"
+    private static let hiddenKey = "sourceGroups.hidden.v1"
+
+    static var customGroups: [String] {
+        get { UserDefaults.standard.stringArray(forKey: customKey) ?? [] }
+        set { UserDefaults.standard.set(newValue, forKey: customKey) }
+    }
+
+    static var hiddenGroups: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: hiddenKey) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue).sorted(), forKey: hiddenKey) }
     }
 }

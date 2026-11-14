@@ -68,7 +68,7 @@ struct ReadingTextField: View {
             TextField(title, text: $text, axis: axis)
         } else if axis == .vertical {
             VStack(alignment: .leading, spacing: 6) {
-                Text(title).font(.caption).foregroundStyle(.secondary)
+                Text(title).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 TextEditor(text: $text).frame(minHeight: 80).accessibilityLabel(title)
             }
         } else {

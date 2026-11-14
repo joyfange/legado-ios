@@ -105,7 +105,7 @@ struct FileManagementView: View {
                 }
                 .pickerStyle(.segmented)
                 .disabled(selecting)
-            }
+            }.readingRowBackground()
             if tab == 0 { localFilesSection }
             else { cachedBooksSection }
             if !selecting {
@@ -113,13 +113,13 @@ struct FileManagementView: View {
                     NavigationLink { CacheManagementView() } label: {
                         Label("章节缓存与空间清理", systemImage: "internaldrive")
                     }
-                }
+                }.readingRowBackground()
             }
-        }
+        }.readingThemedListBackground()
         .listStyle(.insetGrouped)
         .environment(\.editMode, .constant(selecting ? .active : .inactive))
         .navigationTitle("文件管理")
-        .searchable(text: $query, prompt: tab == 0 ? "搜索本地文件" : "搜索缓存书籍")
+        .readingInlineSearch(text: $query, prompt: tab == 0 ? "搜索本地文件" : "搜索缓存书籍")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 if selecting {
@@ -236,7 +236,7 @@ struct FileManagementView: View {
         Section {
             ReadingLabeledContent("本地文件", value: "\(model.files.count) 个")
             ReadingLabeledContent("占用空间", value: ByteCountFormatter.string(fromByteCount: model.files.reduce(0) { $0 + $1.bytes }, countStyle: .file))
-        }
+        }.readingRowBackground()
         Section("文件") {
             if displayedFiles.isEmpty {
                 ReadingUnavailableView(query.isEmpty ? "还没有本地文件" : "没有匹配的文件", systemImage: "doc.text", description: Text("可从系统“文件”导入 TXT 或 EPUB，文件会复制到应用中。"))
@@ -262,7 +262,7 @@ struct FileManagementView: View {
                     Button("导出", systemImage: "square.and.arrow.up") { export(file) }.tint(.blue)
                 }
             }
-        }
+        }.readingRowBackground()
         if !missingBooks.isEmpty {
             Section("文件已丢失") {
                 ForEach(missingBooks) { book in
@@ -274,14 +274,14 @@ struct FileManagementView: View {
                         }.buttonStyle(.borderless)
                     }
                 }
-            }
+            }.readingRowBackground()
         }
     }
 
     private var cachedBooksSection: some View {
         Section {
             Text("将书架中已缓存的网络正文导出为 TXT，按目录顺序排列。导出过程不下载新章节。")
-                .font(.footnote).foregroundStyle(.secondary)
+                .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
             if networkBooks.isEmpty {
                 ReadingUnavailableView("没有可导出的书籍", systemImage: "books.vertical", description: Text("将网络书加入书架并缓存章节后，可在这里导出。"))
             }
@@ -292,14 +292,14 @@ struct FileManagementView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(book.name).foregroundStyle(.primary)
-                            Text(book.author.isEmpty ? "导出缓存正文" : book.author).font(.caption).foregroundStyle(.secondary)
+                            Text(book.author.isEmpty ? "导出缓存正文" : book.author).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Image(systemName: "square.and.arrow.up")
                     }
                 }
             }
-        } header: { Text("缓存正文") }
+        } header: { Text("缓存正文") }.readingRowBackground()
     }
 
     private func fileLabel(_ file: LocalFileEntry) -> some View {
@@ -310,10 +310,10 @@ struct FileManagementView: View {
                 HStack(spacing: 8) {
                     Text(ByteCountFormatter.string(fromByteCount: file.bytes, countStyle: .file))
                     if let modified = file.modified { Text(modified, style: .date) }
-                }.font(.caption).foregroundStyle(.secondary)
+                }.font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                 if let book = book(for: file.url) {
-                    Text("书架：\(book.name)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                } else { Text("点按加入书架").font(.caption).foregroundStyle(.secondary) }
+                    Text("书架：\(book.name)").font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
+                } else { Text("点按加入书架").font(AppFontStyle.caption.themed).foregroundStyle(.secondary) }
             }
         }
     }

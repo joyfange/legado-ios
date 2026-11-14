@@ -27,7 +27,7 @@ struct ReadingHistoryView: View {
                     Section {
                         ReadingLabeledContent("累计阅读", value: duration(activity.summaries.reduce(0) { $0 + $1.readTime }))
                         ReadingLabeledContent("读过", value: "\(activity.summaries.count) 本")
-                    }
+                    }.readingRowBackground()
                     if displayedRecords.isEmpty {
                         ReadingUnavailableView.search(text: searchText)
                     } else {
@@ -47,12 +47,12 @@ struct ReadingHistoryView: View {
                                         height: 54
                                     )
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(record.bookName).font(.headline)
+                                        Text(record.bookName).font(AppFontStyle.headline.themed)
                                         Text(duration(record.readTime))
-                                            .font(.caption).foregroundStyle(.secondary)
+                                            .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                                     }
                                     Spacer()
-                                    Text(date(record.lastRead)).font(.caption).foregroundStyle(.tertiary)
+                                    Text(date(record.lastRead)).font(AppFontStyle.caption.themed).foregroundStyle(.tertiary)
                                 }
                             }
                             .swipeActions {
@@ -60,12 +60,12 @@ struct ReadingHistoryView: View {
                             }
                         }
                     }
-                }
+                }.readingThemedListBackground()
                 .listStyle(.insetGrouped)
             }
         }
         .navigationTitle("阅读记录")
-        .searchable(text: $searchText, prompt: "搜索")
+        .readingInlineSearch(text: $searchText, prompt: "搜索")
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Menu("阅读记录选项", systemImage: "ellipsis.circle") {
@@ -74,7 +74,7 @@ struct ReadingHistoryView: View {
                         sortButton("书名", value: 0)
                         sortButton("阅读时长", value: 1)
                         sortButton("最后阅读", value: 2)
-                    }
+                    }.readingRowBackground()
                     if !activity.summaries.isEmpty {
                         Button("清空", systemImage: "trash", role: .destructive) { confirmsClear = true }
                     }

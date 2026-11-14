@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import CoreText
+import UniformTypeIdentifiers
 
 enum ThemeColorField: String, Identifiable {
     case accent, background, backgroundEnd, surface, primaryText, secondaryText, border, selection
@@ -242,6 +244,8 @@ enum ThemeEditorFonts {
 struct ThemeEditorFontChoices: View {
     @Binding var selection: String?
     @ObservedObject private var manager = ReadingFontManager.shared
+    @State private var showsFontImporter = false
+    @State private var importMessage: String?
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("界面字体").appFont(.headline)
@@ -267,10 +271,68 @@ struct ThemeEditorFontChoices: View {
                 .font(AppFontStyle.body.resolve(ThemeEditorFonts.resolved(selection, manager: manager)))
                 .frame(maxWidth: .infinity, alignment: .leading).padding(16).themeEditorSurface()
                 .accessibilityIdentifier("theme.editor.font.preview")
-            Text("列表包含内置字体和已导入字体。新增字体请先退出编辑，在字体管理中导入。")
+            Button { showsFontImporter = true } label: {
+                Label("导入字体文件（TTF / OTF / TTC）", systemImage: "textformat")
+                    .appFont(.body).frame(maxWidth: .infinity, minHeight: 44)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("theme.editor.font.import")
+            if let importMessage {
+                Text(importMessage).appFont(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("theme.editor.font.importMessage")
+            }
+            Text("列表包含内置字体和已导入字体。导入后自动选中，并与阅读设置共用同一份字体文件。")
                 .appFont(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
+        .fileImporter(isPresented: $showsFontImporter, allowedContentTypes: Self.fontTypes,
+                      allowsMultipleSelection: true) { result in
+            importFonts(result)
+        }
+    }
+
+    private static var fontTypes: [UTType] {
+        var types: [UTType] = [.font]
+        for ext in ["ttf", "otf", "ttc"] {
+            if let type = UTType(filenameExtension: ext), !types.contains(type) { types.append(type) }
+        }
+        return types
+    }
+
+    private func importFonts(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let error):
+            importMessage = "导入失败：\(error.localizedDescription)"
+        case .success(let urls):
+            var imported: [String] = []
+            var failed = 0
+            for url in urls {
+                do {
+                    let path = try ReaderFontStore.install(from: url)
+                    if let name = Self.postScriptName(atPath: path) { imported.append(name) } else { failed += 1 }
+                } catch {
+                    failed += 1
+                }
+            }
+            manager.reload()
+            AppThemeRuntime.invalidateFont()
+            if let first = imported.first, UIFont(name: first, size: 17) != nil {
+                selection = first
+            }
+            if imported.isEmpty {
+                importMessage = "没有导入字体，请选择有效的 TTF、OTF 或 TTC 文件。"
+            } else {
+                importMessage = "已导入 \(imported.count) 个字体" + (failed > 0 ? "，\(failed) 个失败" : "") + "，已选中第一个。"
+            }
+        }
+    }
+
+    private static func postScriptName(atPath path: String) -> String? {
+        guard let provider = CGDataProvider(url: URL(fileURLWithPath: path) as CFURL),
+              let font = CGFont(provider), let name = font.postScriptName else { return nil }
+        CTFontManagerRegisterGraphicsFont(font, nil)
+        return name as String
     }
     private func row(_ title: String, detail: String?, value: String?, id: String) -> some View {
         Button { selection = value } label: {

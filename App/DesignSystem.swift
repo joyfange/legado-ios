@@ -28,7 +28,7 @@ struct ReadingUnavailableView<Label: View, Description: View, Actions: View>: Vi
             VStack(spacing: 12) {
                 label.labelStyle(ReadingUnavailableLabelStyle())
                 description
-                    .font(.subheadline)
+                    .font(AppFontStyle.subheadline.themed)
                     .foregroundStyle(.secondary)
                 actions.padding(.top, 4)
             }
@@ -68,10 +68,10 @@ private struct ReadingUnavailableLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         VStack(spacing: 12) {
             configuration.icon
-                .font(.system(size: 48))
+                .font(AppFontStyle.system(size: 48).themed)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
-            configuration.title.font(.title2.bold())
+            configuration.title.font(AppFontStyle.title2.bold().themed)
         }
     }
 }
@@ -122,19 +122,8 @@ private struct ReadingSearchModifier: ViewModifier {
     @FocusState private var isFocused: Bool
 
     func body(content: Content) -> some View {
-        if #available(iOS 17.0, *), !ReadingCompatibility.usesLegacyUI {
-            if alwaysVisible {
-                content.searchable(
-                    text: $text,
-                    isPresented: $isPresented,
-                    placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: prompt
-                )
-            } else {
-                content.searchable(text: $text, isPresented: $isPresented, prompt: prompt)
-            }
-        } else {
-            content
+        // 统一使用页面内常驻搜索框：系统搜索栏在 iOS 26 上会在左上角残留一个搜索图标。
+        content
                 .safeAreaInset(edge: .top, spacing: 0) {
                     HStack(spacing: 8) {
                         HStack(spacing: 8) {
@@ -156,8 +145,9 @@ private struct ReadingSearchModifier: ViewModifier {
                                 .accessibilityLabel("清除搜索")
                             }
                         }
-                        .padding(10)
-                        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 10))
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 40)
+                        .background { ThemeSurface(shape: Capsule(), isCard: true) }
                         if isFocused {
                             Button("取消") {
                                 text = ""
@@ -167,12 +157,11 @@ private struct ReadingSearchModifier: ViewModifier {
                     }
                     .padding(.horizontal, 16)
                     .padding(.vertical, 8)
-                    .background(ReadingTheme.canvas)
+                    .background { ReadingCanvasBackground(grouped: true).ignoresSafeArea(edges: .horizontal) }
                 }
                 .onAppear { isFocused = isPresented }
                 .onChange(of: isPresented) { isFocused = $0 }
                 .onChange(of: isFocused) { isPresented = $0 }
-        }
     }
 }
 
@@ -205,14 +194,14 @@ struct ReadingPageHeader<Actions: View>: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 16) {
                 Text(title)
-                    .font(.largeTitle.bold())
+                    .font(AppFontStyle.largeTitle.bold().themed)
                     .foregroundStyle(ReadingTheme.ink)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: 0)
                 HStack(spacing: 10) { actions }
             }
             Text(subtitle)
-                .font(.subheadline)
+                .font(AppFontStyle.subheadline.themed)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -227,7 +216,7 @@ struct ReadingToolbarIcon: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 19, weight: .regular))
+            .font(AppFontStyle.system(size: 19, weight: .regular).themed)
             .foregroundStyle(ReadingTheme.accent)
             .frame(width: 44, height: 44)
             .background(ReadingTheme.groupedCanvas, in: Circle())
@@ -435,7 +424,7 @@ struct StatusPill: View {
             if let systemImage { Image(systemName: systemImage) }
             Text(text)
         }
-        .font(.caption.weight(.medium))
+        .font(AppFontStyle.caption.weight(.medium).themed)
         .foregroundStyle(color)
     }
 }
@@ -562,7 +551,7 @@ struct AdjustableStepButton: View {
 
     var body: some View {
         Image(systemName: systemName)
-            .font(.system(size: 13, weight: .semibold))
+            .font(AppFontStyle.system(size: 13, weight: .semibold).themed)
             .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.5))
             .frame(width: 30, height: 30)
             .background(Color.secondary.opacity(0.14), in: Circle())
@@ -652,7 +641,7 @@ struct ParagraphIndentControl: View {
             HStack(spacing: 8) {
                 ForEach(0...4, id: \.self) { value in
                     Text(value == 0 ? "不缩进" : "\(value) 字")
-                        .font(.subheadline.weight(count == value ? .semibold : .regular))
+                        .font(AppFontStyle.subheadline.weight(count == value ? .semibold : .regular).themed)
                         .foregroundStyle(count == value ? Color.white : Color.primary)
                         .padding(.horizontal, 10)
                         .frame(height: 30)
@@ -663,7 +652,7 @@ struct ParagraphIndentControl: View {
                 }
             }
             Text("每段开头空出几个汉字的宽度，默认 2 个字符，可输入 0～\(Self.maxCharacters)。")
-                .font(.caption)
+                .font(AppFontStyle.caption.themed)
                 .foregroundStyle(.secondary)
         }
     }

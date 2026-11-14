@@ -88,11 +88,11 @@ struct SourceSwitchView: View {
                         HStack(spacing: 10) {
                             ProgressView()
                             Text("仍在查找其他书源，可直接选择已找到的结果")
-                                .font(.caption).foregroundStyle(.secondary)
+                                .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                         }
                     }
-                    ForEach(model.candidates) { candidate in candidateRow(candidate) }
-                }
+                    ForEach(model.candidates) { candidate in candidateRow(candidate) }.readingRowBackground()
+                }.readingThemedListBackground()
                 .listStyle(.insetGrouped)
                 .readingScrollContentBackgroundHidden()
                 .background(Color.clear)
@@ -132,13 +132,13 @@ struct SourceSwitchView: View {
                     .frame(width: 42, height: 42)
                     .background(ReadingTheme.accentSoft.opacity(0.55), in: RoundedRectangle(cornerRadius: 13))
                 VStack(alignment: .leading, spacing: 5) {
-                    Text(candidate.book.originName).font(.headline).foregroundStyle(.primary)
+                    Text(candidate.book.originName).font(AppFontStyle.headline.themed).foregroundStyle(.primary)
                     Text(candidate.book.author.isEmpty ? "作者信息缺失" : candidate.book.author)
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(AppFontStyle.subheadline.themed).foregroundStyle(.secondary)
                     if model.switchingID == candidate.id {
-                        Text("正在验证目录和正文…").font(.caption).foregroundStyle(.secondary)
+                        Text("正在验证目录和正文…").font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                     } else if let latest = candidate.book.latestChapterTitle, !latest.isEmpty {
-                        Text(latest).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        Text(latest).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 Spacer()

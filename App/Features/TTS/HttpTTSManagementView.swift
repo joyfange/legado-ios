@@ -106,12 +106,12 @@ struct HttpTTSManagementView: View {
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(engine.name).foregroundStyle(.primary)
-                        Text(engine.url).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        Text(engine.url).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(2)
                     }
                 }
             }
             .onDelete { offsets in Task { await model.delete(at: offsets) } }
-        }
+        }.readingThemedListBackground()
         .overlay {
             if model.engines.isEmpty {
                 ReadingUnavailableView("没有在线朗读引擎", systemImage: "waveform", description: Text("可恢复内置引擎或导入 HTTP TTS JSON。"))
@@ -197,7 +197,7 @@ private struct HttpTTSEditorView: View {
                 TextField("Content-Type 正则", text: optional(\.contentType))
                 TextField("并发率", text: optional(\.concurrentRate))
                 Toggle("启用 Cookie", isOn: optionalBool(\.enabledCookieJar))
-            }
+            }.readingRowBackground()
             Section("请求与脚本") {
                 fieldLabel("Header")
                 TextEditor(text: optional(\.header)).frame(minHeight: 80)
@@ -214,16 +214,16 @@ private struct HttpTTSEditorView: View {
                 }
                 fieldLabel("登录检查 JS")
                 TextEditor(text: optional(\.loginCheckJs)).frame(minHeight: 100)
-            }
+            }.readingRowBackground()
             Section("测试") {
                 TextField("测试文本", text: $testText)
                 Button(speech.isSpeaking ? "停止测试" : "播放测试", systemImage: speech.isSpeaking ? "stop.fill" : "play.fill") {
                     speech.configure(followsSystemRate: false, speechRate: 5, readByPage: true, streamsHTTPAudio: true)
                     speech.toggleHTTP(engine: engine, text: testText)
                 }
-                if let error = speech.errorMessage { Text(error).foregroundStyle(.red).font(.footnote) }
-            }
-        }
+                if let error = speech.errorMessage { Text(error).foregroundStyle(.red).font(AppFontStyle.footnote.themed) }
+            }.readingRowBackground()
+        }.readingThemedListBackground()
         .navigationTitle(engine.name.isEmpty ? "新建在线朗读引擎" : engine.name)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -246,7 +246,7 @@ private struct HttpTTSEditorView: View {
     }
 
     private func fieldLabel(_ value: String) -> some View {
-        Text(value).font(.subheadline.weight(.medium))
+        Text(value).font(AppFontStyle.subheadline.weight(.medium).themed)
     }
 
     private func optional(_ keyPath: WritableKeyPath<HttpTTS, String?>) -> Binding<String> {
@@ -316,9 +316,9 @@ private struct HttpTTSLoginView: View {
                     TextField(label(for: row), text: binding(for: row))
                         .onChange(of: values[row.name]) { _ in scheduleFieldAction(row.action) }
                 }
-            }
-            if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(.footnote) }
-        }
+            }.readingRowBackground()
+            if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(AppFontStyle.footnote.themed) }
+        }.readingThemedListBackground()
         .navigationTitle("登录 · \(engine.name)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

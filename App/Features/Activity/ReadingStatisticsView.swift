@@ -29,20 +29,20 @@ struct ReadingStatisticsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 Text("今日阅读")
-                    .font(.subheadline)
+                    .font(AppFontStyle.subheadline.themed)
                 Spacer()
                 Text(Date.now.formatted(.dateTime.locale(Locale(identifier: "zh_CN")).month().day()))
-                    .font(.caption)
+                    .font(AppFontStyle.caption.themed)
             }
             .foregroundStyle(ReadingTheme.onAccent.opacity(0.7))
             Text(duration(statistics.todayReadTime, compact: false))
-                .font(.system(size: durationFontSize, weight: .medium))
+                .font(AppFontStyle.system(size: durationFontSize, weight: .medium).themed)
                 .foregroundStyle(ReadingTheme.onAccent)
                 .readingNumericTransition()
                 .minimumScaleFactor(0.7)
                 .lineLimit(1)
             Text(statistics.todayReadTime == 0 ? "今天还没有阅读记录" : "已记录今天的阅读时长")
-                .font(.caption)
+                .font(AppFontStyle.caption.themed)
                 .foregroundStyle(ReadingTheme.onAccent.opacity(0.65))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -74,10 +74,10 @@ struct ReadingStatisticsView: View {
     private func statisticTile(title: String, value: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
-                .font(.caption)
+                .font(AppFontStyle.caption.themed)
                 .foregroundStyle(.secondary)
             Text(value)
-                .font(.title3.weight(.semibold))
+                .font(AppFontStyle.title3.weight(.semibold).themed)
                 .readingNumericTransition()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -90,10 +90,10 @@ struct ReadingStatisticsView: View {
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
                     Text("最近 7 天")
-                        .font(.headline)
+                        .font(AppFontStyle.headline.themed)
                     Spacer()
                     Text("每日阅读时长")
-                        .font(.caption)
+                        .font(AppFontStyle.caption.themed)
                         .foregroundStyle(.secondary)
                 }
 
@@ -109,7 +109,7 @@ struct ReadingStatisticsView: View {
                                 .fill(day.readTime > 0 ? ReadingTheme.accent.opacity(Calendar.current.isDateInToday(day.date) ? 1 : 0.22) : ReadingTheme.separator)
                                 .frame(width: 22, height: barHeight(day.readTime))
                             Text(weekday(day.date))
-                                .font(.caption2)
+                                .font(AppFontStyle.caption2.themed)
                                 .foregroundStyle(Calendar.current.isDateInToday(day.date) ? ReadingTheme.accent : .secondary)
                         }
                         .frame(maxWidth: .infinity)
@@ -128,10 +128,10 @@ struct ReadingStatisticsView: View {
         } label: {
             ReadingCard {
                 HStack(spacing: 12) {
-                    Image(systemName: "clock.arrow.circlepath").font(.title3)
-                    Text("阅读记录").font(.subheadline.weight(.medium))
+                    Image(systemName: "clock.arrow.circlepath").font(AppFontStyle.title3.themed)
+                    Text("阅读记录").font(AppFontStyle.subheadline.weight(.medium).themed)
                     Spacer()
-                    Image(systemName: "arrow.up.right").font(.subheadline)
+                    Image(systemName: "arrow.up.right").font(AppFontStyle.subheadline.themed)
                 }
                 .foregroundStyle(ReadingTheme.accent)
                 .frame(minHeight: 24)

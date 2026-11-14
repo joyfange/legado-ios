@@ -23,7 +23,7 @@ struct SourceLoginView: View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "lock.shield.fill").foregroundStyle(ReadingTheme.accent)
-                Text(status).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                Text(status).font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(2)
                 Spacer()
                 if isChecking { ProgressView().controlSize(.small) }
             }
@@ -426,8 +426,8 @@ struct SourceLoginFormView: View {
         Form {
             if let status {
                 Section {
-                    Text(status).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                }
+                    Text(status).font(AppFontStyle.callout.themed).foregroundStyle(.secondary).textSelection(.enabled)
+                }.readingRowBackground()
             }
             ForEach(Array(sections.enumerated()), id: \.offset) { _, section in
                 Section {
@@ -436,9 +436,9 @@ struct SourceLoginFormView: View {
                     Text(section.0)
                 } footer: {
                     if let note = footer(for: section.0) { Text(note) }
-                }
+                }.readingRowBackground()
             }
-        }
+        }.readingThemedListBackground()
         .disabled(isRunning)
         .overlay { if isRunning { ProgressView().controlSize(.large) } }
         .navigationTitle("登录 · \(source.bookSourceName)")

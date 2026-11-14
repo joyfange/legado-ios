@@ -12,6 +12,8 @@ struct SourceManagementView: View {
     @State private var showsTextImporter = false
     @State private var showsGroupManager = false
     @State private var showsBatchGroups = false
+    @State private var batchSourceIDs = Set<String>()
+    @State private var groupManagerFocusesNew = false
     @State private var selectedGroup: String?
     @State private var searchText = ""
     @State private var isSelecting = false
@@ -66,14 +68,10 @@ struct SourceManagementView: View {
             } else {
                 List {
                     Section {
-                        Picker("分组", selection: $selectedGroup) {
-                            Text("全部").tag(String?.none)
-                            Text("未分组").tag(String?.some(""))
-                            ForEach(library.groups, id: \.self) { group in
-                                Text(group).tag(String?.some(group))
-                            }
-                        }
-                    }
+                        groupBar
+                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                            .listRowBackground(Color.clear)
+                    }.readingRowBackground()
                     Section {
                         ForEach(filteredSources) { source in
                             if isSelecting {
@@ -82,7 +80,7 @@ struct SourceManagementView: View {
                                 } label: {
                                     HStack(spacing: 10) {
                                         Image(systemName: selectedSourceIDs.contains(source.id) ? "checkmark.circle.fill" : "circle")
-                                            .font(.title3)
+                                            .font(AppFontStyle.title3.themed)
                                             .foregroundStyle(selectedSourceIDs.contains(source.id) ? ReadingTheme.accent : .secondary)
                                         SourceRow(source: source, showsToggle: false) { _ in }
                                     }
@@ -97,6 +95,26 @@ struct SourceManagementView: View {
                                     }
                                 }
                                 .contextMenu {
+                                    Menu {
+                                        ForEach(library.groups, id: \.self) { group in
+                                            Button {
+                                                Task { await library.moveSources([source.id], toGroup: group) }
+                                            } label: {
+                                                Label(group, systemImage: source.hasGroup(group) ? "checkmark" : "folder")
+                                            }
+                                        }
+                                        Button {
+                                            batchSourceIDs = [source.id]
+                                            showsBatchGroups = true
+                                        } label: { Label("新建分组…", systemImage: "folder.badge.plus") }
+                                        if !source.groups.isEmpty {
+                                            Button(role: .destructive) {
+                                                Task { await library.moveSources([source.id], toGroup: nil) }
+                                            } label: { Label("移出分组", systemImage: "folder.badge.minus") }
+                                        }
+                                    } label: {
+                                        Label("移到分组", systemImage: "folder")
+                                    }
                                     NavigationLink {
                                         SearchView(fixedSource: source)
                                     } label: {
@@ -119,8 +137,8 @@ struct SourceManagementView: View {
                         Text("\(filteredSources.count) 个书源")
                     } footer: {
                         Text("共 \(library.sources.count) 个书源，\(library.sources.filter(\.enabled).count) 个已启用")
-                    }
-                }
+                    }.readingRowBackground()
+                }.readingThemedListBackground()
                 .listStyle(.insetGrouped)
                 .readingScrollContentBackgroundHidden()
                 .background(ReadingTheme.groupedCanvas)
@@ -131,7 +149,7 @@ struct SourceManagementView: View {
         }
         .navigationTitle("书源")
         .background(ReadingTheme.groupedCanvas)
-        .searchable(text: $searchText, prompt: "名称、地址或分组")
+        .readingInlineSearch(text: $searchText, prompt: "名称、地址或分组")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(isSelecting ? "完成" : "选择") {
@@ -152,7 +170,10 @@ struct SourceManagementView: View {
                     } label: {
                         Label("测试书源", systemImage: "checkmark.circle.badge.questionmark")
                     }
-                    Button("管理分组", systemImage: "folder.badge.gearshape") { showsGroupManager = true }
+                    Button("管理分组", systemImage: "folder.badge.gearshape") {
+                        groupManagerFocusesNew = false
+                        showsGroupManager = true
+                    }
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -178,7 +199,10 @@ struct SourceManagementView: View {
                         else { selectedSourceIDs = Set(filteredSources.map(\.id)) }
                     }
                     Spacer()
-                    Button("分组", systemImage: "folder") { showsBatchGroups = true }
+                    Button("移到分组", systemImage: "folder") {
+                        batchSourceIDs = selectedSourceIDs
+                        showsBatchGroups = true
+                    }
                         .disabled(selectedSourceIDs.isEmpty)
                     Button("启用", systemImage: "checkmark.circle") {
                         Task { await library.setEnabled(true, for: selectedSourceIDs) }
@@ -189,7 +213,7 @@ struct SourceManagementView: View {
                     }
                     .disabled(selectedSourceIDs.isEmpty)
                 }
-                .font(.subheadline.weight(.semibold))
+                .font(AppFontStyle.subheadline.weight(.semibold).themed)
                 .padding(.horizontal, 18).padding(.vertical, 12)
                 .background(.ultraThinMaterial)
             }
@@ -203,10 +227,10 @@ struct SourceManagementView: View {
                 .environmentObject(library)
         }
         .sheet(isPresented: $showsGroupManager) {
-            SourceGroupManagerView().environmentObject(library)
+            SourceGroupManagerView(focusesNewGroup: groupManagerFocusesNew).environmentObject(library)
         }
         .sheet(isPresented: $showsBatchGroups) {
-            SourceBatchGroupView(sourceIDs: selectedSourceIDs).environmentObject(library)
+            SourceBatchGroupView(sourceIDs: batchSourceIDs).environmentObject(library)
         }
         .sheet(isPresented: $showsImporter, onDismiss: {
             importPickerHasDismissed = true
@@ -220,6 +244,76 @@ struct SourceManagementView: View {
                 showsImporter = false
             }
         }
+    }
+
+    /// 分组栏：全部 / 未分组 / 各分组（隐藏的分组不显示），末尾是新建与管理入口。
+    private var groupBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                groupChip("全部", count: library.sources.count, selected: selectedGroup == nil) { selectedGroup = nil }
+                let ungrouped = library.sources.filter { $0.groups.isEmpty }.count
+                if ungrouped > 0 || selectedGroup == "" {
+                    groupChip("未分组", count: ungrouped, selected: selectedGroup == "") { selectedGroup = "" }
+                }
+                ForEach(library.visibleGroups, id: \.self) { group in
+                    groupChip(group, count: library.sourceCount(inGroup: group), selected: selectedGroup == group) {
+                        selectedGroup = group
+                    }
+                }
+                Button {
+                    groupManagerFocusesNew = true
+                    showsGroupManager = true
+                } label: {
+                    Image(systemName: "plus")
+                        .font(AppFontStyle.footnote.weight(.semibold).themed)
+                        .frame(width: 34, height: 34)
+                        .modifier(ShelfGlass(shape: Capsule(), isCard: true))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("新建分组")
+                .accessibilityIdentifier("sources.group.new")
+                Button {
+                    groupManagerFocusesNew = false
+                    showsGroupManager = true
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(AppFontStyle.footnote.weight(.semibold).themed)
+                        .frame(width: 34, height: 34)
+                        .modifier(ShelfGlass(shape: Capsule(), isCard: true))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("管理分组")
+                .accessibilityIdentifier("sources.group.manage")
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 2)
+        }
+        .onChange(of: library.visibleGroups) { groups in
+            if let selectedGroup, !selectedGroup.isEmpty, !groups.contains(selectedGroup) { self.selectedGroup = nil }
+        }
+    }
+
+    private func groupChip(_ title: String, count: Int, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Text(title).lineLimit(1)
+                Text("\(count)").foregroundStyle(selected ? ReadingTheme.onAccent.opacity(0.8) : .secondary)
+            }
+            .font(AppFontStyle.footnote.weight(selected ? .semibold : .regular).themed)
+            .foregroundStyle(selected ? ReadingTheme.onAccent : ReadingTheme.ink)
+            .padding(.horizontal, 12)
+            .frame(minHeight: 34)
+            .background {
+                if selected {
+                    Capsule().fill(ReadingTheme.accent)
+                } else {
+                    ThemeSurface(shape: Capsule(), isCard: true)
+                }
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func presentFileImporter() {
@@ -299,12 +393,12 @@ private struct SourceTextImportView: View {
                         SyntaxCodeEditor(text: $value, language: .json)
                             .frame(minHeight: 220)
                     }
-                }
+                }.readingRowBackground()
                 Section {
                     Text("导入前可预览并选择书源。地址相同的书源将被替换。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            }
+                        .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+                }.readingRowBackground()
+            }.readingThemedListBackground()
             .navigationTitle("导入书源")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -335,16 +429,16 @@ private struct SourceRow: View {
     var body: some View {
         HStack(spacing: 12) {
             Image(systemName: source.enabled ? "network" : "network.slash")
-                .font(.system(size: 20))
+                .font(AppFontStyle.system(size: 20).themed)
                 .frame(width: 28)
                 .foregroundStyle(.secondary)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(source.bookSourceName)
-                    .font(.body)
+                    .font(AppFontStyle.body.themed)
                     .foregroundStyle(source.enabled ? Color.primary : .secondary)
                 Text(source.groups.isEmpty ? (URL(string: source.bookSourceUrl)?.host ?? source.bookSourceUrl) : source.groups.joined(separator: " · "))
-                    .font(.caption)
+                    .font(AppFontStyle.caption.themed)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -371,46 +465,68 @@ private struct SourceGroupManagerView: View {
     @State private var newGroup = ""
     @State private var renaming: String?
     @State private var renamedValue = ""
+    @State private var pendingDelete: String?
+    @FocusState private var newGroupFocused: Bool
+    var focusesNewGroup = false
 
     var body: some View {
         ReadingNavigationStack {
             List {
-                Section("新建分组") {
-                    HStack {
-                        TextField("例如：文学", text: $newGroup)
-                        Button("添加") {
-                            let value = newGroup
-                            newGroup = ""
-                            let ungrouped = Set(library.sources.filter { $0.groups.isEmpty }.map(\.id))
-                            Task { await library.addGroup(value, to: ungrouped) }
-                        }
-                        .disabled(BookSource.parseGroups(newGroup).isEmpty)
-                    }
-                    Text("添加后，所有未分组的书源都会加入该分组。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "folder.badge.plus").foregroundStyle(ReadingTheme.accent)
+                            .accessibilityHidden(true)
+                        TextField("新分组名称，例如：书旗", text: $newGroup)
+                            .focused($newGroupFocused)
+                            .submitLabel(.done)
+                            .onSubmit(create)
+                        Button("创建", action: create)
+                            .disabled(BookSource.parseGroups(newGroup).isEmpty)
+                            .accessibilityIdentifier("sourceGroups.create")
+                    }
+                } header: {
+                    Text("新建分组")
+                } footer: {
+                    Text("可以建立多个分组。创建后点进分组添加书源，或在书源列表长按书源选择「移到分组」。")
+                }.readingRowBackground()
+                Section {
+                    if library.groups.isEmpty {
+                        Text("还没有分组").foregroundStyle(.secondary)
+                    }
                     ForEach(library.groups, id: \.self) { group in
-                        HStack {
+                        HStack(spacing: 10) {
                             NavigationLink {
                                 SourceGroupContentsView(group: group)
                             } label: {
                                 HStack {
-                                    Label(group, systemImage: "folder.fill")
+                                    Label(group, systemImage: library.hiddenGroups.contains(group) ? "folder" : "folder.fill")
+                                        .foregroundStyle(library.hiddenGroups.contains(group) ? Color.secondary : Color.primary)
                                     Spacer()
-                                    Text("\(library.sources.filter { $0.hasGroup(group) }.count) 个书源")
+                                    Text("\(library.sourceCount(inGroup: group)) 个书源")
+                                        .font(AppFontStyle.footnote.themed)
                                         .foregroundStyle(.secondary)
                                 }
                             }
+                            Button {
+                                library.setGroupHidden(group, hidden: !library.hiddenGroups.contains(group))
+                            } label: {
+                                Image(systemName: library.hiddenGroups.contains(group) ? "eye.slash" : "eye")
+                                    .foregroundStyle(library.hiddenGroups.contains(group) ? Color.secondary : ReadingTheme.accent)
+                                    .frame(width: 30, height: 30)
+                            }
+                            .buttonStyle(.borderless)
+                            .accessibilityLabel(library.hiddenGroups.contains(group) ? "显示\(group)分组" : "隐藏\(group)分组")
                             Menu {
-                                Button("重命名", systemImage: "pencil") {
+                                Button {
                                     renaming = group
                                     renamedValue = group
-                                }
-                                Button("删除分组", systemImage: "trash", role: .destructive) {
-                                    Task { await library.deleteGroup(group) }
-                                }
-                            } label: { Image(systemName: "ellipsis.circle") }
+                                } label: { Label("重命名", systemImage: "pencil") }
+                                Button(role: .destructive) {
+                                    pendingDelete = group
+                                } label: { Label("删除分组", systemImage: "trash") }
+                            } label: {
+                                Image(systemName: "ellipsis.circle").frame(width: 30, height: 30)
+                            }
                             .buttonStyle(.borderless)
                             .accessibilityLabel("\(group)分组操作")
                         }
@@ -418,12 +534,18 @@ private struct SourceGroupManagerView: View {
                 } header: {
                     Text("已有分组")
                 } footer: {
-                    Text("点击分组可查看其中的书源。")
-                }
-            }
+                    Text("点眼睛图标隐藏或显示分组：隐藏的分组不出现在书源页分组栏和搜索范围里，书源本身不受影响。")
+                }.readingRowBackground()
+            }.readingThemedListBackground()
+            .listStyle(.insetGrouped)
             .navigationTitle("书源分组")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .task {
+                guard focusesNewGroup else { return }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                newGroupFocused = true
+            }
             .alert("重命名分组", isPresented: Binding(
                 get: { renaming != nil },
                 set: { if !$0 { renaming = nil } }
@@ -435,13 +557,33 @@ private struct SourceGroupManagerView: View {
                     renaming = nil
                 }
             }
+            .alert("删除分组？", isPresented: Binding(
+                get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } }
+            )) {
+                Button("取消", role: .cancel) { pendingDelete = nil }
+                Button("删除", role: .destructive) {
+                    if let group = pendingDelete { Task { await library.deleteGroup(group) } }
+                    pendingDelete = nil
+                }
+            } message: {
+                Text("分组里的书源会变为未分组，书源本身不会删除。")
+            }
         }
+    }
+
+    private func create() {
+        let value = newGroup
+        guard !BookSource.parseGroups(value).isEmpty else { return }
+        newGroup = ""
+        library.createGroup(value)
     }
 }
 
 private struct SourceGroupContentsView: View {
     @EnvironmentObject private var library: SourceLibraryModel
     let group: String
+    @State private var showsPicker = false
 
     private var sources: [BookSource] {
         library.sources.filter { $0.hasGroup(group) }
@@ -451,30 +593,116 @@ private struct SourceGroupContentsView: View {
         List {
             Section {
                 ForEach(sources) { source in
-                    NavigationLink {
-                        SourceDetailView(source: source)
-                    } label: {
-                        SourceRow(source: source) { enabled in
-                            Task { await library.setEnabled(enabled, for: source.id) }
+                    SourceRow(source: source) { enabled in
+                        Task { await library.setEnabled(enabled, for: source.id) }
+                    }
+                    .swipeActions {
+                        Button("移出") {
+                            Task { await library.moveSources([source.id], toGroup: nil) }
                         }
+                        .tint(.orange)
                     }
                 }
                 if sources.isEmpty {
-                    Text("该分组暂无书源")
+                    Text("该分组暂无书源，点右上角「添加书源」把书源移进来。")
                         .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("\(sources.count) 个书源")
-            }
-        }
+            } footer: {
+                if !sources.isEmpty { Text("左滑书源可移出该分组。") }
+            }.readingRowBackground()
+        }.readingThemedListBackground()
         .listStyle(.insetGrouped)
         .readingScrollContentBackgroundHidden()
         .background(ReadingTheme.groupedCanvas)
         .navigationTitle(group)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button { showsPicker = true } label: {
+                    Label("添加书源", systemImage: "plus")
+                }
+                .accessibilityIdentifier("sourceGroups.addSources")
+            }
+        }
+        .sheet(isPresented: $showsPicker) {
+            SourceGroupMemberPicker(group: group).environmentObject(library)
+        }
     }
 }
 
+/// 多选书源放进某个分组。
+private struct SourceGroupMemberPicker: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var library: SourceLibraryModel
+    let group: String
+    @State private var selected = Set<String>()
+    @State private var query = ""
+
+    private var candidates: [BookSource] {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return library.sources.filter { source in
+            !source.hasGroup(group) && (text.isEmpty
+                || source.bookSourceName.localizedCaseInsensitiveContains(text)
+                || source.bookSourceUrl.localizedCaseInsensitiveContains(text))
+        }
+    }
+
+    var body: some View {
+        ReadingNavigationStack {
+            List {
+                Section {
+                    ForEach(candidates) { source in
+                        Button {
+                            if !selected.insert(source.id).inserted { selected.remove(source.id) }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: selected.contains(source.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(AppFontStyle.title3.themed)
+                                    .foregroundStyle(selected.contains(source.id) ? ReadingTheme.accent : .secondary)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(source.bookSourceName).foregroundStyle(.primary)
+                                    Text(source.groups.first.map { "当前分组：\($0)" } ?? "未分组")
+                                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if candidates.isEmpty {
+                        Text("没有可添加的书源").foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("选择要移到「\(group)」的书源")
+                } footer: {
+                    Text("每个书源只属于一个分组，已在其他分组的书源会移到这里。")
+                }.readingRowBackground()
+            }.readingThemedListBackground()
+            .listStyle(.insetGrouped)
+            .readingInlineSearch(text: $query, prompt: "筛选书源")
+            .navigationTitle("添加书源")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("添加 \(selected.count)") {
+                        let ids = selected
+                        Task {
+                            await library.moveSources(ids, toGroup: group)
+                            dismiss()
+                        }
+                    }
+                    .disabled(selected.isEmpty)
+                }
+            }
+        }
+    }
+}
+
+/// 把选中的书源移到一个分组（或新建分组再移入）。
 private struct SourceBatchGroupView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var library: SourceLibraryModel
@@ -484,35 +712,57 @@ private struct SourceBatchGroupView: View {
     var body: some View {
         ReadingNavigationStack {
             List {
-                Section("已选择 \(sourceIDs.count) 个书源") {
+                Section {
                     HStack {
-                        TextField("输入新分组", text: $customGroup)
-                        Button("加入") {
-                            let value = customGroup
-                            customGroup = ""
-                            Task { await library.addGroup(value, to: sourceIDs) }
-                        }
-                        .disabled(BookSource.parseGroups(customGroup).isEmpty)
+                        TextField("新分组名称", text: $customGroup)
+                            .submitLabel(.done)
+                            .onSubmit(moveToNewGroup)
+                        Button("新建并移入", action: moveToNewGroup)
+                            .disabled(BookSource.parseGroups(customGroup).isEmpty)
                     }
-                }
-                Section("加入现有分组") {
+                } header: {
+                    Text("已选择 \(sourceIDs.count) 个书源")
+                }.readingRowBackground()
+                Section("移到现有分组") {
+                    if library.groups.isEmpty {
+                        Text("还没有分组，可在上方新建。").foregroundStyle(.secondary)
+                    }
                     ForEach(library.groups, id: \.self) { group in
-                        Button { Task { await library.addGroup(group, to: sourceIDs) } } label: {
-                            Label(group, systemImage: "folder.badge.plus")
+                        Button {
+                            move(to: group)
+                        } label: {
+                            HStack {
+                                Label(group, systemImage: "folder")
+                                Spacer()
+                                Text("\(library.sourceCount(inGroup: group))")
+                                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+                            }
                         }
                     }
-                }
-                Section("从分组移除") {
-                    ForEach(library.groups, id: \.self) { group in
-                        Button(role: .destructive) {
-                            Task { await library.removeGroup(group, from: sourceIDs) }
-                        } label: { Label(group, systemImage: "folder.badge.minus") }
+                }.readingRowBackground()
+                Section {
+                    Button(role: .destructive) { move(to: nil) } label: {
+                        Label("移出分组（设为未分组）", systemImage: "folder.badge.minus")
                     }
-                }
-            }
-            .navigationTitle("批量归组")
+                }.readingRowBackground()
+            }.readingThemedListBackground()
+            .listStyle(.insetGrouped)
+            .navigationTitle("移到分组")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
+        }
+    }
+
+    private func moveToNewGroup() {
+        guard !BookSource.parseGroups(customGroup).isEmpty else { return }
+        move(to: customGroup)
+    }
+
+    private func move(to group: String?) {
+        let ids = sourceIDs
+        Task {
+            await library.moveSources(ids, toGroup: group)
+            dismiss()
         }
     }
 }
@@ -531,14 +781,14 @@ private struct SourceDetailView: View {
                 ReadingLabeledContent("地址", value: current.bookSourceUrl)
                 ReadingLabeledContent("分组", value: current.bookSourceGroup ?? "未分组")
                 ReadingLabeledContent("类型", value: String(current.bookSourceType))
-            }
+            }.readingRowBackground()
             Section("能力") {
                 CapabilityRow(title: "搜索", available: current.searchUrl?.isEmpty == false)
                 CapabilityRow(title: "发现", available: current.exploreUrl?.isEmpty == false)
                 CapabilityRow(title: "详情", available: current.ruleBookInfo != nil)
                 CapabilityRow(title: "目录", available: current.ruleToc != nil)
                 CapabilityRow(title: "正文", available: current.ruleContent != nil)
-            }
+            }.readingRowBackground()
             Section("状态") {
                 Toggle("启用书源", isOn: Binding(
                     get: { library.sources.first(where: { $0.id == current.id })?.enabled ?? current.enabled },
@@ -548,7 +798,7 @@ private struct SourceDetailView: View {
                     get: { library.sources.first(where: { $0.id == current.id })?.enabledExplore ?? current.enabledExplore },
                     set: { value in Task { await library.setExploreEnabled(value, for: current.id) } }
                 ))
-            }
+            }.readingRowBackground()
             Section("兼容检查") {
                 NavigationLink {
                     SearchView(fixedSource: current)
@@ -561,8 +811,8 @@ private struct SourceDetailView: View {
                     Label("运行端到端调试", systemImage: "stethoscope")
                 }
                 Text("使用你输入的关键词，逐步验证搜索、详情、目录和正文规则。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
+                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+            }.readingRowBackground()
             if current.loginUrl?.isEmpty == false {
                 Section("账户") {
                     NavigationLink {
@@ -571,13 +821,13 @@ private struct SourceDetailView: View {
                         Label("登录此书源", systemImage: "person.badge.key.fill")
                     }
                     Text("登录 Cookie 与阅读请求共享；若书源提供检测脚本，会在页面载入后自动验证。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
+                        .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+                }.readingRowBackground()
             }
             if let comment = current.bookSourceComment, !comment.isEmpty {
-                Section("说明") { Text(comment) }
+                Section("说明") { Text(comment) }.readingRowBackground()
             }
-        }
+        }.readingThemedListBackground()
         .navigationTitle(current.bookSourceName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -637,21 +887,22 @@ struct SourceImportReviewView: View {
                     .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
 
                     Label("仅有效书源可被选择和导入", systemImage: "checkmark.shield.fill")
-                        .font(.footnote)
+                        .font(AppFontStyle.footnote.themed)
                         .foregroundStyle(.secondary)
-                }
+                }.readingRowBackground()
 
                 if !pending.items.isEmpty {
-                    Section("导入设置") {
-                        HStack {
-                            TextField("自定义分组", text: $customGroup)
-                            Toggle("追加", isOn: $addCustomGroup).labelsHidden()
-                        }
+                    Section {
+                        TextField("放入分组（留空则用书源自带分组的第一个词）", text: $customGroup)
                         Toggle("保留原名称", isOn: $keepOriginalName)
                         Toggle("保留原分组", isOn: $keepOriginalGroup)
                         Toggle("保留原启用状态", isOn: $keepOriginalEnabled)
                         Toggle("显示书源备注", isOn: $showComments)
-                    }
+                    } header: {
+                        Text("导入设置")
+                    } footer: {
+                        Text("书源自带多个分组标签时（如「书旗,小说,APP」），只建立第一个分组「书旗」。")
+                    }.readingRowBackground()
                 }
 
                 Section("有效书源（\(pending.validCount)）") {
@@ -666,19 +917,19 @@ struct SourceImportReviewView: View {
                                     Text(item.source.bookSourceName).foregroundStyle(.primary)
                                     HStack {
                                         Text(item.state)
-                                            .font(.caption.bold())
+                                            .font(AppFontStyle.caption.bold().themed)
                                             .foregroundStyle(item.state == "新增" ? .green : item.state == "更新" ? .orange : .secondary)
                                         Text(item.source.bookSourceUrl)
-                                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                            .font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
                                     }
                                     if showComments, let comment = item.source.bookSourceComment, !comment.isEmpty {
-                                        Text(comment).font(.caption).foregroundStyle(.secondary)
+                                        Text(comment).font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                                     }
                                 }
                             }
                         }
                     }
-                }
+                }.readingRowBackground()
 
                 if !pending.invalidItems.isEmpty {
                     Section("失效书源（\(pending.invalidCount)）") {
@@ -691,19 +942,19 @@ struct SourceImportReviewView: View {
                                         .foregroundStyle(.primary)
                                     if !item.source.bookSourceUrl.isEmpty {
                                         Text(item.source.bookSourceUrl)
-                                            .font(.caption)
+                                            .font(AppFontStyle.caption.themed)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(1)
                                     }
                                     Text(item.issues.map(\.message).joined(separator: "；"))
-                                        .font(.caption)
+                                        .font(AppFontStyle.caption.themed)
                                         .foregroundStyle(.red)
                                 }
                             }
                         }
-                    }
+                    }.readingRowBackground()
                 }
-            }
+            }.readingThemedListBackground()
             .navigationTitle("书源导入预检")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -766,10 +1017,10 @@ struct SourceImportReviewView: View {
     ) -> some View {
         VStack(spacing: 5) {
             Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
+                .font(AppFontStyle.caption.weight(.semibold).themed)
                 .foregroundStyle(color)
             Text("\(count)")
-                .font(.title2.bold())
+                .font(AppFontStyle.title2.bold().themed)
                 .foregroundStyle(.primary)
         }
         .frame(maxWidth: .infinity)

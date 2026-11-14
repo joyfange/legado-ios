@@ -27,7 +27,7 @@ struct OtherSettingsView: View {
                 }
                 Toggle("启动时更新书架", isOn: $autoRefresh)
                 Toggle("自动更新仅检查读过的书", isOn: $onlyUpdateRead).disabled(!autoRefresh)
-            }
+            }.readingRowBackground()
             Section("网络与存储") {
                 NavigationLink {
                     NetworkSettingsView()
@@ -37,7 +37,7 @@ struct OtherSettingsView: View {
                 } label: { Label("章节缓存管理", systemImage: "internaldrive") }
                 Button("清理网页缓存", systemImage: "globe") { maintenance = .webCache }
                 Button("整理数据库", systemImage: "externaldrive.badge.checkmark") { maintenance = .database }
-            }
+            }.readingRowBackground()
             Section {
                 Toggle("记录运行日志", isOn: Binding(get: { settings.recordLog }, set: { enabled in
                     var value = ApplicationSettingsStore.shared.settings
@@ -50,8 +50,8 @@ struct OtherSettingsView: View {
                 } label: { Label("日志与诊断", systemImage: "doc.text.magnifyingglass") }
             } header: { Text("诊断") } footer: {
                 Text("日志仅保存在本机，最多保留 500 条。网络日志不记录请求正文与 Header，URL 查询参数和常见凭据会隐藏。")
-            }
-        }
+            }.readingRowBackground()
+        }.readingThemedListBackground()
         .navigationTitle("其他设置")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(isWorking)
@@ -108,14 +108,14 @@ struct NetworkSettingsView: View {
                     .accessibilityLabel("User-Agent")
             } header: { Text("默认 User-Agent") } footer: {
                 Text("书源或 RSS 单独设置的 UA 优先于此项。")
-            }
+            }.readingRowBackground()
             Section {
                 TextField("例如 http://127.0.0.1:7890", text: $settings.proxy)
                     .keyboardType(.URL).textInputAutocapitalization(.never).disableAutocorrection(true)
                     .accessibilityLabel("全局代理")
             } header: { Text("全局代理") } footer: {
                 Text("支持 HTTP、HTTPS 和 SOCKS5 地址，不含账号密码。书源代理优先于全局代理；使用代理时由代理解析域名。")
-            }
+            }.readingRowBackground()
             Section {
                 TextEditor(text: $settings.hosts)
                     .font(.system(.footnote, design: .monospaced)).frame(minHeight: 130)
@@ -123,7 +123,7 @@ struct NetworkSettingsView: View {
                     .accessibilityLabel("Hosts")
             } header: { Text("自定义 Hosts") } footer: {
                 Text("每行填写 IP地址 域名，例如 192.168.1.2 books.example.com。支持 IPv4、IPv6 和 # 注释。适用于应用内 HTTP/HTTPS 请求；系统网页、登录网页和系统媒体播放器使用系统网络设置。")
-            }
+            }.readingRowBackground()
             Section("连接") {
                 Picker("请求超时", selection: $settings.timeoutSeconds) {
                     Text("跟随书源").tag(0)
@@ -132,8 +132,8 @@ struct NetworkSettingsView: View {
                 Stepper("搜索并发数：\(settings.concurrentSources)", value: $settings.concurrentSources, in: 1...64)
                 Toggle("兼容无效证书的书源", isOn: $settings.ignoreCertificateErrors)
                 Text("证书兼容开启时允许自签名或过期证书；关闭后由系统验证 HTTPS 证书。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
+                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+            }.readingRowBackground()
             Section("章节缓存") {
                 Picker("容量上限", selection: $settings.chapterCacheMB) {
                     ForEach([16, 32, 64, 128, 256, 512, 1024, 2048, 4096], id: \.self) {
@@ -142,16 +142,16 @@ struct NetworkSettingsView: View {
                 }
                 Stepper(settings.prefetchChapters == 0 ? "关闭章节预加载" : "预加载 \(settings.prefetchChapters) 章", value: $settings.prefetchChapters, in: 0...20)
                 Text("超出上限时清理最久未读取的章节；容量调整在保存时生效。")
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
+                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+            }.readingRowBackground()
             Section {
                 Button("恢复本页默认值") {
                     let recordLog = settings.recordLog
                     settings = .init()
                     settings.recordLog = recordLog
                 }
-            }
-        }
+            }.readingRowBackground()
+        }.readingThemedListBackground()
         .navigationTitle("网络与缓存")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

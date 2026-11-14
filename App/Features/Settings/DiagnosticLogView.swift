@@ -27,31 +27,31 @@ struct DiagnosticLogView: View {
                     Text("错误").tag("error")
                 }.pickerStyle(.segmented)
                 Text("\(entries.count) 条日志 · 下拉刷新")
-                    .font(.footnote).foregroundStyle(.secondary)
+                    .font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
             } footer: {
                 Text("在“其他设置”开启记录后，会保存网络请求、JS 输出和运行错误。崩溃诊断由 iOS 延迟提供，可搜索“系统诊断”查看。")
-            }
+            }.readingRowBackground()
             if filtered.isEmpty {
                 ReadingUnavailableView(query.isEmpty ? "暂无日志" : "没有匹配的日志", systemImage: "doc.text.magnifyingglass")
             } else {
                 ForEach(filtered) { entry in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
-                            Text(entry.category).font(.caption.weight(.semibold))
-                            Text(levelTitle(entry.level)).font(.caption)
+                            Text(entry.category).font(AppFontStyle.caption.weight(.semibold).themed)
+                            Text(levelTitle(entry.level)).font(AppFontStyle.caption.themed)
                                 .foregroundStyle(entry.level == .error ? .red : .secondary)
                             Spacer()
                             Text(entry.date, format: .dateTime.month().day().hour().minute().second())
-                                .font(.caption2).foregroundStyle(.secondary)
+                                .font(AppFontStyle.caption2.themed).foregroundStyle(.secondary)
                         }
                         Text(entry.message).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                     }.padding(.vertical, 3)
                 }
             }
-        }
+        }.readingThemedListBackground()
         .navigationTitle("日志与诊断")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, prompt: "搜索内容或分类")
+        .readingInlineSearch(text: $query, prompt: "搜索内容或分类")
         .task { reload() }
         .refreshable { reload() }
         .toolbar {

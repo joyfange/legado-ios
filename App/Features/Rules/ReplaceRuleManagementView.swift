@@ -30,7 +30,7 @@ struct ReplaceRuleManagementView: View {
                         Text("全部").tag(String?.none)
                         ForEach(Array(Set(library.rules.compactMap(\.group))).sorted(), id: \.self) { Text($0).tag(String?.some($0)) }
                     }
-                }
+                }.readingRowBackground()
                 Section {
                     ForEach(filtered) { rule in
                         HStack(spacing: 12) {
@@ -41,7 +41,7 @@ struct ReplaceRuleManagementView: View {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(rule.name.isEmpty ? rule.pattern : rule.name).foregroundStyle(.primary).lineLimit(1)
                                         Text(rule.group ?? (rule.scopeTitle && rule.scopeContent ? "标题与正文" : rule.scopeTitle ? "标题" : "正文"))
-                                            .font(.caption).foregroundStyle(.secondary)
+                                            .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
                                         Text(rule.pattern).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                                     }
                                     Spacer()
@@ -63,12 +63,12 @@ struct ReplaceRuleManagementView: View {
                     }
                     .onMove { offsets, destination in Task { await library.move(from: offsets, to: destination) } }
                     .moveDisabled(group != nil || !query.isEmpty)
-                } footer: { Text("点击规则编辑，长按可复制或测试。拖动排序决定执行顺序。").font(.footnote) }
+                } footer: { Text("点击规则编辑，长按可复制或测试。拖动排序决定执行顺序。").font(AppFontStyle.footnote.themed) }.readingRowBackground()
             }
-        }
+        }.readingThemedListBackground()
         .listStyle(.insetGrouped)
         .navigationTitle("净化规则")
-        .searchable(text: $query, prompt: "名称、匹配内容或分组")
+        .readingInlineSearch(text: $query, prompt: "名称、匹配内容或分组")
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) { EditButton().disabled(library.rules.isEmpty || group != nil || !query.isEmpty) }
             ToolbarItem(placement: .primaryAction) {
@@ -108,7 +108,7 @@ private struct ReplaceRuleTextImportView: View {
     var body: some View {
         ReadingNavigationStack {
             VStack(alignment: .leading, spacing: 12) {
-                Text("粘贴净化规则 JSON、HTTP(S) 链接或 Legado 净化规则深链。").font(.footnote).foregroundStyle(.secondary)
+                Text("粘贴净化规则 JSON、HTTP(S) 链接或 Legado 净化规则深链。").font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
                 SyntaxCodeEditor(text: $value, language: .json)
             }.padding()
             .navigationTitle("导入净化规则").navigationBarTitleDisplayMode(.inline)
