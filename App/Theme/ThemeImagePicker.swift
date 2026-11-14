@@ -129,7 +129,7 @@ enum ThemeEditorImageKind: String, Identifiable {
     }
     var detail: String {
         switch self {
-        case .cover: return "仅用于没有可用封面的书籍，不替换书籍已有封面。预览显示所选原图，书架会按封面比例裁切。"
+        case .cover: return "仅用于没有可用封面的书籍，不替换书籍已有封面。想让不同的书用不同的图，请用下方「封面图库」：建多个分组、每组导入多张图片，选中的分组会随机分配给无封面的书（优先于这里的单张封面）。"
         case .launch: return "这是应用打开后的启动展示层，并非 iOS 系统启动屏。应用主题后，下次启动显示约 1.2 秒后自动结束，没有跳过按钮。移除图片即可关闭。"
         case .background: return "应用页面使用所选图片，文字区域仍保留可读底色。移除图片后，恢复下方设置的纯色或渐变。阅读纸张不受影响。"
         }
@@ -174,6 +174,28 @@ struct ThemeEditorImageSettings: View {
                 Button(kind.resetLabel, role: .destructive) { assetID = nil }
                     .appFont(.body).frame(minHeight: 44)
                     .accessibilityIdentifier("theme.editor.image.\(kind.rawValue).remove")
+            }
+            if kind == .cover {
+                NavigationLink {
+                    CoverLibraryView()
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: "square.stack.3d.up").font(.system(size: 20))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("封面图库（多分组 · 随机分配）").appFont(.body)
+                            Text(CoverLibraryStore.shared.activeGroup.map { "使用中：\($0.name)" } ?? "未启用")
+                                .appFont(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 16).frame(minHeight: 56)
+                    .modifier(SettingsGlassSurface())
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("theme.editor.cover.library")
             }
             if kind == .launch, image != nil {
                 Button("预览启动展示") { showingLaunchPreview = true }

@@ -314,8 +314,14 @@ struct BookCoverArtwork: View {
         .accessibilityHidden(true)
     }
 
-    @ViewBuilder
     private var placeholder: some View {
+        CoverLibraryFallback(title: title, author: author, width: width, height: height) {
+            themePlaceholder
+        }
+    }
+
+    @ViewBuilder
+    private var themePlaceholder: some View {
         if let custom = AppThemeRuntime.current.customization?.defaultCoverImage,
            let image = ThemeAssetStore.shared.image(for: custom) {
             // 主题「默认封面」：只在书籍没有可用封面时显示。

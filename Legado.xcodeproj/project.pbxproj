@@ -22,6 +22,7 @@
 		7E3A0000000000000000020E /* ThemeHomeGrid.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010E /* ThemeHomeGrid.swift */; };
 		7E3A0000000000000000020F /* ThemeIconTransparency.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000010F /* ThemeIconTransparency.swift */; };
 		7E3A00000000000000000210 /* ThemeImagePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000110 /* ThemeImagePicker.swift */; };
+		7E3A00000000000000000290 /* CoverLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000190 /* CoverLibrary.swift */; };
 		7E3A00000000000000000211 /* ThemeIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000111 /* ThemeIntegration.swift */; };
 		7E3A00000000000000000212 /* ThemePalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000112 /* ThemePalette.swift */; };
 		7E3A00000000000000000213 /* ThemePreviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000113 /* ThemePreviewCard.swift */; };
@@ -174,6 +175,7 @@
 		7E3A0000000000000000010E /* ThemeHomeGrid.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeHomeGrid.swift; sourceTree = "<group>"; };
 		7E3A0000000000000000010F /* ThemeIconTransparency.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeIconTransparency.swift; sourceTree = "<group>"; };
 		7E3A00000000000000000110 /* ThemeImagePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeImagePicker.swift; sourceTree = "<group>"; };
+		7E3A00000000000000000190 /* CoverLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverLibrary.swift; sourceTree = "<group>"; };
 		7E3A00000000000000000111 /* ThemeIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeIntegration.swift; sourceTree = "<group>"; };
 		7E3A00000000000000000112 /* ThemePalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePalette.swift; sourceTree = "<group>"; };
 		7E3A00000000000000000113 /* ThemePreviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePreviewCard.swift; sourceTree = "<group>"; };
@@ -345,6 +347,7 @@
 				7E3A0000000000000000010E /* ThemeHomeGrid.swift */,
 				7E3A0000000000000000010F /* ThemeIconTransparency.swift */,
 				7E3A00000000000000000110 /* ThemeImagePicker.swift */,
+				7E3A00000000000000000190 /* CoverLibrary.swift */,
 				7E3A00000000000000000111 /* ThemeIntegration.swift */,
 				7E3A00000000000000000112 /* ThemePalette.swift */,
 				7E3A00000000000000000113 /* ThemePreviewCard.swift */,
@@ -813,6 +816,7 @@
 				7E3A0000000000000000020E /* ThemeHomeGrid.swift in Sources */,
 				7E3A0000000000000000020F /* ThemeIconTransparency.swift in Sources */,
 				7E3A00000000000000000210 /* ThemeImagePicker.swift in Sources */,
+				7E3A00000000000000000290 /* CoverLibrary.swift in Sources */,
 				7E3A00000000000000000211 /* ThemeIntegration.swift in Sources */,
 				7E3A00000000000000000212 /* ThemePalette.swift in Sources */,
 				7E3A00000000000000000213 /* ThemePreviewCard.swift in Sources */,

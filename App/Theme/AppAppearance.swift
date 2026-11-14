@@ -244,6 +244,13 @@ struct AppAppearanceSettingsView: View {
             Text("界面与外观").appFont(.title3.weight(.semibold))
                 .padding(.bottom, 10).accessibilityAddTraits(.isHeader)
             glassModeRow
+            NavigationLink {
+                CoverLibraryView()
+            } label: {
+                settingLabel(title: "封面图库", symbol: "square.stack.3d.up",
+                             value: CoverLibraryStore.shared.activeGroup?.name ?? "未启用", chevron: true)
+            }
+            .buttonStyle(.plain).accessibilityIdentifier("appearance.coverLibrary")
             valueRow(title: "配色方案") {
                 Text(browsedTheme.name).appFont(.body)
                     .accessibilityIdentifier("theme.gallery.name")
@@ -277,10 +284,10 @@ struct AppAppearanceSettingsView: View {
                 .frame(width: 28)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text("玻璃模式").appFont(.body)
+                Text("玻璃模式（全局总开关）").appFont(.body)
                 Text(glassEnabled
-                     ? "卡片、按钮与浮层使用毛玻璃模糊"
-                     : "已关闭：改用实色背景，滚动更省电")
+                     ? "开启：允许毛玻璃模糊。卡片具体用透明/玻璃/不透明，由主题的「界面效果」决定；按钮、搜索框、浮层始终是玻璃"
+                     : "已关闭：全部模糊效果（卡片、按钮、搜索框、浮层）改成实色，滚动更省电，所有主题都生效")
                     .appFont(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

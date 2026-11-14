@@ -256,6 +256,7 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
     let palette: ResolvedAppPalette
     let reduceTransparency: Bool
     @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
+    @Environment(\.colorScheme) private var scheme
 
     init(shape: S, isCard: Bool, palette: ResolvedAppPalette, reduceTransparency: Bool) {
         self.shape = shape
@@ -290,16 +291,34 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                     case .frosted:
                         AppGlassSurface(shape: shape, tint: palette.surface,
                                         tintOpacity: palette.frostedSurfaceOpacity)
-                        if palette.glowIntensity > 0, glassEnabled {
-                            shape.fill(RadialGradient(
-                                colors: [palette.accent.opacity(0.12 * palette.glowIntensity), .clear],
-                                center: .center, startRadius: 0, endRadius: 160))
+                        if glassEnabled {
+                            // 玻璃的「受光面」：左上角一层很淡的白色高光，让卡片有厚度感。
+                            shape.fill(LinearGradient(
+                                colors: [Color.white.opacity(scheme == .dark ? 0.07 : 0.22), .clear],
+                                startPoint: .topLeading, endPoint: .center))
+                            if palette.glowIntensity > 0 {
+                                shape.fill(RadialGradient(
+                                    colors: [palette.accent.opacity(0.12 * palette.glowIntensity), .clear],
+                                    center: .topLeading, startRadius: 0, endRadius: 220))
+                            }
                         }
                     case .opaque:
                         shape.fill(palette.surface)
                     }
                 }
-                if !isCard || palette.cardBorder { shape.strokeBorder(palette.border, lineWidth: 0.5) }
+                if !isCard || palette.cardBorder {
+                    if glassEnabled, !reduceTransparency,
+                       (isCard ? (palette.interfaceEffect ?? .frosted) : .frosted) == .frosted {
+                        // 玻璃边缘：上亮下暗的渐变描边，比单色细线更像真实玻璃。
+                        shape.strokeBorder(LinearGradient(
+                            colors: [Color.white.opacity(scheme == .dark ? 0.28 : 0.75),
+                                     palette.border.opacity(0.5),
+                                     Color.white.opacity(scheme == .dark ? 0.08 : 0.3)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.8)
+                    } else {
+                        shape.strokeBorder(palette.border, lineWidth: 0.5)
+                    }
+                }
             }
         }
         .allowsHitTesting(false)

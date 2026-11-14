@@ -290,12 +290,44 @@ struct ReadingCanvasBackground: View {
     @Environment(\.appTheme) private var theme
     var grouped = false
     var body: some View {
-        if theme.backgroundStyle == .gradient || theme.customization?.pageBackgroundImage != nil {
-            AppThemeCanvas()
-        } else if grouped {
-            ReadingTheme.groupedCanvas
-        } else {
-            ReadingTheme.canvas
+        ZStack {
+            if theme.backgroundStyle == .gradient || theme.customization?.pageBackgroundImage != nil {
+                AppThemeCanvas()
+            } else if grouped {
+                ReadingTheme.groupedCanvas
+            } else {
+                ReadingTheme.canvas
+            }
+            ThemeAmbientGlow()
+        }
+    }
+}
+
+/// 玻璃效果的「背后有东西」：自定义主题选了玻璃时，在页面底层铺两团很淡的主题色光斑，
+/// 毛玻璃卡片滑过时才看得出模糊和通透感（纯色底上的毛玻璃只是一块灰）。
+/// 只用径向渐变，不用 blur，滚动时没有额外开销。
+struct ThemeAmbientGlow: View {
+    @ThemePalette private var palette
+    @Environment(\.appTheme) private var theme
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
+
+    var body: some View {
+        if let custom = theme.customization, custom.effect == .frosted, glassEnabled, !reduceTransparency,
+           custom.pageBackgroundImage == nil, palette.glowIntensity > 0 {
+            GeometryReader { geometry in
+                let size = max(geometry.size.width, geometry.size.height)
+                let strength = (scheme == .dark ? 0.30 : 0.22) * palette.glowIntensity
+                ZStack {
+                    RadialGradient(colors: [palette.accent.opacity(strength), palette.accent.opacity(0)],
+                                   center: UnitPoint(x: 0.05, y: 0.08), startRadius: 0, endRadius: size * 0.55)
+                    RadialGradient(colors: [palette.highlight.opacity(strength * 1.6), palette.highlight.opacity(0)],
+                                   center: UnitPoint(x: 0.95, y: 0.62), startRadius: 0, endRadius: size * 0.5)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 }
@@ -304,6 +336,7 @@ struct ReadingCanvasBackground: View {
 /// 透明：直接透出页面背景；玻璃：毛玻璃 + 主题卡片色；不透明或关闭玻璃模式：主题卡片实色。
 struct ThemeListRowBackground: View {
     @ThemePalette private var palette
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
 
@@ -314,7 +347,8 @@ struct ThemeListRowBackground: View {
             } else if reduceTransparency {
                 palette.surface
             } else {
-                switch palette.interfaceEffect ?? .frosted {
+                // 未自定义的主题（系统原样）列表保持实色，和 iOS 原生设置页一致。
+                switch palette.interfaceEffect ?? .opaque {
                 case .transparent:
                     ZStack {
                         Color.clear
@@ -324,9 +358,13 @@ struct ThemeListRowBackground: View {
                     }
                 case .frosted:
                     if glassEnabled {
+                        // 和 bookon 的玻璃一致：真实模糊 + 很淡的底色 + 一层受光高光，
+                        // 不再用 70% 以上的实色盖住模糊（那样看起来只是灰色块）。
                         ZStack {
                             Rectangle().fill(.ultraThinMaterial)
-                            palette.surface.opacity(0.35 + 0.45 * palette.surfaceOpacity)
+                            palette.surface.opacity(0.10 + 0.25 * palette.surfaceOpacity)
+                            LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.05 : 0.16), .clear],
+                                           startPoint: .top, endPoint: .bottom)
                         }
                     } else {
                         palette.surface
