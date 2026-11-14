@@ -47,7 +47,33 @@ final class ReaderViewModel: ObservableObject {
     @Published private(set) var isLoadingScrollBehind = false
 
     @Published private(set) var book: Book
-    private(set) var chapters: [BookChapter]
+    private(set) var chapters: [BookChapter] {
+        didSet { rebuildReadableOrdinals() }
+    }
+    /// For each chapter index, how many readable (non-volume) chapters come
+    /// at or before it. Cached so progress math never scans the whole list.
+    private(set) var readableOrdinals: [Int] = []
+    private(set) var readableChapterCount = 0
+
+    /// 1-based readable chapter number of `index` (volumes share the number of
+    /// the chapter before them).
+    func readableNumber(at index: Int) -> Int {
+        guard !readableOrdinals.isEmpty else { return 0 }
+        let clamped = min(max(index, 0), readableOrdinals.count - 1)
+        return readableOrdinals[clamped]
+    }
+
+    private func rebuildReadableOrdinals() {
+        var ordinals: [Int] = []
+        ordinals.reserveCapacity(chapters.count)
+        var count = 0
+        for chapter in chapters {
+            if !chapter.isVolume { count += 1 }
+            ordinals.append(count)
+        }
+        readableOrdinals = ordinals
+        readableChapterCount = count
+    }
     private var source: BookSource?
     private let localService: LocalBookService
     private let sanitizer = ContentSanitizer()
@@ -198,6 +224,7 @@ final class ReaderViewModel: ObservableObject {
         contentCoordinator = .init(loader: service, cache: cache)
         requestedPosition = resolvedIndex == book.durChapterIndex ? max(book.durChapterPos, 0) : 0
         title = chapters.indices.contains(resolvedIndex) ? chapters[resolvedIndex].title : book.name
+        rebuildReadableOrdinals()
     }
 
     convenience init(demoBook book: Book, chapters: [BookChapter], initialIndex: Int, content: String) {
@@ -224,6 +251,7 @@ final class ReaderViewModel: ObservableObject {
         contentCoordinator = .init(cache: cache)
         requestedPosition = resolvedIndex == book.durChapterIndex ? max(book.durChapterPos, 0) : 0
         title = chapters.indices.contains(resolvedIndex) ? chapters[resolvedIndex].title : book.name
+        rebuildReadableOrdinals()
     }
 
     var currentChapter: BookChapter? { chapters.indices.contains(currentIndex) ? chapters[currentIndex] : nil }

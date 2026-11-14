@@ -46,7 +46,7 @@ public struct ReplaceRuleImporter: Sendable {
 
     public func merge(_ incoming: [ReplaceRule], into existing: [ReplaceRule]) -> [ReplaceRule] {
         var result = existing
-        var indexes = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($1.id, $0) })
+        var indexes = Dictionary(result.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         for rule in incoming {
             if let index = indexes[rule.id] {
                 result[index] = rule

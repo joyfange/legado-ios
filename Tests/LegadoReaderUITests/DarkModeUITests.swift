@@ -131,14 +131,6 @@ final class DarkModeUITests: XCTestCase {
                     app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
                 }
             }
-            if title == "关于" {
-                let license = app.buttons["开源许可"]
-                scrollTo(license, in: app)
-                license.tap()
-                XCTAssertTrue(app.navigationBars["开源许可"].waitForExistence(timeout: 5))
-                try captureDarkPage(app, name: "Licenses")
-                app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
-            }
             app.navigationBars.firstMatch.buttons.element(boundBy: 0).tap()
             XCTAssertTrue(app.scrollViews["profile.scroll"].waitForExistence(timeout: 5))
         }

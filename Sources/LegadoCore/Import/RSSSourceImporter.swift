@@ -50,7 +50,7 @@ public struct RSSSourceImporter: Sendable {
         addGroup: String? = nil
     ) throws -> [RssSource] {
         var result = existing
-        var indexes = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($0.element.sourceUrl, $0.offset) })
+        var indexes = Dictionary(result.enumerated().map { ($0.element.sourceUrl, $0.offset) }, uniquingKeysWith: { first, _ in first })
         for original in incoming where !original.sourceUrl.isEmpty {
             var source = original
             if let addGroup, !addGroup.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { source.addGroups(addGroup) }
@@ -69,7 +69,7 @@ public struct RSSSourceImporter: Sendable {
     }
 
     public func defaultSelection(incoming: [RssSource], existing: [RssSource]) -> [Bool] {
-        let current = Dictionary(uniqueKeysWithValues: existing.map { ($0.sourceUrl, $0.lastUpdateTime) })
+        let current = Dictionary(existing.map { ($0.sourceUrl, $0.lastUpdateTime) }, uniquingKeysWith: { first, _ in first })
         return incoming.map { source in
             guard let oldTime = current[source.sourceUrl] else { return true }
             return oldTime < source.lastUpdateTime

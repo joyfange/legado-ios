@@ -137,7 +137,7 @@ public struct BookSourceImporter: Sendable {
         }
 
         var merged = existing
-        var index = Dictionary(uniqueKeysWithValues: merged.enumerated().map { ($1.id, $0) })
+        var index = Dictionary(merged.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
         var inserted = 0
         var replaced = 0
         var skipped = 0

@@ -219,7 +219,7 @@ public actor SQLiteSearchKeywordRepository: SearchKeywordRepository {
 public actor InMemorySearchKeywordRepository: SearchKeywordRepository {
     private var values: [String: SearchKeyword]
     public init(values: [SearchKeyword] = []) {
-        self.values = Dictionary(uniqueKeysWithValues: values.map { ($0.word, $0) })
+        self.values = Dictionary(values.map { ($0.word, $0) }, uniquingKeysWith: { first, _ in first })
     }
     public func load(order: SearchKeywordOrder) -> [SearchKeyword] {
         values.values.sorted {
@@ -348,7 +348,7 @@ public actor SQLiteSearchBookRepository: SearchBookRepository {
         key: String?
     ) async throws -> [SearchBook] {
         let sources = try await database.loadBookSources()
-        let sourceMap = Dictionary(uniqueKeysWithValues: sources.map { ($0.bookSourceUrl, $0) })
+        let sourceMap = Dictionary(sources.map { ($0.bookSourceUrl, $0) }, uniquingKeysWith: { first, _ in first })
         let books = try await database.loadSearchBooks()
         return books.compactMap { book in
             guard book.name == name,
@@ -366,7 +366,7 @@ public actor SQLiteSearchBookRepository: SearchBookRepository {
 
     public func enabledWithCover(name: String, author: String) async throws -> [SearchBook] {
         let sources = try await database.loadBookSources()
-        let sourceMap = Dictionary(uniqueKeysWithValues: sources.map { ($0.bookSourceUrl, $0) })
+        let sourceMap = Dictionary(sources.map { ($0.bookSourceUrl, $0) }, uniquingKeysWith: { first, _ in first })
         let books = try await database.loadSearchBooks()
         return books.compactMap { book in
             guard book.name == name, book.author == author,
@@ -528,7 +528,7 @@ public final class PersistentRuntimeCache: @unchecked Sendable {
 public actor InMemorySearchBookRepository: SearchBookRepository {
     private var values: [String: SearchBook] = [:]
     public init(values: [SearchBook] = []) {
-        self.values = Dictionary(uniqueKeysWithValues: values.map { ($0.bookURL, $0) })
+        self.values = Dictionary(values.map { ($0.bookURL, $0) }, uniquingKeysWith: { first, _ in first })
     }
     public func get(bookURL: String) -> SearchBook? { values[bookURL] }
     public func cachedMatches(keyword: String) async throws -> [SearchBook] {

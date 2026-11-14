@@ -81,7 +81,7 @@ public actor BookSearchHistory {
             if ($0.value.success != nil) != ($1.value.success != nil) { return $0.value.success != nil }
             return ($0.value.success ?? $0.value.failure ?? .distantPast) > ($1.value.success ?? $1.value.failure ?? .distantPast)
         }.prefix(512)
-        entries = Dictionary(uniqueKeysWithValues: retained.map { ($0.key, $0.value) })
+        entries = Dictionary(retained.map { ($0.key, $0.value) }, uniquingKeysWith: { first, _ in first })
         if let data = try? JSONEncoder().encode(entries) { defaults.set(data, forKey: Self.key) }
     }
 }

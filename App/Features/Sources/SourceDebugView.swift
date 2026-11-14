@@ -165,7 +165,7 @@ private final class SourceBatchTestModel: ObservableObject {
         stop()
         let keyword = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !keyword.isEmpty, !sources.isEmpty else { return }
-        statuses = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, .waiting) })
+        statuses = Dictionary(sources.map { ($0.id, Status.waiting) }, uniquingKeysWith: { first, _ in first })
         selectedFailedIDs = []
         completedCount = 0
         totalCount = sources.count

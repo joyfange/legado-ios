@@ -27,7 +27,6 @@ struct ReaderView: View {
     @State private var followsSystemBrightness = true
     @State private var readerBrightness = Double(UIScreen.main.brightness)
     @State private var brightnessBeforeReading = Double(UIScreen.main.brightness)
-    @State private var tocSearch = ""
     @State private var tocDescending = false
     @State private var showsContentSearch = false
     @State private var showsReplaceRules = false
@@ -796,8 +795,8 @@ struct ReaderView: View {
         let time = date.formatted(.dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
         let batteryValue = UIDevice.current.batteryLevel
         let battery = batteryValue >= 0 ? Int((batteryValue * 100).rounded()) : 100
-        let chapterCount = max(model.chapters.filter { !$0.isVolume }.count, 1)
-        let readableIndex = model.chapters.prefix(model.currentIndex + 1).filter { !$0.isVolume }.count
+        let chapterCount = max(model.readableChapterCount, 1)
+        let readableIndex = model.readableNumber(at: model.currentIndex)
         let chapterFraction = chapterPageFraction
         let progress = min(max((Double(max(readableIndex - 1, 0)) + chapterFraction) / Double(chapterCount), 0), 1)
         let progressText = String(format: "%.1f%%", progress * 100)
@@ -830,8 +829,8 @@ struct ReaderView: View {
     }
 
     private var chapterProgress: Double {
-        let chapter = max(model.chapters.filter { !$0.isVolume }.count, 1)
-        let readable = model.chapters.prefix(model.currentIndex + 1).filter { !$0.isVolume }.count
+        let chapter = max(model.readableChapterCount, 1)
+        let readable = model.readableNumber(at: model.currentIndex)
         let pagePart = chapterPageFraction
         return min(max((Double(max(readable - 1, 0)) + pagePart) / Double(chapter), 0), 1)
     }
@@ -967,8 +966,8 @@ struct ReaderView: View {
                 .opacity(model.canGoPrevious ? 1 : 0.25)
             VStack(spacing: 8) {
                 HStack {
-                    let chapterCount = model.chapters.filter { !$0.isVolume }.count
-                    let chapterNumber = model.chapters.prefix(model.currentIndex + 1).filter { !$0.isVolume }.count
+                    let chapterCount = model.readableChapterCount
+                    let chapterNumber = model.readableNumber(at: model.currentIndex)
                     if #available(iOS 16.0, *) {
                         ViewThatFits(in: .horizontal) {
                             Text("第 \(chapterNumber) 章 / 共 \(chapterCount) 章").fixedSize()
@@ -1920,127 +1919,24 @@ struct ReaderView: View {
 
 
     private var tableOfContents: some View {
-        ReadingNavigationStack {
-            ScrollViewReader { tocProxy in
-            List {
-                Section {
-                    ForEach(tocChapters) { chapter in
-                        if chapter.isVolume {
-                            HStack(spacing: 10) {
-                                Image(systemName: "books.vertical.fill")
-                                Text(chapter.title).font(.headline)
-                                Spacer()
-                            }
-                            .foregroundStyle(ReadingTheme.accent)
-                            .padding(.vertical, 4)
-                            .listRowBackground(ReadingTheme.accent.opacity(0.07))
-                        } else {
-                            let isCurrent = chapter.id == model.currentChapter?.id
-                            Button {
-                                guard let index = model.chapters.firstIndex(where: { $0.id == chapter.id }) else { return }
-                                stopSpeechIfNeeded()
-                                saveProgress(immediate: true)
-                                readerJumpPosition = nil
-                                model.select(index: index)
-                                readerPosition = 0
-                                showsTableOfContents = false
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Text(tocChapterNumber(chapter))
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundStyle(isCurrent ? ReadingTheme.accent : .secondary)
-                                        .frame(width: 30, alignment: .trailing)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(chapter.title)
-                                            .foregroundStyle(.primary)
-                                            .lineLimit(2)
-                                        if isCurrent {
-                                            HStack(spacing: 6) {
-                                                Text("正在阅读")
-                                                ProgressView(value: chapterProgress)
-                                                    .tint(ReadingTheme.accent)
-                                            }
-                                            .font(.caption2)
-                                            .foregroundStyle(ReadingTheme.accent)
-                                        }
-                                    }
-                                    Spacer(minLength: 8)
-                                    if isCurrent {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundStyle(ReadingTheme.accent)
-                                    }
-                                }
-                                .padding(.vertical, 4)
-                            }
-                            .buttonStyle(.plain)
-                            .listRowBackground(isCurrent ? ReadingTheme.accent.opacity(0.08) : Color.clear)
-                        }
-                    }
-                } header: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(book.name).font(.headline).lineLimit(1)
-                            Spacer()
-                            Text("\(tocReadableChapterCount) 章")
-                                .font(.caption.monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                        ProgressView(value: chapterProgress)
-                            .tint(ReadingTheme.accent)
-                        Text("第 \(max(model.currentIndex + 1, 1)) 章 · \(Int(chapterProgress * 100))%")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .textCase(nil)
-                    .padding(.vertical, 4)
-                }
+        ReaderTableOfContentsView(
+            bookName: book.name,
+            chapters: model.chapters,
+            currentIndex: model.currentIndex,
+            progress: chapterProgress,
+            descending: $tocDescending,
+            onClose: { showsTableOfContents = false },
+            onSelect: { index in
+                guard model.chapters.indices.contains(index) else { return }
+                showsTableOfContents = false
+                guard index != model.currentIndex else { return }
+                stopSpeechIfNeeded()
+                saveProgress(immediate: true)
+                readerJumpPosition = nil
+                model.select(index: index)
+                readerPosition = 0
             }
-            .listStyle(.insetGrouped)
-            .navigationTitle("目录")
-            .navigationBarTitleDisplayMode(.inline)
-            .searchable(text: $tocSearch, prompt: "搜索章节")
-            .onAppear { ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id) }
-            .onChange(of: tocDescending) { _ in
-                ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id)
-            }
-            .onChange(of: tocSearch) { value in
-                if value.isEmpty { ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id) }
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("关闭") { showsTableOfContents = false } }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button(tocDescending ? "正序" : "倒序", systemImage: "arrow.up.arrow.down") {
-                        tocDescending.toggle()
-                    }
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("定位当前章节", systemImage: "scope") {
-                        if !tocSearch.isEmpty { tocSearch = "" }
-                        ReaderTOCLocator.scroll(tocProxy, to: model.currentChapter?.id, animated: true)
-                    }
-                    .accessibilityIdentifier("reader.toc.locate")
-                }
-                ToolbarItem(placement: .bottomBar) {
-                    if !tocSearch.isEmpty {
-                        Button("清除搜索", systemImage: "xmark.circle") { tocSearch = "" }
-                            .accessibilityIdentifier("reader.toc.clearSearch")
-                    }
-                }
-            }
-            }
-        }
-        .readingPresentationDetents([.medium, .large])
-        .readingPresentationDragIndicator()
-    }
-
-    private var tocReadableChapterCount: Int {
-        model.chapters.filter { !$0.isVolume }.count
-    }
-
-    private func tocChapterNumber(_ chapter: BookChapter) -> String {
-        guard let index = model.chapters.firstIndex(where: { $0.id == chapter.id }) else { return "—" }
-        let number = model.chapters.prefix(index + 1).filter { !$0.isVolume }.count
-        return number > 0 ? "\(number)" : "—"
+        )
     }
 
 
@@ -2083,15 +1979,6 @@ struct ReaderView: View {
         guard !query.isEmpty else { return [] }
         return model.paragraphs.filter { $0.text.localizedCaseInsensitiveContains(query) }
     }
-
-    private var tocChapters: [BookChapter] {
-        let query = tocSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let filtered = query.isEmpty ? model.chapters : model.chapters.filter {
-            $0.title.localizedCaseInsensitiveContains(query)
-        }
-        return tocDescending ? Array(filtered.reversed()) : filtered
-    }
-
 
     private var bookmarksSheet: some View {
         ReadingNavigationStack {

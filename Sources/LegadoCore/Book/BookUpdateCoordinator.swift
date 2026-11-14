@@ -36,9 +36,10 @@ public struct BookUpdateMerger: Sendable {
             return .init(book: book, chapters: oldChapters, addedChapterCount: 0, refreshed: false)
         }
         var normalized = newChapters
-        let metadata = Dictionary(uniqueKeysWithValues: oldChapters.map {
+        // 目录里可能出现重复的「序号+标题」，uniqueKeysWithValues 遇到重复键会直接崩溃。
+        let metadata = Dictionary(oldChapters.map {
             ("\($0.index)\u{0}\($0.title)", ($0.wordCount, $0.variable, $0.imageURL))
-        })
+        }, uniquingKeysWith: { first, _ in first })
         for index in normalized.indices {
             normalized[index].index = index
             normalized[index].bookUrl = book.bookUrl
@@ -72,11 +73,22 @@ public struct BookUpdateMerger: Sendable {
 
     private func resolveReadIndex(book: Book, chapters: [BookChapter]) -> Int {
         if let title = book.durChapterTitle, !title.isEmpty {
-            if let exact = chapters.firstIndex(where: { $0.title == title }) { return exact }
+            // 同名章节（如分卷里重复的「第一章」）取离原阅读位置最近的一个。
+            let anchor = book.durChapterIndex
+            if let exact = nearest(in: chapters, to: anchor, where: { $0.title == title }) { return exact }
             let normalizedTitle = normalize(title)
-            if let close = chapters.firstIndex(where: { normalize($0.title) == normalizedTitle }) { return close }
+            if let close = nearest(in: chapters, to: anchor, where: { normalize($0.title) == normalizedTitle }) { return close }
         }
         return min(max(book.durChapterIndex, 0), max(chapters.count - 1, 0))
+    }
+
+    private func nearest(in chapters: [BookChapter], to anchor: Int, where match: (BookChapter) -> Bool) -> Int? {
+        var best: Int?
+        for index in chapters.indices where match(chapters[index]) {
+            guard let current = best else { best = index; continue }
+            if abs(index - anchor) < abs(current - anchor) { best = index }
+        }
+        return best
     }
 
     private func normalize(_ title: String) -> String {

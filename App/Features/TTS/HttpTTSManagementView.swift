@@ -44,7 +44,7 @@ final class HttpTTSLibraryModel: ObservableObject {
             } else {
                 imported = [try decoder.decode(HttpTTS.self, from: data)]
             }
-            var byID = Dictionary(uniqueKeysWithValues: engines.map { ($0.id, $0) })
+            var byID = Dictionary(engines.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for value in imported { byID[value.id] = value }
             await persist(Array(byID.values))
         } catch {
@@ -55,7 +55,7 @@ final class HttpTTSLibraryModel: ObservableObject {
     func restoreDefaults() async {
         do {
             let defaults = try bundledDefaults()
-            var byID = Dictionary(uniqueKeysWithValues: engines.filter { $0.id >= 0 }.map { ($0.id, $0) })
+            var byID = Dictionary(engines.filter { $0.id >= 0 }.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             for value in defaults { byID[value.id] = value }
             await persist(Array(byID.values))
         } catch {

@@ -545,7 +545,7 @@ final class SourceLibraryModel: ObservableObject {
         _ incoming: [BookSource],
         invalidItems: [PendingImport.InvalidItem] = []
     ) {
-        let existingByID = Dictionary(uniqueKeysWithValues: sources.map { ($0.id, $0) })
+        let existingByID = Dictionary(sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let unique = incoming.reduce(into: [String: BookSource]()) { $0[$1.id] = $1 }
         pendingImport = .init(items: Array(unique.values)
             .sorted { $0.bookSourceName.localizedStandardCompare($1.bookSourceName) == .orderedAscending }
