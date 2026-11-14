@@ -9,6 +9,7 @@ struct ReaderView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @EnvironmentObject private var library: BookLibraryModel
     @EnvironmentObject private var sourceLibrary: SourceLibraryModel
     @EnvironmentObject private var replaceRules: ReplaceRuleLibraryModel
@@ -841,12 +842,14 @@ struct ReaderView: View {
     }
 
 
+    /// 顶部工具栏：悬浮的玻璃按钮（返回 / 书签 / 更多）+ 中间玻璃胶囊（书名、章节名）。
+    /// 没有整条背景，只有各个控件本身能点；控件之间的空白由外层吞掉点击，不会穿透翻页。
     private var readerTopChrome: some View {
-        HStack(spacing: 4) {
-            readerChromeIconButton("chevron.backward", label: "返回") { dismiss() }
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: 10) {
+            readerGlassCircleButton("chevron.backward", label: "返回") { dismiss() }
+            VStack(spacing: 2) {
                 Text(book.name)
-                    .font(.subheadline.weight(.medium))
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 HStack(spacing: 4) {
                     Text(model.title).lineLimit(1)
@@ -856,30 +859,51 @@ struct ReaderView: View {
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(readerChromeTint.opacity(0.62))
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background { readerGlass(Capsule()) }
             .accessibilityElement(children: .combine)
-            readerChromeIconButton(bookmarkSaved ? "bookmark.fill" : "bookmark", label: "书签") {
+            readerGlassCircleButton(bookmarkSaved ? "bookmark.fill" : "bookmark", label: "书签") {
                 toggleBookmark()
             }
             .accessibilityValue(bookmarkSaved ? "已添加" : "添加当前位置")
             .accessibilityHint(bookmarkSaved ? "轻点取消本页书签" : "")
             .disabled(isSavingBookmark)
             readerMoreMenu
+                .background { readerGlass(Circle()) }
         }
         .foregroundStyle(readerChromeTint)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 14)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
         .frame(maxWidth: .infinity)
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-        // 工具栏整条（含按钮之间的空白和状态栏区域）都吃掉点击，避免点空白处穿透到正文触发翻页。
-        .contentShape(Rectangle())
-        .onTapGesture {}
-        .background { readerChromeBackground.ignoresSafeArea(edges: .top).contentShape(Rectangle()).onTapGesture {} }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(Color(uiColor: .separator).opacity(0.35)).frame(height: 0.5)
+        // 整条（含按钮之间的空白和状态栏区域）都吃掉点击，避免点空白处穿透到正文触发翻页。
+        .background { Color.white.opacity(0.001).ignoresSafeArea(edges: .top).onTapGesture {} }
+    }
+
+    /// 玻璃材质：iOS 26 用系统 Liquid Glass，旧系统用毛玻璃 + 阅读底色轻染；
+    /// 「减少透明度」或关闭玻璃模式时退回实色。
+    private func readerGlass<S: InsettableShape>(_ shape: S) -> some View {
+        AppGlassSurface(shape: shape, tint: backgroundColor, tintOpacity: 0.32,
+                        reduceTransparency: reduceTransparency)
+            .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
+            .shadow(color: .black.opacity(resolvedStyle.id == "night" ? 0.25 : 0.08), radius: 10, x: 0, y: 4)
+    }
+
+    private func readerGlassCircleButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 18, weight: .medium))
+                .frame(width: 44, height: 44)
+                .background { readerGlass(Circle()) }
+                .contentShape(Circle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private var readerMoreMenu: some View {
@@ -921,11 +945,12 @@ struct ReaderView: View {
         .accessibilityLabel("更多")
     }
 
+    /// 底部工具栏：一张悬浮的圆角玻璃卡片。上面是章节信息和进度（上一章 / 进度 / 下一章），
+    /// 下面一排工具（目录、换源、朗读、外观、设置），全部保留，只是换成更紧凑的图标 + 小字。
     private var readerBottomChrome: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 6) {
             readerChapterControls
-            Rectangle().fill(Color(uiColor: .separator).opacity(0.35)).frame(height: 0.5)
-            LazyVGrid(columns: readerToolbarColumns, spacing: 12) {
+            LazyVGrid(columns: readerToolbarColumns, spacing: 4) {
                 readerChromeAction("list.bullet", "目录") {
                     showsReaderMenu = false
                     showsTableOfContents = true
@@ -935,7 +960,7 @@ struct ReaderView: View {
                     .accessibilityIdentifier("reader.changeSource")
                     .accessibilityValue(book.originName)
                 }
-                readerChromeAction(speech.isSpeaking ? "stop" : "headphones", speech.isSpeaking ? "停止" : "朗读", isActive: speech.isSpeaking) { toggleSpeech() }
+                readerChromeAction(speech.isSpeaking ? "stop.fill" : "headphones", speech.isSpeaking ? "停止" : "朗读", isActive: speech.isSpeaking) { toggleSpeech() }
                 readerChromeAction("textformat.size", "外观") {
                     showsReaderMenu = false
                     showsStyleControls = true
@@ -947,17 +972,19 @@ struct ReaderView: View {
             }
         }
         .foregroundStyle(readerChromeTint)
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 12)
         .padding(.top, 12)
-        .padding(.bottom, 10)
+        .padding(.bottom, 6)
+        .frame(maxWidth: 560)
+        .background { readerGlass(RoundedRectangle(cornerRadius: 26, style: .continuous)) }
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .onTapGesture {}
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
         .frame(maxWidth: .infinity)
         .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-        .contentShape(Rectangle())
-        .onTapGesture {}
-        .background { readerChromeBackground.ignoresSafeArea(edges: .bottom).contentShape(Rectangle()).onTapGesture {} }
-        .overlay(alignment: .top) {
-            Rectangle().fill(Color(uiColor: .separator).opacity(0.35)).frame(height: 0.5)
-        }
+        // 卡片四周和底部安全区的空白也吃掉点击，不穿透到正文。
+        .background { Color.white.opacity(0.001).ignoresSafeArea(edges: .bottom).onTapGesture {} }
     }
 
     private var readerToolbarColumns: [GridItem] {
@@ -966,7 +993,7 @@ struct ReaderView: View {
     }
 
     private var readerChapterControls: some View {
-        HStack(spacing: 16) {
+        HStack(spacing: 6) {
             readerChromeIconButton("chevron.left", label: "上一章") { moveChapter(-1) }
                 .disabled(!model.canGoPrevious)
                 .opacity(model.canGoPrevious ? 1 : 0.25)
@@ -986,11 +1013,17 @@ struct ReaderView: View {
                     Text(chapterProgress, format: .percent.precision(.fractionLength(0)))
                 }
                 .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(readerChromeTint.opacity(0.62))
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-                ProgressView(value: chapterProgress)
-                    .tint(readerChromeTint)
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(readerChromeTint.opacity(0.14))
+                        Capsule().fill(readerChromeTint.opacity(0.75))
+                            .frame(width: max(4, proxy.size.width * chapterProgress))
+                    }
+                }
+                .frame(height: 4)
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("阅读进度")
@@ -1014,15 +1047,20 @@ struct ReaderView: View {
 
     private func readerChromeAction(_ icon: String, _ title: String, isActive: Bool = false, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 8) {
+            VStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.system(size: min(toolbarIconSize, 28), weight: .regular))
-                    .frame(height: 28)
+                    .font(.system(size: min(toolbarIconSize, 26), weight: .regular))
+                    .frame(height: 26)
                 Text(title)
-                    .font(.caption)
-                    .foregroundStyle(isActive ? Color.primary : .secondary)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(readerChromeTint.opacity(isActive ? 1 : 0.6))
             }
-            .frame(maxWidth: .infinity, minHeight: 58)
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .background {
+                if isActive {
+                    Capsule().fill(readerChromeTint.opacity(0.1)).padding(.horizontal, 6)
+                }
+            }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -1848,7 +1886,9 @@ struct ReaderView: View {
                 }
             }
         }
-        .readingPresentationDetents([.medium, .large])
+        // 和「外观」一样：固定半屏、不压暗正文，列表在面板里滚动而不是把面板拉满全屏。
+        .readingLivePreviewSheet()
+        .readingPresentationDragIndicator()
     }
 
 

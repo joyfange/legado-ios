@@ -4232,7 +4232,8 @@ private struct BookshelfShelfView: View {
                     onOpen(.read(book))
                 } else {
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                    withAnimation(.spring(response: 0.32, dampingFraction: 0.78)) {
+                    // 抽书的动作稍慢、几乎不回弹，像手指把书从一排书里勾出来。
+                    withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
                         selectedURL = book.bookUrl
                         showsPicker = false
                         folderPickerID = nil
@@ -4343,6 +4344,51 @@ struct BookshelfBoard: View {
 }
 
 /// 按给定的点画一个多边形（书的顶面、侧面）。
+/// 抽出的书露出的两个面：顶面（书页）和右侧面（封面）。
+/// 斜二测投影：横向露出 dx、纵向抬高 dy≈0.55·dx；dx 随 `progress` 从 0 长到满，
+/// 所以点下去时能看到书「被拉出来、转出侧面」的过程，而不是侧面突然出现。
+private struct BookshelfPulledFaces: View, Animatable {
+    var progress: CGFloat
+    let book: Book
+    let width: CGFloat
+    let height: CGFloat
+    let depth: CGFloat
+    let pageColor: Color
+
+    nonisolated var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    var body: some View {
+        let p = min(max(progress, 0), 1)
+        let dx = depth * p, dy = depth * 0.55 * p
+        let w = width, h = height
+        ZStack(alignment: .topLeading) {
+            if dx > 0.5 {
+                BookshelfFace(points: [CGPoint(x: 0, y: dy), CGPoint(x: dx, y: 0), CGPoint(x: w + dx, y: 0), CGPoint(x: w, y: dy)])
+                    .fill(pageColor)
+                ForEach(1..<4) { i in
+                    let t = CGFloat(i) / 4
+                    BookshelfFace(points: [CGPoint(x: dx * t, y: dy * (1 - t)), CGPoint(x: w + dx * t, y: dy * (1 - t))])
+                        .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
+                }
+                BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
+                                 width: max(h * 0.7, depth), height: h)
+                    .frame(width: depth, height: h, alignment: .leading)
+                    .clipped()
+                    .overlay(LinearGradient(colors: [Color.black.opacity(0.32), Color.black.opacity(0.05)],
+                                            startPoint: .leading, endPoint: .trailing))
+                    // 先把封面条压到 dx 宽，再错切成往右上方退去的平行四边形。
+                    .transformEffect(CGAffineTransform(a: dx / depth, b: -dy / depth, c: 0, d: 1, tx: w, ty: dy))
+            }
+        }
+        .frame(width: w + depth, height: h + depth, alignment: .topLeading)
+        // 外框按满深度留位（布局不随动画变），书脊顶边在框里的 y=depth 处；画面下移让它对上 y=dy。
+        .offset(y: depth - dy)
+    }
+}
+
 private struct BookshelfFace: Shape {
     let points: [CGPoint]
     func path(in rect: CGRect) -> Path {
@@ -4550,8 +4596,10 @@ private struct BookshelfSpine: View {
 
     static let leanAngle: Double = 10
     private static let depth: CGFloat = 8
-    /// 竖立的书被抽出时侧面露出的宽度（能看到一部分封面）。
-    private static let pulledDepth: CGFloat = 14
+    /// 竖立的书被抽出时侧面露出的宽度（能看到一部分封面），随书脊宽度变化。
+    private var pulledDepth: CGFloat { min(max(style.bookWidth * 0.62, 12), 22) }
+    /// 抽出的进度 0…1，用来驱动侧面/顶面「慢慢露出来」以及书往外挪的动画。
+    private var pull: CGFloat { isSelected ? 1 : 0 }
 
     private static let palette: [(CGFloat, CGFloat, CGFloat)] = [
         (0.25, 0.18, 0.12), (0.17, 0.20, 0.27), (0.30, 0.21, 0.13), (0.22, 0.17, 0.14),
@@ -4683,30 +4731,10 @@ private struct BookshelfSpine: View {
         .frame(width: width, height: height)
     }
 
-    /// 抽出时露出的顶面（书页）与右侧面（封面靠书脊的一条）。
-    /// 斜二测投影：横向露出 dx、纵向只抬高 dy = dx/2，顶面很薄，书底与层板齐平，
-    /// 看起来是书被抽出站在层板上，而不是整本书被抬到半空。
+    /// 抽出时露出的顶面（书页）与右侧面（封面）。见 `BookshelfPulledFaces`。
     private var uprightDepthFaces: some View {
-        let w = style.bookWidth, h = style.bookHeight
-        let dx = Self.pulledDepth, dy = (Self.pulledDepth * 0.5).rounded()
-        return ZStack(alignment: .topLeading) {
-            BookshelfFace(points: [CGPoint(x: 0, y: dy), CGPoint(x: dx, y: 0), CGPoint(x: w + dx, y: 0), CGPoint(x: w, y: dy)])
-                .fill(pageColor)
-            // 书页的几道细线
-            ForEach(1..<4) { i in
-                let t = CGFloat(i) / 4
-                BookshelfFace(points: [CGPoint(x: dx * t, y: dy * (1 - t)), CGPoint(x: w + dx * t, y: dy * (1 - t))])
-                    .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
-            }
-            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
-                             width: max(h * 0.7, dx), height: h)
-                .frame(width: dx, height: h, alignment: .leading)
-                .clipped()
-                .overlay(LinearGradient(colors: [Color.black.opacity(0.3), Color.black.opacity(0.06)],
-                                        startPoint: .leading, endPoint: .trailing))
-                .transformEffect(CGAffineTransform(a: 1, b: -dy / dx, c: 0, d: 1, tx: w, ty: dy))
-        }
-        .frame(width: w + dx, height: h + dy, alignment: .topLeading)
+        BookshelfPulledFaces(progress: pull, book: book, width: style.bookWidth, height: style.bookHeight,
+                             depth: pulledDepth, pageColor: pageColor)
     }
 
     /// 平躺：书脊朝外横放，书名横排。
@@ -4776,19 +4804,31 @@ private struct BookshelfSpine: View {
         }
     }
 
+    /// 抽书：像从真实书架上把书往外拉——书底一直贴着层板，整本书朝读者滑出一截
+    /// （往下、略放大，书底压到层板前沿上），同时顶面书页和右侧封面逐渐转出来，
+    /// 层板上留下一块接触阴影。所有量都由同一个进度驱动，收回时原路退回。
     private var upright: some View {
-        uprightFront
+        let forward = (pulledDepth * 0.5).rounded()
+        return uprightFront
             .overlay(alignment: .bottomLeading) {
+                uprightDepthFaces.allowsHitTesting(false)
+            }
+            .background(alignment: .bottomLeading) {
                 if isSelected {
-                    uprightDepthFaces.allowsHitTesting(false)
+                    Ellipse()
+                        .fill(Color.black.opacity(0.32))
+                        .frame(width: style.bookWidth + pulledDepth * 1.2, height: 7)
+                        .blur(radius: 3)
+                        .offset(x: -2, y: 4)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
                 }
             }
             .overlay(alignment: .top) {
                 rotateButton.offset(y: min(10, style.bookHeight * 0.08) - 6)
             }
-            // 抽出：书底仍然压在层板上，只是整本书朝外挪出一点（略放大、露出书顶和封面侧面），
-            // 不再绕底边前倾——前倾加透视会让书看起来离开层板、悬在半空。
-            .scaleEffect(isSelected ? 1.035 : 1, anchor: .bottom)
+            .scaleEffect(1 + 0.05 * pull, anchor: .bottom)
+            .offset(x: -forward * 0.25 * pull, y: forward * pull)
             .contentShape(Rectangle())
     }
 
@@ -4802,7 +4842,8 @@ private struct BookshelfSpine: View {
             .overlay(alignment: .leading) {
                 rotateButton.offset(x: -4)
             }
-            .scaleEffect(isSelected ? 1.03 : 1, anchor: .bottom)
+            .scaleEffect(1 + 0.04 * pull, anchor: .bottom)
+            .offset(y: 4 * pull)
             .contentShape(Rectangle())
     }
 
