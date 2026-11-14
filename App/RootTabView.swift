@@ -3377,8 +3377,6 @@ final class BookshelfFolderStore: ObservableObject {
         save()
     }
 
-    func folder(id: String) -> BookshelfFolder? { folders.first { $0.id == id } }
-
     /// 换装：预设样式或自定义（颜色与底部文字）。
     func setSkin(_ id: String, style: Int, box: String? = nil, label: String? = nil, footer: String? = nil) {
         guard let index = folders.firstIndex(where: { $0.id == id }) else { return }
