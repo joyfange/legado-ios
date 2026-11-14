@@ -3898,6 +3898,8 @@ private struct BookshelfShelfView: View {
                 }
             }
             .frame(width: contentWidth, height: rowHeight, alignment: .bottomLeading)
+            // 书画在层板上面：抽出的书往外挪时书底压在层板前沿上，而不是被层板挡住、看起来跑到层板后面。
+            .zIndex(1)
             .overlay(alignment: .topLeading) {
                 if showsPicker, let placement = row.first(where: { $0.id == "b:" + (selectedURL ?? "") }),
                    let book = placement.item.book {
@@ -3929,7 +3931,8 @@ private struct BookshelfShelfView: View {
             case .ornament(let ornament, let size):
                 ornamentView(ornament, size: size, drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
             case .book(let book):
-                spine(book, pose: placement.pose, drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
+                spine(book, pose: placement.pose, titleOnTrailing: placement.boardMinX < 40,
+                      drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
             case .folder(let folder, let inside):
                 folderView(folder, books: inside, pose: placement.pose,
                            drag: dragGesture(id: placement.id, index: placement.index, rows: rows))
@@ -4222,9 +4225,11 @@ private struct BookshelfShelfView: View {
         .accessibilityHint("轻点打开，长按拖动调整位置")
     }
 
-    private func spine<G: Gesture>(_ book: Book, pose: BookshelfShelfPose, drag: G) -> some View {
+    private func spine<G: Gesture>(_ book: Book, pose: BookshelfShelfPose, titleOnTrailing: Bool = false,
+                                   drag: G) -> some View {
         let isSelected = book.bookUrl == selectedURL
-        return BookshelfSpine(book: book, pose: pose, isSelected: isSelected, style: style) {
+        return BookshelfSpine(book: book, pose: pose, isSelected: isSelected, style: style,
+                              titleOnTrailing: titleOnTrailing) {
             withAnimation(.easeOut(duration: 0.18)) { showsPicker.toggle() }
         }
             .onTapGesture {
@@ -4362,7 +4367,7 @@ private struct BookshelfPulledFaces: View, Animatable {
 
     var body: some View {
         let p = min(max(progress, 0), 1)
-        let dx = depth * p, dy = depth * 0.55 * p
+        let dx = depth * p, dy = depth * 0.7 * p
         let w = width, h = height
         ZStack(alignment: .topLeading) {
             if dx > 0.5 {
@@ -4597,7 +4602,7 @@ private struct BookshelfSpine: View {
     static let leanAngle: Double = 10
     private static let depth: CGFloat = 8
     /// 竖立的书被抽出时侧面露出的宽度（能看到一部分封面），随书脊宽度变化。
-    private var pulledDepth: CGFloat { min(max(style.bookWidth * 0.62, 12), 22) }
+    private var pulledDepth: CGFloat { min(max(style.bookWidth * 0.5, 10), 20) }
     /// 抽出的进度 0…1，用来驱动侧面/顶面「慢慢露出来」以及书往外挪的动画。
     private var pull: CGFloat { isSelected ? 1 : 0 }
 
@@ -4606,8 +4611,12 @@ private struct BookshelfSpine: View {
         (0.15, 0.17, 0.21), (0.27, 0.19, 0.15)
     ]
 
+    /// 抽出时的书名浮标放在书的右边（书在一层最左边、左边没地方时）。
+    var titleOnTrailing = false
+
     init(book: Book, pose: BookshelfShelfPose, isSelected: Bool, style: BookshelfShelfStyle,
-         onRotate: (() -> Void)? = nil) {
+         titleOnTrailing: Bool = false, onRotate: (() -> Void)? = nil) {
+        self.titleOnTrailing = titleOnTrailing
         self.book = book
         self.pose = pose
         self.isSelected = isSelected
@@ -4804,11 +4813,11 @@ private struct BookshelfSpine: View {
         }
     }
 
-    /// 抽书：像从真实书架上把书往外拉——书底一直贴着层板，整本书朝读者滑出一截
-    /// （往下、略放大，书底压到层板前沿上），同时顶面书页和右侧封面逐渐转出来，
-    /// 层板上留下一块接触阴影。所有量都由同一个进度驱动，收回时原路退回。
+    /// 抽书（照 cmbok 的样子）：书的背面留在原处，正面朝读者拉出——画面上书脊往左下挪
+    /// （书底压到层板前沿上），书顶的书页和右侧的封面随之转出来；
+    /// 书脊上方出现旋转按钮，旁边浮出深色胶囊竖排完整书名。收回时原路退回。
     private var upright: some View {
-        let forward = (pulledDepth * 0.5).rounded()
+        let d = pulledDepth
         return uprightFront
             .overlay(alignment: .bottomLeading) {
                 uprightDepthFaces.allowsHitTesting(false)
@@ -4816,20 +4825,50 @@ private struct BookshelfSpine: View {
             .background(alignment: .bottomLeading) {
                 if isSelected {
                     Ellipse()
-                        .fill(Color.black.opacity(0.32))
-                        .frame(width: style.bookWidth + pulledDepth * 1.2, height: 7)
-                        .blur(radius: 3)
-                        .offset(x: -2, y: 4)
+                        .fill(Color.black.opacity(0.28))
+                        .frame(width: style.bookWidth + d * 1.3, height: 6)
+                        .blur(radius: 2.5)
+                        .offset(x: d * 0.1, y: 3)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
             }
             .overlay(alignment: .top) {
-                rotateButton.offset(y: min(10, style.bookHeight * 0.08) - 6)
+                rotateButton.offset(y: min(max(style.bookHeight * 0.1, 8), 20) - 11)
             }
-            .scaleEffect(1 + 0.05 * pull, anchor: .bottom)
-            .offset(x: -forward * 0.25 * pull, y: forward * pull)
+            .overlay(alignment: titleOnTrailing ? .topTrailing : .topLeading) {
+                if isSelected {
+                    titlePill
+                        .offset(x: titleOnTrailing ? titlePillWidth + d + 2 : -(titlePillWidth + 2), y: 4)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .scaleEffect(1 + 0.025 * pull, anchor: .bottom)
+            .offset(x: -d * 0.6 * pull, y: d * 0.45 * pull)
             .contentShape(Rectangle())
+    }
+
+    private var titlePillWidth: CGFloat { 22 }
+
+    /// 抽出时旁边浮出的书名：深色胶囊，竖排白字，太长截断。
+    private var titlePill: some View {
+        let lineHeight: CGFloat = 14.5
+        let capacity = max(Int((style.bookHeight * 0.78 - 14) / lineHeight), 2)
+        var chars = Array(title)
+        if chars.count > capacity { chars = Array(chars.prefix(capacity - 1)) + ["…"] }
+        return VStack(spacing: 0) {
+            ForEach(Array(chars.enumerated()), id: \.offset) { _, ch in
+                Text(String(ch))
+                    .font(.system(size: 12.5, weight: .bold))
+                    .frame(height: lineHeight)
+            }
+        }
+        .foregroundStyle(Color.white)
+        .frame(width: titlePillWidth)
+        .padding(.vertical, 7)
+        .background(Color.black.opacity(0.78), in: Capsule())
+        .fixedSize()
     }
 
     private var flat: some View {

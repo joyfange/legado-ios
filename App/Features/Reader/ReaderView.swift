@@ -33,6 +33,9 @@ struct ReaderView: View {
     @State private var showsReplaceRules = false
     @State private var quickReplacePick: ReaderTextPick?
     @State private var showsReaderSettings = false
+    @State private var showsBookActions = false
+    /// 拖动底部进度条时的本章位置（0…1）；松手后跳转，拖动过程中只预览页码。
+    @State private var scrubFraction: Double?
     @State private var showsClickActionSettings = false
     @State private var showsContentEditor = false
     @State private var editedContent = ""
@@ -326,6 +329,7 @@ struct ReaderView: View {
             }
         }
         .sheet(isPresented: $showsReaderSettings) { readerSettings }
+        .sheet(isPresented: $showsBookActions) { bookActionsSheet }
         .sheet(isPresented: $showsClickActionSettings) { clickActionSettings }
         .sheet(isPresented: $showsContentEditor) { contentEditor }
         .task(id: model.chapterLoadGeneration) {
@@ -761,6 +765,7 @@ struct ReaderView: View {
             || showsContentSearch
             || showsReplaceRules
             || showsReaderSettings
+            || showsBookActions
             || showsClickActionSettings
             || showsContentEditor
     }
@@ -836,6 +841,16 @@ struct ReaderView: View {
         return min(max((Double(max(readable - 1, 0)) + pagePart) / Double(chapter), 0), 1)
     }
 
+    /// 底部滑块显示的本章位置：翻页模式按页码，滚动模式按正文字符位置。
+    private var chapterSliderFraction: Double {
+        if pageAnimation == 3 {
+            let length = model.content.utf16.count
+            guard length > 1 else { return 0 }
+            return min(max(Double(readerPosition) / Double(length - 1), 0), 1)
+        }
+        return chapterPageFraction
+    }
+
     private var chapterPageFraction: Double {
         guard totalPages > 1 else { return 1 }
         return min(max(Double(max(currentPage - 1, 0)) / Double(totalPages - 1), 0), 1)
@@ -872,8 +887,7 @@ struct ReaderView: View {
             .accessibilityValue(bookmarkSaved ? "已添加" : "添加当前位置")
             .accessibilityHint(bookmarkSaved ? "轻点取消本页书签" : "")
             .disabled(isSavingBookmark)
-            readerMoreMenu
-                .background { readerGlass(Circle()) }
+            readerCoverButton
         }
         .foregroundStyle(readerChromeTint)
         .padding(.horizontal, 14)
@@ -906,47 +920,152 @@ struct ReaderView: View {
         .accessibilityLabel(label)
     }
 
-    private var readerMoreMenu: some View {
-        Menu {
-            Button("搜索正文", systemImage: "magnifyingglass") {
-                showsReaderMenu = false
-                showsContentSearch = true
-            }
-            if book.origin == "local", URL(string: book.bookUrl)?.pathExtension.lowercased() == "epub" {
-                Button("本章插图", systemImage: "photo.on.rectangle") {
-                    showsReaderMenu = false
-                    illustrationChapter = model.currentChapter
-                }
-            }
-            Button("书签列表", systemImage: "bookmark") {
-                showsReaderMenu = false
-                showsBookmarks = true
-            }
-            Button(isAutoReading ? "停止自动阅读" : "自动阅读", systemImage: isAutoReading ? "stop" : "play") {
-                if isAutoReading {
-                    isAutoReading = false
-                } else {
-                    showsReaderMenu = false
-                    showsAutoReadControls = true
-                }
-            }
-            Divider()
-            Button(resolvedStyle.id == "night" ? "切换为日间" : "切换为夜间", systemImage: resolvedStyle.id == "night" ? "sun.max" : "moon") {
-                toggleNightTheme()
-            }
-            .disabled(themeMode == "3")
+    /// 右上角的圆形封面：轻点打开「书籍操作」面板（原「更多」菜单里的功能都在里面）。
+    private var readerCoverButton: some View {
+        Button {
+            showsReaderMenu = false
+            showsBookActions = true
         } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 20, weight: .regular))
+            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl, width: 40, height: 56)
+                .frame(width: 38, height: 38, alignment: .center)
+                .clipShape(Circle())
+                .overlay(Circle().strokeBorder(readerChromeTint.opacity(0.12), lineWidth: 0.5))
                 .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
+                .background { readerGlass(Circle()) }
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("更多")
+        .accessibilityHint("书籍操作：搜索正文、书签列表、自动阅读等")
     }
 
-    /// 底部工具栏：一张悬浮的圆角玻璃卡片。上面是章节信息和进度（上一章 / 进度 / 下一章），
-    /// 下面一排工具（目录、换源、朗读、外观、设置），全部保留，只是换成更紧凑的图标 + 小字。
+    /// 关掉「书籍操作」面板后再打开另一个面板（两个 sheet 不能同时弹出）。
+    private func afterBookActions(_ action: @escaping @MainActor () -> Void) {
+        showsBookActions = false
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            action()
+        }
+    }
+
+    private var isLocalEPUB: Bool {
+        book.origin == "local" && URL(string: book.bookUrl)?.pathExtension.lowercased() == "epub"
+    }
+
+    /// 书籍操作面板：上面是封面、书名、作者、书源、进度；下面是操作网格。半屏，不遮住正文。
+    private var bookActionsSheet: some View {
+        ReadingNavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(alignment: .top, spacing: 14) {
+                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl, width: 64, height: 88)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(book.name)
+                                .font(.headline)
+                                .lineLimit(2)
+                            if !book.author.isEmpty {
+                                Text(book.author)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            if !book.originName.isEmpty {
+                                Label(book.originName, systemImage: "globe")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Label("进度 \(model.readableNumber(at: model.currentIndex))/\(model.readableChapterCount)", systemImage: "book")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 18) {
+                        bookAction("arrow.clockwise", "重新获取", enabled: !model.isLoading && model.canEditContent) {
+                            showsBookActions = false
+                            refreshCurrentChapter()
+                        }
+                        bookAction("square.and.pencil", "编辑正文", enabled: model.canEditContent && !model.content.isEmpty) {
+                            afterBookActions {
+                                editedContent = model.content
+                                contentEditError = nil
+                                showsContentEditor = true
+                            }
+                        }
+                        bookAction("arrow.triangle.2.circlepath", "换源", enabled: model.canEditContent) {
+                            afterBookActions { openSourceSwitch() }
+                        }
+                        bookAction("wand.and.stars", "替换净化") {
+                            afterBookActions { showsReplaceRules = true }
+                        }
+                        bookAction("magnifyingglass", "搜索正文") {
+                            afterBookActions { showsContentSearch = true }
+                        }
+                        bookAction("bookmark", "书签列表") {
+                            afterBookActions { showsBookmarks = true }
+                        }
+                        bookAction(isAutoReading ? "stop.circle" : "play.circle", isAutoReading ? "停止自动阅读" : "自动阅读") {
+                            if isAutoReading {
+                                isAutoReading = false
+                                showsBookActions = false
+                            } else {
+                                afterBookActions { showsAutoReadControls = true }
+                            }
+                        }
+                        bookAction(resolvedStyle.id == "night" ? "sun.max" : "moon",
+                                   resolvedStyle.id == "night" ? "切换为日间" : "切换为夜间",
+                                   enabled: themeMode != "3") {
+                            toggleNightTheme()
+                        }
+                        if isLocalEPUB {
+                            bookAction("photo.on.rectangle", "本章插图") {
+                                afterBookActions { illustrationChapter = model.currentChapter }
+                            }
+                        }
+                    }
+                    Text("重新获取、编辑正文只作用于当前章节。")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+            .navigationTitle("书籍操作")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showsBookActions = false }
+                }
+            }
+        }
+        .readingLivePreviewSheet()
+        .readingPresentationDragIndicator()
+    }
+
+    private func bookAction(_ icon: String, _ title: String, enabled: Bool = true,
+                            action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 7) {
+                Image(systemName: icon)
+                    .font(.system(size: 21, weight: .regular))
+                    .frame(height: 26)
+                Text(title)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
+            }
+            .frame(maxWidth: .infinity, minHeight: 58)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(enabled ? Color.primary : Color.secondary.opacity(0.5))
+        .disabled(!enabled)
+        .accessibilityLabel(title)
+    }
+
     private var readerBottomChrome: some View {
         VStack(spacing: 6) {
             readerChapterControls
@@ -992,45 +1111,64 @@ struct ReaderView: View {
         return Array(repeating: GridItem(.flexible(), spacing: 0), count: count)
     }
 
+    /// 进度区：上面一行章节名和本章页码；下面「‹ 滑块 ›」——左右箭头切换章节，
+    /// 滑块拖动调整在本章里的位置，松手后跳过去。
     private var readerChapterControls: some View {
-        HStack(spacing: 6) {
-            readerChromeIconButton("chevron.left", label: "上一章") { moveChapter(-1) }
-                .disabled(!model.canGoPrevious)
-                .opacity(model.canGoPrevious ? 1 : 0.25)
-            VStack(spacing: 8) {
-                HStack {
-                    let chapterCount = model.readableChapterCount
-                    let chapterNumber = model.readableNumber(at: model.currentIndex)
-                    if #available(iOS 16.0, *) {
-                        ViewThatFits(in: .horizontal) {
-                            Text("第 \(chapterNumber) 章 / 共 \(chapterCount) 章").fixedSize()
-                            Text("\(chapterNumber) / \(chapterCount) 章").fixedSize()
-                        }
+        let fraction = scrubFraction ?? chapterSliderFraction
+        let pages = max(totalPages, 1)
+        let previewPage = min(max(Int((fraction * Double(pages - 1)).rounded()) + 1, 1), pages)
+        return VStack(spacing: 2) {
+            HStack(spacing: 8) {
+                Text(model.title)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Group {
+                    if pageAnimation == 3 {
+                        Text(fraction, format: .percent.precision(.fractionLength(0)))
                     } else {
-                        Text("\(chapterNumber) / \(chapterCount) 章").fixedSize()
-                    }
-                    Spacer(minLength: 8)
-                    Text(chapterProgress, format: .percent.precision(.fractionLength(0)))
-                }
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(readerChromeTint.opacity(0.62))
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(readerChromeTint.opacity(0.14))
-                        Capsule().fill(readerChromeTint.opacity(0.75))
-                            .frame(width: max(4, proxy.size.width * chapterProgress))
+                        Text("\(scrubFraction == nil ? currentPage : previewPage)/\(pages)")
                     }
                 }
-                .frame(height: 4)
+                .monospacedDigit()
             }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("阅读进度")
-            .accessibilityValue(chapterProgress.formatted(.percent.precision(.fractionLength(0))))
-            readerChromeIconButton("chevron.right", label: "下一章") { moveChapter(1) }
-                .disabled(!model.canGoNext)
-                .opacity(model.canGoNext ? 1 : 0.25)
+            .font(.caption)
+            .foregroundStyle(readerChromeTint.opacity(0.62))
+            .padding(.horizontal, 10)
+            .accessibilityElement(children: .combine)
+            HStack(spacing: 0) {
+                readerChromeIconButton("chevron.left", label: "上一章") { moveChapter(-1) }
+                    .disabled(!model.canGoPrevious)
+                    .opacity(model.canGoPrevious ? 1 : 0.25)
+                Slider(value: Binding(
+                    get: { scrubFraction ?? chapterSliderFraction },
+                    set: { scrubFraction = min(max($0, 0), 1) }
+                ), in: 0...1, onEditingChanged: { editing in
+                    if !editing { commitScrub() }
+                })
+                .tint(readerChromeTint.opacity(0.8))
+                .disabled(model.content.isEmpty || model.isLoading)
+                .accessibilityLabel("阅读进度")
+                .accessibilityValue(chapterProgress.formatted(.percent.precision(.fractionLength(0))))
+                readerChromeIconButton("chevron.right", label: "下一章") { moveChapter(1) }
+                    .disabled(!model.canGoNext)
+                    .opacity(model.canGoNext ? 1 : 0.25)
+            }
+        }
+    }
+
+    /// 松开进度条：按比例换算成本章正文里的字符位置并跳转。
+    private func commitScrub() {
+        guard let fraction = scrubFraction else { return }
+        let length = model.content.utf16.count
+        guard length > 0 else { scrubFraction = nil; return }
+        let target = fraction >= 0.999 ? max(length - 1, 0) : min(max(Int(Double(length) * fraction), 0), max(length - 1, 0))
+        stopSpeechIfNeeded()
+        readerJumpPosition = nil
+        DispatchQueue.main.async {
+            readerJumpPosition = target
+            readerPosition = target
+            scrubFraction = nil
+            saveProgress(immediate: false)
         }
     }
 
