@@ -3069,12 +3069,15 @@ struct BookshelfShelfStyle: Equatable {
 /// 书脊装帧样式。
 enum BookshelfSpineDesign: Int, CaseIterable, Identifiable {
     case auto = 0, classic, thread, label, plain, gilded, cover, custom
+    /// 第十二轮新增：三段（上下色块、中间米色书名带）、竹节（皮面横棱）、水墨（宣纸 + 底部远山）、双框（通身双线框）。
+    case tripart = 8, ribbed, inkwash, framed
 
     var id: Int { rawValue }
 
     /// 可以参与随机、也可以单独指定的装帧（不含「随机」）。
     /// 「封面」样式与书架设置里的「封面书脊」重复，不再放进装扮列表。
-    static let concrete: [BookshelfSpineDesign] = [.classic, .label, .thread, .plain, .gilded]
+    static let concrete: [BookshelfSpineDesign] = [.classic, .label, .thread, .plain, .gilded,
+                                                   .tripart, .ribbed, .inkwash, .framed]
 
     var title: String {
         switch self {
@@ -3086,6 +3089,10 @@ enum BookshelfSpineDesign: Int, CaseIterable, Identifiable {
         case .gilded: "烫金"
         case .cover: "封面"
         case .custom: "自定义"
+        case .tripart: "三段"
+        case .ribbed: "竹节"
+        case .inkwash: "水墨"
+        case .framed: "双框"
         }
     }
 
@@ -3093,7 +3100,7 @@ enum BookshelfSpineDesign: Int, CaseIterable, Identifiable {
     func resolved(for book: Book, coverSpine: Bool) -> BookshelfSpineDesign {
         guard self == .auto else { return self }
         if coverSpine { return .cover }
-        let all: [BookshelfSpineDesign] = [.classic, .label, .thread, .plain, .gilded]
+        let all = BookshelfSpineDesign.concrete
         return all[(BookshelfSpine.seed(book) / 3) % all.count]
     }
 }
@@ -3118,11 +3125,11 @@ struct ShelfSpineStyle: Codable, Identifiable, Equatable {
     var enabled: Bool
     /// 装饰色（饰带、饰线、圆点、布边、描边框）。
     var accent: String?
-    /// 顶部：0 无，1 浅色书标，2 双饰线，3 顶部色块。
+    /// 顶部：0 无，1 浅色书标，2 双饰线，3 顶部色块，4 菱形徽记，5 竹节横棱。
     var top: Int?
-    /// 底部：0 无，1 圆点，2 双饰线，3 朱红印章，4 底部色块。
+    /// 底部：0 无，1 圆点，2 双饰线，3 朱红印章，4 底部色块，5 菱形，6 竹节横棱。
     var bottom: Int?
-    /// 书名区：0 直接印在书脊上，1 白纸书签，2 描边框。
+    /// 书名区：0 直接印在书脊上，1 白纸书签，2 描边框，3 通栏色带，4 胶囊，5 上下饰线（都贴着书名伸缩）。
     var panel: Int?
     /// 纹理：0 无，1 竖条纹，2 格纹，3 圆点，4 斜纹布。
     var texture: Int?
@@ -3131,10 +3138,11 @@ struct ShelfSpineStyle: Codable, Identifiable, Equatable {
     /// 书名字体：true 宋体（默认），false 黑体。
     var serif: Bool?
 
-    static let topTitles = ["无", "书标", "饰线", "色块"]
-    static let bottomTitles = ["无", "圆点", "饰线", "印章", "色块"]
-    static let panelTitles = ["直印", "书签纸", "描边框"]
-    static let textureTitles = ["无", "竖纹", "格纹", "圆点", "斜纹"]
+    static let topTitles = ["无", "书标", "饰线", "色块", "菱形", "竹节"]
+    static let bottomTitles = ["无", "圆点", "饰线", "印章", "色块", "菱形", "竹节"]
+    /// 书名区：贴着书名的长短自动伸缩（不再是固定大小的方框），通栏色带和上下饰线不占书名宽度。
+    static let panelTitles = ["直印", "书签纸", "描边框", "通栏色带", "胶囊", "上下饰线"]
+    static let textureTitles = ["无", "竖纹", "格纹", "圆点", "斜纹", "横纹", "菱格"]
 
     var appearance: BookshelfSpineAppearance {
         let design = BookshelfSpineDesign(rawValue: self.design) ?? .classic
@@ -3161,6 +3169,18 @@ struct ShelfSpineStyle: Codable, Identifiable, Equatable {
             style.top = 2; style.bottom = 2
         case .plain:
             style.color = hex(0.45, 0.12, 0.13); style.top = 0; style.bottom = 0
+        case .tripart:
+            style.color = hex(0.80, 0.42, 0.18); style.accent = hex(0.96, 0.93, 0.85)
+            style.top = 0; style.bottom = 0; style.panel = 3
+        case .ribbed:
+            style.color = hex(0.30, 0.16, 0.10); style.accent = hex(0.88, 0.73, 0.44); style.text = hex(0.88, 0.73, 0.44)
+            style.top = 5; style.bottom = 6
+        case .inkwash:
+            style.color = hex(0.94, 0.90, 0.81); style.accent = hex(0.20, 0.15, 0.11); style.text = hex(0.20, 0.15, 0.11)
+            style.top = 0; style.bottom = 3; style.panel = 5
+        case .framed:
+            style.color = hex(0.12, 0.19, 0.35); style.accent = hex(0.93, 0.88, 0.76)
+            style.top = 2; style.bottom = 2; style.panel = 2
         default:
             break
         }
@@ -3911,6 +3931,8 @@ private struct BookshelfFolderBox: View {
     let folder: BookshelfFolder
     let books: [Book]
     let style: BookshelfShelfStyle
+    /// 被轻点「抽出」时才显示旋转按钮（和书一样：第一下抽出、出现按钮，再点一下打开）。
+    var isSelected = false
     let onRotate: () -> Void
     @ObservedObject private var dress = BookshelfSpineDesignStore.shared
 
@@ -3966,14 +3988,16 @@ private struct BookshelfFolderBox: View {
                 LinearGradient(colors: [Color.clear, Color.black.opacity(0.35)], startPoint: .leading, endPoint: .trailing)
                     .frame(width: 5)
             }
-            // 顶部标签：文件夹名（自定义装扮可改成别的文字）
+            // 顶部标签：文件夹名（自定义装扮可改成别的文字），在书匣上左右居中
+            // （旋转按钮只在抽出时出现、放在书匣正中，不再占用标签右边的位置）。
             Text(skin.title ?? folder.name)
                 .font(AppFontStyle.system(size: 8, weight: .semibold).themed)
                 .foregroundStyle(colors.label)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-                .frame(width: max(size.width - 32, 12), height: Self.topLabel)
-                .offset(x: 5)
+                .multilineTextAlignment(.center)
+                .frame(width: max(size.width - 12, 12), height: Self.topLabel, alignment: .center)
+                .offset(x: 6)
             // 窗口：里面立着文件夹里的书；封闭书匣在中间放一块竖排名牌；小窗只露出书的下半截。
             if skin.windowStyle == 1 {
                 let plateWidth = min(max(size.width * 0.42, 14), 26)
@@ -4029,25 +4053,29 @@ private struct BookshelfFolderBox: View {
                 .offset(x: 5, y: size.height - Self.bottomLabel)
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .overlay(alignment: .topTrailing) {
-            // 旋转按钮整块放在文件夹外框之内：之前按钮向外偏移，超出外框的部分
-            // 会被外框的点击形状裁掉、被相邻的书盖住，导致大多数时候点不中。
-            Image(systemName: "arrow.triangle.2.circlepath")
-                .font(AppFontStyle.system(size: 7.5, weight: .bold).themed)
-                .foregroundStyle(colors.label)
-                .frame(width: 15, height: 15)
-                .background(Color.black.opacity(0.4), in: Circle())
-                .overlay(Circle().strokeBorder(colors.label.opacity(0.35), lineWidth: 0.5))
-                .opacity(style.hideRotateButtons ? 0.011 : 1)
-                .padding(.top, 2)
-                .padding(.trailing, 2)
-                .frame(width: Self.rotateHitWidth, height: Self.rotateHitHeight, alignment: .topTrailing)
-                .contentShape(Rectangle())
-                .highPriorityGesture(TapGesture().onEnded { onRotate() })
-                .accessibilityElement()
-                .accessibilityLabel("修改文件夹摆放形态与样式")
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { onRotate() }
+        .overlay {
+            // 抽出时书匣正中浮出旋转按钮（和书一样），整块点击区域在外框之内。
+            if isSelected {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(AppFontStyle.system(size: 10, weight: .semibold).themed)
+                    .foregroundStyle(Color.white)
+                    .frame(width: 24, height: 24)
+                    .background(Color.black.opacity(0.6), in: Circle())
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.5), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.3), radius: 2, y: 1)
+                    .opacity(style.hideRotateButtons ? 0.011 : 1)
+                    .frame(width: min(size.width, 44), height: min(size.height * 0.4, 44))
+                    .contentShape(Rectangle())
+                    .highPriorityGesture(TapGesture().onEnded {
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        onRotate()
+                    })
+                    .transition(.opacity.combined(with: .scale(scale: 0.6)))
+                    .accessibilityElement()
+                    .accessibilityLabel("修改文件夹摆放形态")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { onRotate() }
+            }
         }
         .shadow(color: .black.opacity(0.22), radius: 2, x: 1, y: 1)
         .contentShape(Rectangle())
@@ -4158,6 +4186,8 @@ private struct BookshelfShelfView: View {
     @State private var poses: [String: Int] = BookshelfShelfPose.load()
     /// 文件夹上的旋转按钮打开的摆放形态选择条。
     @State private var folderPickerID: String?
+    /// 被轻点「抽出」的文件夹：向外倾出、正中浮出旋转按钮，再点一下才打开。
+    @State private var selectedFolderID: String?
     @State private var order: [String] = BookshelfShelfOrder.load()
     @State private var perches: [String: String] = ShelfOrnamentPerches.load()
     @State private var selectedURL: String?
@@ -4307,9 +4337,29 @@ private struct BookshelfShelfView: View {
                 }
                 let key = entry.item.poseKey ?? ""
                 var pose = requestedPose(key: key)
-                // 一层最边上的书没有东西可靠：改靠向另一侧；这一层只有它一件时竖立。
-                if pose == .leanLeft && position == 0 { pose = entries.count > 1 ? .leanRight : .upright }
-                if pose == .leanRight && position == entries.count - 1 { pose = entries.count > 1 ? .leanLeft : .upright }
+                // 一层最左边左倾、最右边右倾：靠在书架的侧板上（之前会被改成另一个方向，
+                // 看起来点了「右倾」没反应）。右边侧板放不下时才竖立。
+                let leansOnLeftWall = pose == .leanLeft && position == 0
+                let leansOnRightWall = pose == .leanRight && position == entries.count - 1
+                if leansOnRightWall {
+                    let pivot = contentWidth - h * sin(t) - 1
+                    let left = pivot - w * cos(t)
+                    let minLeft = previous.map { leftEdgeAfter($0, objectHeight: h * cos(t)) } ?? 0
+                    if left >= minLeft {
+                        result.append(.init(item: entry.item, index: entry.index, pose: .leanRight,
+                                            boxX: pivot - w, boxSize: CGSize(width: w, height: h),
+                                            boardMinX: left, boardMaxX: pivot, height: h * cos(t), pivotX: pivot))
+                        continue
+                    }
+                    pose = .upright
+                }
+                if leansOnLeftWall {
+                    let pivot = h * sin(t) + 1
+                    result.append(.init(item: entry.item, index: entry.index, pose: .leanLeft,
+                                        boxX: pivot, boxSize: CGSize(width: w, height: h),
+                                        boardMinX: pivot, boardMaxX: pivot + w * cos(t), height: h * cos(t), pivotX: pivot))
+                    continue
+                }
                 switch pose {
                 case .upright:
                     let left = previous.map { leftEdgeAfter($0, objectHeight: h) } ?? 0
@@ -4435,6 +4485,8 @@ private struct BookshelfShelfView: View {
         .onDisappear {
             selectedURL = nil
             showsPicker = false
+            selectedFolderID = nil
+            folderPickerID = nil
         }
         .sheet(item: $editingOrnament) { ornament in
             ShelfOrnamentSettingsSheet(ornamentID: ornament.id)
@@ -4449,7 +4501,8 @@ private struct BookshelfShelfView: View {
     }
 
     private func isRaised(_ placement: BookshelfShelfPlacement, perched: [String: [(ShelfOrnament, CGSize)]]) -> Bool {
-        if placement.id == draggingID || placement.id == "b:" + (selectedURL ?? "") { return true }
+        if placement.id == draggingID || placement.id == "b:" + (selectedURL ?? "")
+            || placement.id == "f:" + (selectedFolderID ?? "") { return true }
         if let key = placement.item.poseKey, let list = perched[key] {
             return list.contains { "o:" + $0.0.id == draggingID }
         }
@@ -4461,10 +4514,11 @@ private struct BookshelfShelfView: View {
             selectedURL = nil
             showsPicker = false
             folderPickerID = nil
+            selectedFolderID = nil
         }
     }
 
-    private var hasSelection: Bool { selectedURL != nil || folderPickerID != nil }
+    private var hasSelection: Bool { selectedURL != nil || folderPickerID != nil || selectedFolderID != nil }
 
     private func shelfRow(_ row: [BookshelfShelfPlacement], rowIndex: Int, rows: [[BookshelfShelfPlacement]],
                           perched: [String: [(ShelfOrnament, CGSize)]]) -> some View {
@@ -4475,7 +4529,8 @@ private struct BookshelfShelfView: View {
                     .onTapGesture { if hasSelection { deselect() } }
                 ForEach(row) { placement in
                     placementView(placement, rows: rows)
-                        .zIndex(placement.id == draggingID ? 3 : (placement.id == "b:" + (selectedURL ?? "") ? 2 : 0))
+                        .zIndex(placement.id == draggingID ? 3
+                                : (placement.id == "b:" + (selectedURL ?? "") || placement.id == "f:" + (selectedFolderID ?? "") ? 2 : 0))
                     if let key = placement.item.poseKey, let list = perched[key] {
                         ForEach(Array(list.enumerated()), id: \.offset) { position, perch in
                             perchedOrnamentView(perch.0, size: perch.1, on: placement,
@@ -4598,6 +4653,7 @@ private struct BookshelfShelfView: View {
                         selectedURL = nil
                         showsPicker = false
                         folderPickerID = nil
+                        selectedFolderID = nil
                         draggingID = id
                     }
                     insertionIndex = nil
@@ -4803,45 +4859,64 @@ private struct BookshelfShelfView: View {
     private func folderView<G: Gesture>(_ folder: BookshelfFolder, books inside: [Book], pose: BookshelfShelfPose,
                                         drag: G) -> some View {
         let size = BookshelfFolderBox.size(count: inside.count, style: style)
-        let box = BookshelfFolderBox(folder: folder, books: inside, style: style) {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let isSelected = selectedFolderID == folder.id
+        let pull: CGFloat = isSelected ? 1 : 0
+        let box = BookshelfFolderBox(folder: folder, books: inside, style: style, isSelected: isSelected) {
             withAnimation(.easeOut(duration: 0.18)) {
                 selectedURL = nil
                 showsPicker = false
                 folderPickerID = folderPickerID == folder.id ? nil : folder.id
             }
         }
+        // 抽出：书匣顶部朝读者倾出来（绕底边前倾）、稍微放大往前挪，底下一圈投影，和抽书的感觉一致。
+        let pulled = box
+            .rotation3DEffect(.degrees(Double(-14 * pull)), axis: (x: 1, y: 0, z: 0), anchor: .bottom, perspective: 0.45)
+            .scaleEffect(1 + 0.03 * pull, anchor: .bottom)
+            .shadow(color: .black.opacity(0.3 * pull), radius: 4 * pull, x: 0, y: 3 * pull)
         return Group {
             switch pose {
             case .upright:
-                box
+                pulled
             case .flat:
                 // 平躺：盒子侧放，长边贴着层板。
                 box
                     .frame(width: size.width, height: size.height)
                     .rotationEffect(.degrees(-90))
                     .frame(width: size.height, height: size.width)
+                    .scaleEffect(1 + 0.04 * pull, anchor: .bottom)
+                    .shadow(color: .black.opacity(0.3 * pull), radius: 4 * pull, x: 0, y: 3 * pull)
+                    .offset(y: 3 * pull)
             case .leanLeft:
-                box.rotationEffect(.degrees(-BookshelfSpine.leanAngle), anchor: .bottomLeading)
+                pulled.rotationEffect(.degrees(-BookshelfSpine.leanAngle), anchor: .bottomLeading)
             case .leanRight:
-                box.rotationEffect(.degrees(BookshelfSpine.leanAngle), anchor: .bottomTrailing)
+                pulled.rotationEffect(.degrees(BookshelfSpine.leanAngle), anchor: .bottomTrailing)
             }
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            if hasSelection {
-                deselect()
-            } else {
+            if isSelected {
+                // 第二下：打开文件夹。
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) {
+                    selectedFolderID = nil
+                    folderPickerID = nil
                     folderStore.presentedFolderID = folder.id
+                }
+            } else {
+                // 第一下：抽出（别的书、文件夹收回），正中出现旋转按钮。
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                withAnimation(.spring(response: 0.42, dampingFraction: 0.84)) {
+                    selectedURL = nil
+                    showsPicker = false
+                    folderPickerID = nil
+                    selectedFolderID = folder.id
                 }
             }
         }
         .gesture(drag)
         .accessibilityLabel("文件夹「\(folder.name)」，\(inside.count) 本书，\(pose.title)")
         .accessibilityAddTraits(.isButton)
-        .accessibilityHint("轻点打开，长按拖动调整位置")
+        .accessibilityHint(isSelected ? "再次轻点打开文件夹" : "轻点抽出，再点一下打开；长按拖动调整位置")
     }
 
     private func spine<G: Gesture>(_ book: Book, pose: BookshelfShelfPose, titleOnTrailing: Bool = false,
@@ -4862,6 +4937,7 @@ private struct BookshelfShelfView: View {
                         selectedURL = book.bookUrl
                         showsPicker = false
                         folderPickerID = nil
+                        selectedFolderID = nil
                     }
                 }
             }
@@ -4963,6 +5039,8 @@ struct BookshelfBoard: View {
 private struct BookshelfPulledFaces: View, Animatable {
     var progress: CGFloat
     let book: Book
+    /// 书自己已经加载好的封面（有就直接用，第一次抽出也不会先闪占位图）。
+    let coverImage: UIImage?
     let width: CGFloat
     let height: CGFloat
     let depth: CGFloat
@@ -4986,8 +5064,17 @@ private struct BookshelfPulledFaces: View, Animatable {
                     BookshelfFace(points: [CGPoint(x: dx * t, y: dy * (1 - t)), CGPoint(x: w + dx * t, y: dy * (1 - t))])
                         .stroke(Color.black.opacity(0.07), lineWidth: 0.5)
                 }
-                BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
-                                 width: max(h * 0.7, depth), height: h)
+                Group {
+                    if let coverImage {
+                        Image(uiImage: coverImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: max(h * 0.7, depth), height: h)
+                    } else {
+                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
+                                         width: max(h * 0.7, depth), height: h)
+                    }
+                }
                     .frame(width: depth, height: h, alignment: .leading)
                     .clipped()
                     .overlay(LinearGradient(colors: [Color.black.opacity(0.32), Color.black.opacity(0.05)],
@@ -5016,6 +5103,28 @@ private struct BookshelfFace: Shape {
 
 /// 书脊的排版：宽高由书架设置决定；书名越长字号越小，单列放不下时分两列；作者竖排在底部。
 /// 书脊 / 书匣上的纹理：1 竖条纹，2 格纹，3 圆点，4 斜纹布。
+/// 水墨装帧底部的远山：几道起伏的山脊，下沿填满。
+struct ShelfHillsShape: Shape {
+    var flipped = false
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let w = rect.width, h = rect.height
+        let peaks: [(CGFloat, CGFloat)] = flipped
+            ? [(0, 0.55), (0.3, 0.05), (0.62, 0.6), (0.85, 0.2), (1, 0.45)]
+            : [(0, 0.3), (0.22, 0.65), (0.5, 0.0), (0.78, 0.5), (1, 0.15)]
+        path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + peaks[0].1 * h))
+        for index in 1..<peaks.count {
+            let prev = peaks[index - 1], next = peaks[index]
+            let control = CGPoint(x: rect.minX + (prev.0 + next.0) / 2 * w, y: rect.minY + min(prev.1, next.1) * h)
+            path.addQuadCurve(to: CGPoint(x: rect.minX + next.0 * w, y: rect.minY + next.1 * h), control: control)
+        }
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
 struct ShelfPatternView: View {
     let kind: Int
     let color: Color
@@ -5047,6 +5156,22 @@ struct ShelfPatternView: View {
                     path.move(to: CGPoint(x: 0, y: start))
                     path.addLine(to: CGPoint(x: size.width, y: start + size.width))
                     start += 3.5
+                }
+                context.stroke(path, with: .color(color), lineWidth: 0.5)
+                return
+            case 5:
+                // 横纹：细横线，像布面书的纹理。
+                var y: CGFloat = 1.5
+                while y < size.height { path.addRect(CGRect(x: 0, y: y, width: size.width, height: 0.5)); y += 3 }
+            case 6:
+                // 菱格：两组斜线交叉。
+                var start: CGFloat = -size.width
+                while start < size.height {
+                    path.move(to: CGPoint(x: 0, y: start))
+                    path.addLine(to: CGPoint(x: size.width, y: start + size.width))
+                    path.move(to: CGPoint(x: 0, y: start + size.width))
+                    path.addLine(to: CGPoint(x: size.width, y: start))
+                    start += 6
                 }
                 context.stroke(path, with: .color(color), lineWidth: 0.5)
                 return
@@ -5352,12 +5477,28 @@ private struct BookshelfSpine: View {
         return 0.299 * r + 0.587 * g + 0.114 * b > 0.62
     }
 
+    private static func luminance(_ color: UIColor) -> CGFloat {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        return 0.299 * r + 0.587 * g + 0.114 * b
+    }
+
+    /// 调亮度（倍数），用于封面书脊的渐变底。
+    private static func shade(_ color: UIColor, _ factor: CGFloat) -> Color {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard color.getHue(&h, saturation: &s, brightness: &b, alpha: &a) else { return Color(color) }
+        return Color(UIColor(hue: h, saturation: s, brightness: min(max(b * factor, 0), 1), alpha: 1))
+    }
+
+    private static let cream = Color(red: 0.95, green: 0.91, blue: 0.80)
+
     private var textColor: Color {
         if design != .cover, let customText { return customText }
         switch design {
-        case .cover: return Color.white
-        case .thread: return Self.ink
-        case .gilded: return Self.gold
+        case .cover: return isLight ? Color(white: 0.12) : Color.white.opacity(0.95)
+        case .thread, .inkwash, .tripart: return Self.ink
+        case .gilded, .ribbed: return Self.gold
+        case .framed: return isLight ? Self.ink : Self.cream
         default: return isLight ? Color(white: 0.13) : Color.white.opacity(0.94)
         }
     }
@@ -5367,11 +5508,11 @@ private struct BookshelfSpine: View {
     private static let gold = Color(red: 0.88, green: 0.73, blue: 0.44)
     private static let seal = Color(red: 0.72, green: 0.16, blue: 0.13)
 
-    /// 书脊的底：线装是宣纸色，烫金把底色压暗，其他用底色。
+    /// 书脊的底：线装、水墨是宣纸色，烫金、竹节把底色压暗（像皮面），其他用底色。
     private var fillColor: Color {
         switch design {
-        case .thread: return Self.paper
-        case .gilded:
+        case .thread, .inkwash: return Self.paper
+        case .gilded, .ribbed:
             var h: CGFloat = 0, sat: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             baseColor.getHue(&h, saturation: &sat, brightness: &b, alpha: &a)
             return Color(UIColor(hue: h, saturation: min(sat * 1.1, 1), brightness: min(b * 0.62, 0.42), alpha: 1))
@@ -5399,7 +5540,7 @@ private struct BookshelfSpine: View {
     /// 书脊正面：按装帧样式画底色、装饰（色带、标签、线装针脚、印章、烫金线），再排书名和作者。
     private var uprightFront: some View { spineFace(showsTitle: !style.hideTitles) }
 
-    /// 竖立的书脊正面；平躺时把它整个转过来用，花纹和竖立时一样（书名另外横排）。
+    /// 竖立的书脊正面；平躺时把它整个转过来用，花纹、书名作者和竖立时一样。
     private func spineFace(showsTitle: Bool) -> some View {
         let w = style.bookWidth, h = style.bookHeight
         return ZStack(alignment: .topLeading) {
@@ -5413,7 +5554,7 @@ private struct BookshelfSpine: View {
                 titleBlock(width: w, height: h)
             }
             // 圆脊明暗与顶端一道细高光，书脊看起来有弧度、有厚度。
-            roundShading.opacity(design == .thread ? 0.55 : 1)
+            roundShading.opacity(design == .thread || design == .inkwash ? 0.55 : 1)
                 .allowsHitTesting(false)
             VStack(spacing: 0) {
                 Rectangle().fill(Color.white.opacity(0.22)).frame(height: 0.6)
@@ -5426,27 +5567,65 @@ private struct BookshelfSpine: View {
         .clipShape(RoundedRectangle(cornerRadius: min(2, w * 0.08), style: .continuous))
     }
 
-    /// 封面书脊：取封面靠左的一条，模糊处理——保留封面的颜色和图案氛围，
-    /// 封面上原有的文字糊成色块、不再和书脊书名打架；再压一层暗色让书名清楚。
+    /// 封面书脊顶部那张小封面的位置。
+    private func coverThumbRect(width w: CGFloat, height h: CGFloat) -> CGRect {
+        let inset = min(max(w * 0.1, 2), 4)
+        let tw = max(w - inset * 2, 4)
+        let th = min(tw / 0.72, h * 0.27)
+        return CGRect(x: inset, y: inset + 1, width: tw, height: th)
+    }
+
+    /// 封面书脊（重新设计，不再模糊）：底色取封面主色做上亮下暗的渐变，
+    /// 顶部嵌一张清晰的完整小封面（带细白边和投影，像书脊上的封面贴标），书名作者印在下面的纯色区，
+    /// 字号和之前封面书脊一样大，不会和封面上的字叠在一起。
     @ViewBuilder private func coverArt(width w: CGFloat, height h: CGFloat) -> some View {
-        if let coverImage {
-            ZStack {
-                Image(uiImage: coverImage)
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: max(h * 0.7, w), height: h)
-                    .frame(width: w, height: h, alignment: .leading)
-                    .clipped()
-                    .blur(radius: min(max(w * 0.16, 3), 6), opaque: true)
-                    .saturation(1.1)
-                LinearGradient(colors: [Color.black.opacity(0.18), Color.black.opacity(0.32)],
-                               startPoint: .top, endPoint: .bottom)
+        let r = coverThumbRect(width: w, height: h)
+        ZStack(alignment: .topLeading) {
+            LinearGradient(colors: [Self.shade(baseColor, 1.15), Color(baseColor), Self.shade(baseColor, 0.78)],
+                           startPoint: .top, endPoint: .bottom)
+            Group {
+                if let coverImage {
+                    Image(uiImage: coverImage)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Color.white.opacity(0.14)
+                }
             }
-            .frame(width: w, height: h)
-            .clipped()
-        } else {
-            fillColor
+            .frame(width: r.width, height: r.height)
+            .clipShape(RoundedRectangle(cornerRadius: 1.5, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.45), lineWidth: 0.5))
+            .shadow(color: .black.opacity(0.35), radius: 1, y: 0.6)
+            .offset(x: r.minX, y: r.minY)
+            Rectangle()
+                .fill(textColor.opacity(0.35))
+                .frame(width: r.width * 0.5, height: 0.6)
+                .offset(x: r.minX + r.width * 0.25, y: r.maxY + 3)
         }
+        .frame(width: w, height: h, alignment: .topLeading)
+        .clipped()
+    }
+
+    /// 一道竹节横棱（皮面书脊上凸起的横带）：上亮下暗。
+    private func rib(width: CGFloat) -> some View {
+        LinearGradient(colors: [Color.white.opacity(0.32), Color.black.opacity(0.05), Color.black.opacity(0.45)],
+                       startPoint: .top, endPoint: .bottom)
+            .frame(width: width, height: 3.5)
+    }
+
+    private func diamond(_ color: Color, size: CGFloat) -> some View {
+        Rectangle().fill(color)
+            .frame(width: size, height: size)
+            .rotationEffect(.degrees(45))
+            .frame(width: size * 1.42, height: size * 1.42)
+    }
+
+    private func sealView(size: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: 1, style: .continuous)
+            .fill(Self.seal)
+            .overlay(RoundedRectangle(cornerRadius: 0.5).strokeBorder(Color.white.opacity(0.7), lineWidth: 0.5).padding(1.2))
+            .frame(width: size, height: size)
     }
 
     /// 各装帧样式的装饰。
@@ -5468,18 +5647,12 @@ private struct BookshelfSpine: View {
             }
             .frame(width: w, height: h, alignment: .top)
         case .label:
-            // 中间一块浅色书签纸，书名印在纸上；顶部一小条标签。
-            let paperTop = h * 0.16, paperBottom = h * 0.82
+            // 顶部一小条标签、底部小圆点；书签纸贴着书名长短伸缩（在书名区里画）。
             ZStack(alignment: .top) {
                 Capsule()
                     .fill(Color.white.opacity(0.8))
                     .frame(width: w * 0.46, height: max(h * 0.035, 4))
                     .offset(y: h * 0.07)
-                RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                    .fill(Color(red: 0.96, green: 0.95, blue: 0.92))
-                    .frame(width: w * 0.84, height: paperBottom - paperTop)
-                    .shadow(color: .black.opacity(0.18), radius: 0.6, y: 0.4)
-                    .offset(y: paperTop)
                 Circle()
                     .fill(Color.white.opacity(0.85))
                     .frame(width: min(max(w * 0.14, 3), 4.5), height: min(max(w * 0.14, 3), 4.5))
@@ -5487,36 +5660,9 @@ private struct BookshelfSpine: View {
             }
             .frame(width: w, height: h, alignment: .top)
         case .thread:
-            // 线装：左侧一条装订布边和白色针脚，上下细双线，底部朱红印章。
-            let edge = max(w * 0.15, 2.5)
-            ZStack(alignment: .topLeading) {
-                Rectangle().fill(Color(baseColor)).frame(width: edge, height: h)
-                ForEach(0..<5, id: \.self) { i in
-                    Rectangle()
-                        .fill(Color.white.opacity(0.85))
-                        .frame(width: edge + 1.5, height: 0.8)
-                        .offset(y: h * (0.1 + CGFloat(i) * 0.2))
-                }
-                VStack(spacing: 0) {
-                    VStack(spacing: 1.5) {
-                        Rectangle().fill(Self.ink.opacity(0.35)).frame(height: 0.5)
-                        Rectangle().fill(Self.ink.opacity(0.35)).frame(height: 0.5)
-                    }
-                    .padding(.top, h * 0.045)
-                    Spacer(minLength: 0)
-                    let sealSize = min(max(w * 0.38, 5), 10)
-                    RoundedRectangle(cornerRadius: 1, style: .continuous)
-                        .fill(Self.seal)
-                        .overlay(RoundedRectangle(cornerRadius: 0.5).strokeBorder(Color.white.opacity(0.7), lineWidth: 0.5).padding(1.2))
-                        .frame(width: sealSize, height: sealSize)
-                        .padding(.bottom, h * 0.06)
-                }
-                .padding(.leading, edge + 1)
-                .frame(width: w, height: h)
-            }
-            .frame(width: w, height: h, alignment: .topLeading)
+            threadDecorations(width: w, height: h)
         case .gilded:
-            // 烫金：上下两组金色饰线，中间偏下一枚菱形。
+            // 烫金：上下两组金色饰线。
             let gold = Self.gold
             VStack(spacing: 0) {
                 VStack(spacing: 2) {
@@ -5532,6 +5678,14 @@ private struct BookshelfSpine: View {
                 .padding(.bottom, h * 0.05)
             }
             .frame(width: w, height: h)
+        case .tripart:
+            tripartDecorations(width: w, height: h)
+        case .ribbed:
+            ribbedDecorations(width: w, height: h)
+        case .inkwash:
+            inkwashDecorations(width: w, height: h)
+        case .framed:
+            framedDecorations(width: w, height: h)
         case .plain:
             EmptyView()
         case .custom:
@@ -5541,15 +5695,113 @@ private struct BookshelfSpine: View {
         }
     }
 
-    /// 自定义装帧：纹理、布边、顶部、书名区、底部按部件组合。
+    private func threadDecorations(width w: CGFloat, height h: CGFloat) -> some View {
+        // 线装：左侧一条装订布边和白色针脚，上下细双线，底部朱红印章。
+        let edge = max(w * 0.15, 2.5)
+        return ZStack(alignment: .topLeading) {
+            Rectangle().fill(Color(baseColor)).frame(width: edge, height: h)
+            ForEach(0..<5, id: \.self) { i in
+                Rectangle()
+                    .fill(Color.white.opacity(0.85))
+                    .frame(width: edge + 1.5, height: 0.8)
+                    .offset(y: h * (0.1 + CGFloat(i) * 0.2))
+            }
+            VStack(spacing: 0) {
+                VStack(spacing: 1.5) {
+                    Rectangle().fill(Self.ink.opacity(0.35)).frame(height: 0.5)
+                    Rectangle().fill(Self.ink.opacity(0.35)).frame(height: 0.5)
+                }
+                .padding(.top, h * 0.045)
+                Spacer(minLength: 0)
+                sealView(size: min(max(w * 0.38, 5), 10))
+                    .padding(.bottom, h * 0.06)
+            }
+            .padding(.leading, edge + 1)
+            .frame(width: w, height: h)
+        }
+        .frame(width: w, height: h, alignment: .topLeading)
+    }
+
+    /// 三段：上下保留底色，中间一条米色书名带（像经典文库本）。
+    private func tripartDecorations(width w: CGFloat, height h: CGFloat) -> some View {
+        let ring = min(max(w * 0.34, 5), 10)
+        return ZStack(alignment: .top) {
+            Rectangle()
+                .fill(Self.paper)
+                .frame(width: w, height: h * 0.66)
+                .overlay(alignment: .top) { Rectangle().fill(Color.black.opacity(0.2)).frame(height: 0.6) }
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.2)).frame(height: 0.6) }
+                .offset(y: h * 0.17)
+            Circle()
+                .strokeBorder(Color.white.opacity(0.85), lineWidth: 0.8)
+                .frame(width: ring, height: ring)
+                .offset(y: max(h * 0.085 - ring / 2, 2))
+            Capsule()
+                .fill(Color.white.opacity(0.75))
+                .frame(width: w * 0.4, height: 1.2)
+                .offset(y: h * 0.915)
+        }
+        .frame(width: w, height: h, alignment: .top)
+    }
+
+    /// 竹节：皮面书脊上下各两道凸起的横棱，最上、最下一道金线，顶部一枚金色菱形。
+    private func ribbedDecorations(width w: CGFloat, height h: CGFloat) -> some View {
+        let d = min(max(w * 0.2, 3), 5)
+        return ZStack(alignment: .top) {
+            Rectangle().fill(Self.gold.opacity(0.85)).frame(width: w, height: 0.6).offset(y: h * 0.03)
+            diamond(Self.gold, size: d).offset(y: h * 0.055)
+            rib(width: w).offset(y: h * 0.10)
+            rib(width: w).offset(y: h * 0.15)
+            rib(width: w).offset(y: h * 0.82)
+            rib(width: w).offset(y: h * 0.87)
+            Rectangle().fill(Self.gold.opacity(0.85)).frame(width: w, height: 0.6).offset(y: h * 0.96)
+        }
+        .frame(width: w, height: h, alignment: .top)
+    }
+
+    /// 水墨：宣纸底，顶部一枚小朱印，底部淡墨晕染 + 远山。
+    private func inkwashDecorations(width w: CGFloat, height h: CGFloat) -> some View {
+        let wash = isLight ? Self.ink : Color(baseColor)
+        let sealSize = min(max(w * 0.3, 4.5), 8)
+        return ZStack(alignment: .top) {
+            sealView(size: sealSize).offset(y: h * 0.04)
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                ZStack(alignment: .bottom) {
+                    LinearGradient(colors: [wash.opacity(0), wash.opacity(0.35)], startPoint: .top, endPoint: .bottom)
+                    ShelfHillsShape().fill(wash.opacity(0.55)).frame(height: h * 0.15)
+                    ShelfHillsShape(flipped: true).fill(wash.opacity(0.8)).frame(height: h * 0.09)
+                }
+                .frame(width: w, height: h * 0.3)
+            }
+            .frame(width: w, height: h)
+        }
+        .frame(width: w, height: h, alignment: .top)
+    }
+
+    /// 双框：通身一粗一细两道框线，顶部、底部各一枚小菱形。
+    private func framedDecorations(width w: CGFloat, height h: CGFloat) -> some View {
+        let line = textColor
+        let d = min(max(w * 0.16, 2.5), 4)
+        return ZStack(alignment: .top) {
+            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                .strokeBorder(line.opacity(0.85), lineWidth: 0.8)
+                .padding(1.5)
+            RoundedRectangle(cornerRadius: 0.5, style: .continuous)
+                .strokeBorder(line.opacity(0.6), lineWidth: 0.4)
+                .padding(3.2)
+            diamond(line.opacity(0.85), size: d).offset(y: h * 0.035)
+            diamond(line.opacity(0.85), size: d).offset(y: h * 0.965 - d * 1.42)
+        }
+        .frame(width: w, height: h, alignment: .top)
+    }
+
+    /// 自定义装帧：纹理、布边、顶部、底部按部件组合（书名区在书名排版里画，贴着书名伸缩）。
     @ViewBuilder private func customDecorations(width w: CGFloat, height h: CGFloat) -> some View {
         if let p = parts {
             let accent = accentColor
             let edge: CGFloat = (p.edge ?? 0) == 1 ? max(w * 0.15, 2.5) : 0
             let inner = w - edge
-            let band = max(h * 0.075, 8)
-            let dot = min(max(w * 0.16, 3), 5)
-            let sealSize = min(max(w * 0.38, 5), 10)
             ZStack(alignment: .topLeading) {
                 ShelfPatternView(kind: p.texture ?? 0, color: textColor.opacity(0.14))
                     .frame(width: w, height: h)
@@ -5562,165 +5814,301 @@ private struct BookshelfSpine: View {
                             .offset(y: h * (0.1 + CGFloat(i) * 0.2))
                     }
                 }
-                switch p.top ?? 0 {
-                case 1:
-                    Rectangle().fill(accent)
-                        .frame(width: inner, height: band)
-                        .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.15)).frame(height: 0.5) }
-                        .offset(x: edge, y: h * 0.06)
-                case 2:
-                    VStack(spacing: 2) {
-                        Rectangle().fill(accent).frame(height: 1.2)
-                        Rectangle().fill(accent.opacity(0.8)).frame(height: 0.5)
-                    }
-                    .frame(width: inner)
-                    .offset(x: edge, y: h * 0.05)
-                case 3:
-                    Rectangle().fill(accent).frame(width: inner, height: h * 0.12).offset(x: edge)
-                default:
-                    EmptyView()
-                }
-                switch p.panel ?? 0 {
-                case 1:
-                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .fill(Color(red: 0.96, green: 0.95, blue: 0.92))
-                        .shadow(color: .black.opacity(0.18), radius: 0.6, y: 0.4)
-                        .frame(width: inner * 0.84, height: h * 0.66)
-                        .offset(x: edge + inner * 0.08, y: h * 0.16)
-                case 2:
-                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .strokeBorder(accent, lineWidth: 0.8)
-                        .frame(width: inner * 0.84, height: h * 0.66)
-                        .offset(x: edge + inner * 0.08, y: h * 0.16)
-                default:
-                    EmptyView()
-                }
-                switch p.bottom ?? 0 {
-                case 1:
-                    Circle().fill(accent)
-                        .frame(width: dot, height: dot)
-                        .offset(x: edge + (inner - dot) / 2, y: h * 0.91)
-                case 2:
-                    VStack(spacing: 2) {
-                        Rectangle().fill(accent.opacity(0.8)).frame(height: 0.5)
-                        Rectangle().fill(accent).frame(height: 1.2)
-                    }
-                    .frame(width: inner)
-                    .offset(x: edge, y: h * 0.95 - 3.7)
-                case 3:
-                    RoundedRectangle(cornerRadius: 1, style: .continuous)
-                        .fill(Self.seal)
-                        .overlay(RoundedRectangle(cornerRadius: 0.5).strokeBorder(Color.white.opacity(0.7), lineWidth: 0.5).padding(1.2))
-                        .frame(width: sealSize, height: sealSize)
-                        .offset(x: edge + (inner - sealSize) / 2, y: h * 0.94 - sealSize)
-                case 4:
-                    Rectangle().fill(accent).frame(width: inner, height: h * 0.12).offset(x: edge, y: h * 0.88)
-                default:
-                    EmptyView()
-                }
+                customTop(p.top ?? 0, accent: accent, edge: edge, inner: inner, height: h)
+                customBottom(p.bottom ?? 0, accent: accent, edge: edge, inner: inner, width: w, height: h)
             }
             .frame(width: w, height: h, alignment: .topLeading)
         }
     }
 
-    /// 书名区的位置：上下留白、左边让出的宽度、书名区宽度、文字颜色（竖立时）。
-    private func titleMetrics(width w: CGFloat, height h: CGFloat)
-        -> (top: CGFloat, bottom: CGFloat, leading: CGFloat, width: CGFloat, color: Color) {
+    private func customDiamondSize(inner: CGFloat) -> CGFloat { min(max(inner * 0.24, 3), 5.5) }
+
+    @ViewBuilder private func customTop(_ kind: Int, accent: Color, edge: CGFloat, inner: CGFloat, height h: CGFloat) -> some View {
+        let band = max(h * 0.075, 8)
+        switch kind {
+        case 1:
+            Rectangle().fill(accent)
+                .frame(width: inner, height: band)
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.15)).frame(height: 0.5) }
+                .offset(x: edge, y: h * 0.06)
+        case 2:
+            VStack(spacing: 2) {
+                Rectangle().fill(accent).frame(height: 1.2)
+                Rectangle().fill(accent.opacity(0.8)).frame(height: 0.5)
+            }
+            .frame(width: inner)
+            .offset(x: edge, y: h * 0.05)
+        case 3:
+            Rectangle().fill(accent).frame(width: inner, height: h * 0.12).offset(x: edge)
+        case 4:
+            let d = customDiamondSize(inner: inner)
+            diamond(accent, size: d).offset(x: edge + (inner - d * 1.42) / 2, y: h * 0.05)
+        case 5:
+            ZStack(alignment: .topLeading) {
+                rib(width: inner).offset(y: h * 0.10)
+                rib(width: inner).offset(y: h * 0.15)
+            }
+            .offset(x: edge)
+        default:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder private func customBottom(_ kind: Int, accent: Color, edge: CGFloat, inner: CGFloat,
+                                           width w: CGFloat, height h: CGFloat) -> some View {
+        let dot = min(max(w * 0.16, 3), 5)
+        let sealSize = min(max(w * 0.38, 5), 10)
+        switch kind {
+        case 1:
+            Circle().fill(accent)
+                .frame(width: dot, height: dot)
+                .offset(x: edge + (inner - dot) / 2, y: h * 0.91)
+        case 2:
+            VStack(spacing: 2) {
+                Rectangle().fill(accent.opacity(0.8)).frame(height: 0.5)
+                Rectangle().fill(accent).frame(height: 1.2)
+            }
+            .frame(width: inner)
+            .offset(x: edge, y: h * 0.95 - 3.7)
+        case 3:
+            sealView(size: sealSize)
+                .offset(x: edge + (inner - sealSize) / 2, y: h * 0.94 - sealSize)
+        case 4:
+            Rectangle().fill(accent).frame(width: inner, height: h * 0.12).offset(x: edge, y: h * 0.88)
+        case 5:
+            let d = customDiamondSize(inner: inner)
+            diamond(accent, size: d).offset(x: edge + (inner - d * 1.42) / 2, y: h * 0.95 - d * 1.42)
+        case 6:
+            ZStack(alignment: .topLeading) {
+                rib(width: inner).offset(y: h * 0.80)
+                rib(width: inner).offset(y: h * 0.85)
+            }
+            .offset(x: edge)
+        default:
+            EmptyView()
+        }
+    }
+
+    /// 书名区：top/bottom 上下留白，leading/width 书名文字所在的范围；
+    /// panel 书名底衬（0 无，1 书签纸，2 描边框，3 通栏色带，4 胶囊，5 上下饰线），
+    /// 底衬左右比文字多出 padH、上下多出 padV，高度贴着书名的长短。
+    private struct TitleMetrics {
+        var top: CGFloat
+        var bottom: CGFloat
+        var leading: CGFloat
+        var width: CGFloat
+        var color: Color
+        var panel: Int = 0
+        var panelColor: Color = .clear
+        var padH: CGFloat = 0
+        var padV: CGFloat = 0
+    }
+
+    /// 给书名加底衬：在给定的文字范围（leading/width）上让出底衬的边距。
+    private func withPanel(_ m: TitleMetrics, kind: Int, color panelColor: Color, textColor: Color,
+                           areaLeading: CGFloat, areaWidth: CGFloat) -> TitleMetrics {
+        guard kind != 0 else { return m }
+        var result = m
+        let padH: CGFloat
+        switch kind {
+        case 1, 2: padH = max(areaWidth * 0.07, 2)
+        case 4: padH = max(areaWidth * 0.1, 2.5)
+        default: padH = 0
+        }
+        let padV: CGFloat = kind == 4 ? max(areaWidth * 0.32, 4) : (kind == 5 ? 5 : 4)
+        result.panel = kind
+        result.panelColor = panelColor
+        result.padH = padH
+        result.padV = padV
+        result.leading = areaLeading + padH + (kind == 3 ? 0 : 0.5)
+        result.width = max(areaWidth - padH * 2 - (kind == 3 ? 0 : 1), 6)
+        result.top = m.top + padV
+        result.bottom = m.bottom + padV
+        result.color = textColor
+        return result
+    }
+
+    private func contrastText(on color: UIColor) -> Color {
+        Self.luminance(color) > 0.6 ? Self.ink : Color.white.opacity(0.95)
+    }
+
+    private func titleMetrics(width w: CGFloat, height h: CGFloat) -> TitleMetrics {
         switch design {
+        case .cover:
+            let r = coverThumbRect(width: w, height: h)
+            return TitleMetrics(top: r.maxY + 8, bottom: h * 0.05 + 6, leading: 0, width: w, color: textColor)
         case .classic:
-            return (h * 0.06 + max(h * 0.075, 8) + 6, h * 0.11, 0, w, textColor)
+            return TitleMetrics(top: h * 0.06 + max(h * 0.075, 8) + 6, bottom: h * 0.11, leading: 0, width: w, color: textColor)
         case .label:
-            return (h * 0.16 + 4, h * 0.18 + 4, w * 0.08, w * 0.84, customText ?? Self.ink)
+            let base = TitleMetrics(top: h * 0.13 + 2, bottom: h * 0.12 + 4, leading: 0, width: w, color: textColor)
+            return withPanel(base, kind: 1, color: Color(red: 0.96, green: 0.95, blue: 0.92),
+                             textColor: customText ?? Self.ink, areaLeading: 0, areaWidth: w)
         case .thread:
             let edge = max(w * 0.15, 2.5)
-            return (h * 0.045 + 8, h * 0.06 + min(max(w * 0.38, 5), 10) + 6, edge + 1, w - edge - 1, textColor)
+            return TitleMetrics(top: h * 0.045 + 8, bottom: h * 0.06 + min(max(w * 0.38, 5), 10) + 6,
+                                leading: edge + 1, width: w - edge - 1, color: textColor)
         case .gilded:
-            return (h * 0.05 + 10, h * 0.05 + 9, 0, w, textColor)
+            return TitleMetrics(top: h * 0.05 + 10, bottom: h * 0.05 + 9, leading: 0, width: w, color: textColor)
+        case .tripart:
+            return TitleMetrics(top: h * 0.17 + 7, bottom: h * 0.17 + 6, leading: 0, width: w, color: textColor)
+        case .ribbed:
+            return TitleMetrics(top: h * 0.15 + 3.5 + 6, bottom: h * 0.18 + 6, leading: 0, width: w, color: textColor)
+        case .inkwash:
+            return TitleMetrics(top: h * 0.04 + min(max(w * 0.3, 4.5), 8) + 6, bottom: h * 0.3 + 2,
+                                leading: 0, width: w, color: textColor)
+        case .framed:
+            return TitleMetrics(top: h * 0.035 + min(max(w * 0.16, 2.5), 4) * 1.42 + 6,
+                                bottom: h * 0.035 + min(max(w * 0.16, 2.5), 4) * 1.42 + 5,
+                                leading: 3.5, width: w - 7, color: textColor)
         case .custom:
-            guard let p = parts else { return (h * 0.05 + 6, h * 0.05 + 6, 0, w, textColor) }
+            guard let p = parts else { return TitleMetrics(top: h * 0.05 + 6, bottom: h * 0.05 + 6, leading: 0, width: w, color: textColor) }
             let edge: CGFloat = (p.edge ?? 0) == 1 ? max(w * 0.15, 2.5) + 1 : 0
             let inner = w - edge
-            var top: CGFloat
+            let d = customDiamondSize(inner: inner) * 1.42
+            let top: CGFloat
             switch p.top ?? 0 {
             case 1: top = h * 0.06 + max(h * 0.075, 8) + 6
             case 2: top = h * 0.05 + 10
             case 3: top = h * 0.12 + 6
+            case 4: top = h * 0.05 + d + 5
+            case 5: top = h * 0.15 + 3.5 + 6
             default: top = h * 0.05 + 6
             }
-            var bottom: CGFloat
+            let bottom: CGFloat
             switch p.bottom ?? 0 {
             case 1: bottom = h * 0.11
             case 2: bottom = h * 0.05 + 9
             case 3: bottom = h * 0.06 + min(max(w * 0.38, 5), 10) + 6
             case 4: bottom = h * 0.12 + 6
+            case 5: bottom = h * 0.05 + d + 5
+            case 6: bottom = h * 0.20 + 6
             default: bottom = h * 0.05 + 6
             }
-            if (p.panel ?? 0) != 0 {
-                top = max(top, h * 0.16 + 4)
-                bottom = max(bottom, h * 0.18 + 4)
-                return (top, bottom, edge + inner * 0.08, inner * 0.84,
-                        (p.panel ?? 0) == 1 ? (customText ?? Self.ink) : textColor)
+            let base = TitleMetrics(top: top, bottom: bottom, leading: edge, width: inner, color: textColor)
+            let accentUI = UIColor(shelfHex: p.accent) ?? UIColor(red: 0.93, green: 0.91, blue: 0.86, alpha: 1)
+            let kind = p.panel ?? 0
+            switch kind {
+            case 1:
+                return withPanel(base, kind: 1, color: Color(red: 0.96, green: 0.95, blue: 0.92),
+                                 textColor: customText ?? Self.ink, areaLeading: edge, areaWidth: inner)
+            case 3, 4:
+                return withPanel(base, kind: kind, color: Color(accentUI),
+                                 textColor: customText ?? contrastText(on: accentUI), areaLeading: edge, areaWidth: inner)
+            case 2, 5:
+                return withPanel(base, kind: kind, color: Color(accentUI),
+                                 textColor: textColor, areaLeading: edge, areaWidth: inner)
+            default:
+                return base
             }
-            return (top, bottom, edge, inner, textColor)
         default:
-            return (h * 0.05 + 6, h * 0.05 + 6, 0, w, textColor)
+            return TitleMetrics(top: h * 0.05 + 6, bottom: h * 0.05 + 6, leading: 0, width: w, color: textColor)
         }
     }
 
     private var titleUsesSerif: Bool { parts?.serif ?? true }
 
+    /// 书名底衬，铺满给它的大小（宽度固定、高度贴着书名）。
+    @ViewBuilder private func panelBackground(_ m: TitleMetrics) -> some View {
+        switch m.panel {
+        case 1:
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .fill(m.panelColor)
+                .shadow(color: .black.opacity(0.18), radius: 0.6, y: 0.4)
+        case 2:
+            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                .strokeBorder(m.panelColor, lineWidth: 0.8)
+        case 3:
+            Rectangle()
+                .fill(m.panelColor)
+                .overlay(alignment: .top) { Rectangle().fill(Color.black.opacity(0.18)).frame(height: 0.5) }
+                .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.18)).frame(height: 0.5) }
+        case 4:
+            Capsule().fill(m.panelColor)
+                .overlay(Capsule().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5))
+        case 5:
+            VStack(spacing: 0) {
+                VStack(spacing: 1.2) {
+                    Rectangle().fill(m.panelColor).frame(height: 0.9)
+                    Rectangle().fill(m.panelColor.opacity(0.7)).frame(height: 0.4)
+                }
+                Spacer(minLength: 0)
+                VStack(spacing: 1.2) {
+                    Rectangle().fill(m.panelColor.opacity(0.7)).frame(height: 0.4)
+                    Rectangle().fill(m.panelColor).frame(height: 0.9)
+                }
+            }
+            .padding(.horizontal, 2)
+        default:
+            EmptyView()
+        }
+    }
+
+    private func titleColumns(_ layout: BookshelfSpineLayout) -> some View {
+        let lineHeight = layout.fontSize * BookshelfSpineLayout.lineFactor
+        return HStack(alignment: .top, spacing: 1) {
+            // 竖排从右往左读，第一列放在最右边。
+            ForEach(Array(layout.columns.enumerated().reversed()), id: \.offset) { _, column in
+                VStack(spacing: 0) {
+                    ForEach(Array(column.enumerated()), id: \.offset) { _, ch in
+                        Text(ch)
+                            .font(AppFontStyle.system(size: layout.fontSize,
+                                                      weight: design == .plain ? .medium : .semibold,
+                                                      design: titleUsesSerif ? .serif : .default).themed)
+                            .frame(height: lineHeight)
+                            .fixedSize()
+                    }
+                }
+            }
+        }
+    }
+
+    private func authorColumns(_ layout: BookshelfSpineLayout) -> some View {
+        let authorLine = layout.authorFontSize * BookshelfSpineLayout.lineFactor
+        return HStack(alignment: .top, spacing: 1) {
+            ForEach(Array(layout.authorColumns.enumerated().reversed()), id: \.offset) { _, column in
+                VStack(spacing: 0) {
+                    ForEach(Array(column.enumerated()), id: \.offset) { _, ch in
+                        Text(ch)
+                            .font(AppFontStyle.system(size: layout.authorFontSize, weight: .regular).themed)
+                            .frame(height: authorLine)
+                            .fixedSize()
+                    }
+                }
+            }
+        }
+    }
+
     /// 书名（竖排，放不下时自动分列、保证完整）和作者（底部，同样完整显示）。
+    /// 有底衬时底衬宽度固定、高度贴着书名，书名短就短、长就长，不再是固定大小的方框。
     private func titleBlock(width w: CGFloat, height h: CGFloat) -> some View {
         let m = titleMetrics(width: w, height: h)
         let layout = BookshelfSpineLayout(title: title, author: book.author, width: m.width, height: h,
                                           top: m.top, bottom: m.bottom, showsAuthor: true, maxFont: 13)
-        let lineHeight = layout.fontSize * BookshelfSpineLayout.lineFactor
-        let authorLine = layout.authorFontSize * BookshelfSpineLayout.lineFactor
+        // 作者印在底衬外面的书脊上，用书脊的文字颜色（三段装帧的作者在米色带里，文字色本来就是墨色）。
+        let authorColor = textColor
         return VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: 1) {
-                // 竖排从右往左读，第一列放在最右边。
-                ForEach(Array(layout.columns.enumerated().reversed()), id: \.offset) { _, column in
-                    VStack(spacing: 0) {
-                        ForEach(Array(column.enumerated()), id: \.offset) { _, ch in
-                            Text(ch)
-                                .font(AppFontStyle.system(size: layout.fontSize,
-                                                          weight: design == .plain ? .medium : .semibold,
-                                                          design: titleUsesSerif ? .serif : .default).themed)
-                                .frame(height: lineHeight)
-                                .fixedSize()
-                        }
-                    }
-                }
-            }
-            .padding(.top, layout.topInset)
+            titleColumns(layout)
+                .foregroundStyle(m.color)
+                .padding(.vertical, m.padV)
+                .frame(width: m.width + m.padH * 2 + (m.panel == 0 || m.panel == 3 ? 0 : 1))
+                .background { panelBackground(m) }
+                .padding(.top, max(layout.topInset - m.padV, 0))
             Spacer(minLength: 0)
             if !layout.authorColumns.isEmpty {
-                HStack(alignment: .top, spacing: 1) {
-                    ForEach(Array(layout.authorColumns.enumerated().reversed()), id: \.offset) { _, column in
-                        VStack(spacing: 0) {
-                            ForEach(Array(column.enumerated()), id: \.offset) { _, ch in
-                                Text(ch)
-                                    .font(AppFontStyle.system(size: layout.authorFontSize, weight: .regular).themed)
-                                    .frame(height: authorLine)
-                                    .fixedSize()
-                            }
-                        }
-                    }
-                }
-                .opacity(0.75)
-                .padding(.bottom, layout.bottomInset)
+                authorColumns(layout)
+                    .foregroundStyle(authorColor)
+                    .opacity(0.75)
+                    .padding(.bottom, layout.bottomInset - m.padV)
             }
         }
-        .foregroundStyle(m.color)
-        .shadow(color: showsCover ? .black.opacity(0.7) : .clear, radius: 1)
         .frame(width: m.width, height: h)
         .offset(x: m.leading)
     }
 
     /// 抽出时露出的顶面（书页）与右侧面（封面）。见 `BookshelfPulledFaces`。
     private var uprightDepthFaces: some View {
-        BookshelfPulledFaces(progress: pull, book: book, width: style.bookWidth, height: style.bookHeight,
-                             depth: pulledDepth, pageColor: pageColor)
+        BookshelfPulledFaces(progress: pull, book: book, coverImage: coverImage, width: style.bookWidth,
+                             height: style.bookHeight, depth: pulledDepth, pageColor: pageColor)
     }
 
     /// 平躺：书脊朝外横放，就是把竖立的书脊整个转 90°——底色、花纹、饰带、书名和作者
@@ -5732,12 +6120,29 @@ private struct BookshelfSpine: View {
             .frame(width: w, height: h)
     }
 
-    /// 平躺抽出时露出的封面（顶面）与书页（右端）。
+    /// 平躺抽出时露出的封面（顶面）与书页（右端）。顶面画真正的封面（之前只是一块底色，看不到封面）：
+    /// 封面转 90°（书顶朝左、书脊一侧朝外），压扁成顶面的高度，再错切成往右上退去的平行四边形。
     private var flatDepthFaces: some View {
         let w = style.bookHeight, h = style.bookWidth, d = Self.depth
+        let coverWidth = max(w * 0.7, 1)
         return ZStack(alignment: .topLeading) {
             BookshelfFace(points: [CGPoint(x: 0, y: d), CGPoint(x: d, y: 0), CGPoint(x: w + d, y: 0), CGPoint(x: w, y: d)])
                 .fill(Color(baseColor).opacity(0.8))
+            Group {
+                if let coverImage {
+                    Image(uiImage: coverImage).resizable().scaledToFill()
+                } else {
+                    BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
+                                     width: coverWidth, height: w)
+                }
+            }
+            .frame(width: coverWidth, height: w)
+            .clipped()
+            .rotationEffect(.degrees(-90))
+            .frame(width: w, height: coverWidth)
+            .overlay(LinearGradient(colors: [Color.black.opacity(0.05), Color.black.opacity(0.22)],
+                                    startPoint: .top, endPoint: .bottom))
+            .transformEffect(CGAffineTransform(a: 1, b: 0, c: -d / coverWidth, d: d / coverWidth, tx: d, ty: 0))
             BookshelfFace(points: [CGPoint(x: w, y: d), CGPoint(x: w + d, y: 0), CGPoint(x: w + d, y: h), CGPoint(x: w, y: h + d)])
                 .fill(pageColor)
         }
@@ -5869,8 +6274,10 @@ private struct BookshelfSpine: View {
                     .allowsHitTesting(false)
             }
         }
-        .task(id: (book.coverUrl ?? "") + (showsCover ? "|cover" : "")) {
-            if showsCover, coverImage == nil {
+        // 封面图不管是不是封面书脊都提前加载：抽出时侧面 / 平躺时顶面要露出封面，
+        // 之前等抽出那一刻才开始加载，第一次点开看到的是占位图。
+        .task(id: book.coverUrl ?? "") {
+            if coverImage == nil {
                 if let cached = Self.cachedCover(book.coverUrl) {
                     coverImage = cached
                 } else if let text = book.coverUrl, let url = URL(string: text),
@@ -6843,7 +7250,7 @@ struct BookshelfDressSettingsSheet: View {
 
     private var spinePage: some View {
         VStack(alignment: .leading, spacing: 14) {
-            caption("勾选的装帧会随机分给书架上的每本书（每本书固定一套，不会每次变）。只勾一款就是全部统一。书架设置里打开「封面书脊」时，所有有封面的书改为显示柔化的封面图案。")
+            caption("勾选的装帧会随机分给书架上的每本书（每本书固定一套，不会每次变）。只勾一款就是全部统一。书架设置里打开「封面书脊」时，所有有封面的书改为封面书脊：书脊顶部嵌一张清晰的小封面，底色取封面主色。")
             Text("内置装帧").font(AppFontStyle.headline.themed)
             LazyVGrid(columns: bookshelfDressColumns, spacing: 12) {
                 ForEach(BookshelfSpineDesign.concrete) { design in
@@ -6971,14 +7378,29 @@ private struct ShelfPartPicker: View {
     @Binding var selection: Int
 
     var body: some View {
+        // 选项多了（书名区 6 种、纹理 7 种），分段控件挤不下，改成可横向滑动的胶囊按钮。
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(AppFontStyle.subheadline.weight(.medium).themed)
-            Picker(title, selection: $selection) {
-                ForEach(options.indices, id: \.self) { index in
-                    Text(options[index]).tag(index)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(options.indices, id: \.self) { index in
+                        let on = index == selection
+                        Button {
+                            selection = index
+                        } label: {
+                            Text(options[index])
+                                .font(AppFontStyle.system(size: 13, weight: on ? .semibold : .regular).themed)
+                                .foregroundStyle(on ? Color.white : Color.primary)
+                                .padding(.horizontal, 14)
+                                .frame(height: 30)
+                                .background(on ? ReadingTheme.accent : ReadingTheme.groupedCanvas, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
                 }
+                .padding(.vertical, 1)
             }
-            .pickerStyle(.segmented)
         }
     }
 }
@@ -7054,19 +7476,21 @@ private struct ShelfSpineStyleEditor: View {
                         .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                     VStack(alignment: .leading, spacing: 6) {
                         Text("从模板开始").font(AppFontStyle.subheadline.weight(.medium).themed)
-                        HStack(spacing: 8) {
-                            ForEach(BookshelfSpineDesign.concrete) { design in
-                                Button {
-                                    let fresh = ShelfSpineStyle.template(design, id: style.id, name: style.name)
-                                    style = fresh
-                                } label: {
-                                    Text(design.title)
-                                        .font(AppFontStyle.system(size: 13).themed)
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: 30)
-                                        .background(ReadingTheme.groupedCanvas, in: Capsule())
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(BookshelfSpineDesign.concrete) { design in
+                                    Button {
+                                        let fresh = ShelfSpineStyle.template(design, id: style.id, name: style.name)
+                                        style = fresh
+                                    } label: {
+                                        Text(design.title)
+                                            .font(AppFontStyle.system(size: 13).themed)
+                                            .padding(.horizontal, 14)
+                                            .frame(height: 30)
+                                            .background(ReadingTheme.groupedCanvas, in: Capsule())
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
                         }
                     }
