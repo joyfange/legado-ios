@@ -3216,6 +3216,8 @@ final class BookshelfSpineDesignStore: ObservableObject {
     private static let colorModeKey = "bookshelfSpineColorMode"
     private static let folderStylesKey = "bookshelfFolderCustomStyles"
     private static let disabledFolderKey = "bookshelfFolderDisabledPresets"
+    private static let folderFooterModeKey = "bookshelfFolderFooterMode"
+    private static let folderFooterTextKey = "bookshelfFolderFooterText"
     /// 单本书颜色设为「封面色」时保存的值。
     static let coverColorToken = "cover"
 
@@ -3242,6 +3244,30 @@ final class BookshelfSpineDesignStore: ObservableObject {
     }
     @Published private(set) var folderStyles: [ShelfFolderStyle]
     @Published private(set) var disabledFolderPresets: Set<Int>
+    /// 书匣底部文字（内置装扮，以及没填底部文字的自定义书匣）：
+    /// "count" 共 N 册，"custom" 自定义文字，"none" 不显示。之前固定显示装扮名（典藏、墨绿……）。
+    @Published var folderFooterMode: String {
+        didSet { UserDefaults.standard.set(folderFooterMode, forKey: Self.folderFooterModeKey) }
+    }
+    @Published var folderFooterText: String {
+        didSet { UserDefaults.standard.set(folderFooterText, forKey: Self.folderFooterTextKey) }
+    }
+
+    static let folderFooterModes: [(String, String)] = [("count", "册数"), ("custom", "自定义"), ("none", "不显示")]
+
+    /// 书匣底部显示的文字。自定义文字里的「#」会换成书的本数。
+    func folderFooter(for skin: BookshelfFolderSkin, count: Int) -> String {
+        if let text = skin.footer?.trimmingCharacters(in: .whitespaces), !text.isEmpty {
+            return text.replacingOccurrences(of: "#", with: "\(count)")
+        }
+        switch folderFooterMode {
+        case "none": return ""
+        case "custom":
+            let text = folderFooterText.trimmingCharacters(in: .whitespaces)
+            return text.isEmpty ? "共 \(count) 册" : text.replacingOccurrences(of: "#", with: "\(count)")
+        default: return "共 \(count) 册"
+        }
+    }
 
     private init() {
         let defaults = UserDefaults.standard
@@ -3253,6 +3279,8 @@ final class BookshelfSpineDesignStore: ObservableObject {
         colorMode = defaults.string(forKey: Self.colorModeKey) ?? "random"
         folderStyles = Self.decode(defaults.data(forKey: Self.folderStylesKey)) ?? []
         disabledFolderPresets = Set(defaults.array(forKey: Self.disabledFolderKey) as? [Int] ?? [])
+        folderFooterMode = defaults.string(forKey: Self.folderFooterModeKey) ?? "count"
+        folderFooterText = defaults.string(forKey: Self.folderFooterTextKey) ?? ""
     }
 
     private static func decode<T: Decodable>(_ data: Data?) -> T? {
@@ -3297,10 +3325,15 @@ final class BookshelfSpineDesignStore: ObservableObject {
         colorMode == "cover" ? nil : Self.swatchHex(seed / 13)
     }
 
-    /// 书最终的装扮：单独指定的自定义装帧 > 单独指定的内置装帧 > 「封面书脊」总开关 > 随机。
+    /// 书最终的装扮：「封面书脊」总开关 > 单独指定的自定义装帧 > 单独指定的内置装帧 > 随机。
     func appearance(for book: Book, coverSpine: Bool) -> BookshelfSpineAppearance {
         let url = book.bookUrl
         let seed = Self.seed(url + "|" + book.name)
+        // 「封面书脊」是总开关：打开后所有有封面的书都显示封面（之前单本指定过装帧的书不受开关影响，
+        // 看起来像有的书没生效）。没有封面的书仍按装帧显示，免得出现一条空白的占位封面。
+        if coverSpine, let cover = book.coverUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !cover.isEmpty {
+            return BookshelfSpineAppearance(design: .cover)
+        }
         if let id = customAssign[url], let style = customStyles.first(where: { $0.id == id }) {
             return style.appearance
         }
@@ -3308,7 +3341,6 @@ final class BookshelfSpineDesignStore: ObservableObject {
         if let raw = designs[url], let design = BookshelfSpineDesign(rawValue: raw), design != .auto, design != .custom {
             return BookshelfSpineAppearance(design: design, colorHex: ownColor)
         }
-        if coverSpine { return BookshelfSpineAppearance(design: .cover) }
         let pool = spinePool
         switch pool[seed % pool.count] {
         case .builtin(let design):
@@ -3908,12 +3940,7 @@ private struct BookshelfFolderBox: View {
         return (skin.box, skin.dark, skin.label, skin.window)
     }
 
-    private var footer: String {
-        let skin = self.skin
-        if let text = skin.footer, !text.isEmpty { return text }
-        if skin.monospaced { return "PRECISION // \(books.count)V" }
-        return "\(skin.name) · \(books.count) 册"
-    }
+    private var footer: String { dress.folderFooter(for: skin, count: books.count) }
 
     var body: some View {
         let size = Self.size(count: books.count, style: style)
@@ -4210,24 +4237,49 @@ private struct BookshelfShelfView: View {
         }.map(\.element)
     }
 
-    /// 放在平躺书上面的摆件（书 → 摆件）。书不在当前书架或不再平躺时，摆件回到原来的位置。
-    private func perchedOrnaments(in items: [BookshelfShelfItem]) -> [String: (ShelfOrnament, CGSize)] {
-        var flatBooks = Set<String>()
-        for item in items {
-            if let key = item.poseKey, requestedPose(key: key) == .flat { flatBooks.insert(key) }
+    static let perchGap: CGFloat = 2
+
+    /// 平躺的书 / 文件夹横放时的长度（摆件并排放在上面，总宽不能超过它）。
+    private func lyingLength(of item: BookshelfShelfItem) -> CGFloat {
+        switch item {
+        case .book(let book): return style.sized(for: book).bookHeight
+        case .folder(_, let inside): return BookshelfFolderBox.size(count: inside.count, style: style).height
+        case .ornament: return 0
         }
-        var result: [String: (ShelfOrnament, CGSize)] = [:]
+    }
+
+    /// 放在平躺书上面的摆件（书 → 摆件，可以并排放好几个，放得下就行）。
+    /// 书不在当前书架、不再平躺或放不下时，多出来的摆件回到原来的位置。
+    private func perchedOrnaments(in items: [BookshelfShelfItem]) -> [String: [(ShelfOrnament, CGSize)]] {
+        var lengths: [String: CGFloat] = [:]
+        for item in items {
+            if let key = item.poseKey, requestedPose(key: key) == .flat { lengths[key] = lyingLength(of: item) }
+        }
+        var result: [String: [(ShelfOrnament, CGSize)]] = [:]
+        var used: [String: CGFloat] = [:]
         for item in items {
             guard case .ornament(let ornament, let size) = item,
-                  let url = perches[ornament.id], flatBooks.contains(url), result[url] == nil else { continue }
-            result[url] = (ornament, size)
+                  let url = perches[ornament.id], let length = lengths[url] else { continue }
+            let next = (used[url].map { $0 + Self.perchGap } ?? 0) + size.width
+            guard next <= length + 0.5 else { continue }
+            used[url] = next
+            result[url, default: []].append((ornament, size))
         }
         return result
     }
 
+    /// 这本平躺的书上还剩多宽可以放摆件。
+    private func perchRoom(for key: String, items: [BookshelfShelfItem], excluding ornamentID: String) -> CGFloat {
+        guard let item = items.first(where: { $0.poseKey == key }) else { return 0 }
+        let perched = perchedOrnaments(in: items)[key] ?? []
+        let others = perched.filter { $0.0.id != ornamentID }
+        let used = others.reduce(CGFloat(0)) { $0 + $1.1.width } + CGFloat(others.count) * Self.perchGap
+        return lyingLength(of: item) - used
+    }
+
     /// 按现实中的支撑关系摆一层：倾斜的书一角着地，上端刚好靠在相邻的书、文件夹或摆件上。
     private func layoutRow(_ entries: [(item: BookshelfShelfItem, index: Int)],
-                           perched: [String: (ShelfOrnament, CGSize)]) -> [BookshelfShelfPlacement] {
+                           perched: [String: [(ShelfOrnament, CGSize)]]) -> [BookshelfShelfPlacement] {
         let t = Self.leanRadians
         let style = self.style
         var result: [BookshelfShelfPlacement] = []
@@ -4265,7 +4317,7 @@ private struct BookshelfShelfView: View {
                                         boxX: left, boxSize: CGSize(width: w, height: h),
                                         boardMinX: left, boardMaxX: left + w, height: h, pivotX: left))
                 case .flat:
-                    let lying = w + (perched[key]?.1.height ?? 0)
+                    let lying = w + (perched[key]?.map { $0.1.height }.max() ?? 0)
                     let left = previous.map { leftEdgeAfter($0, objectHeight: w) } ?? 0
                     result.append(.init(item: entry.item, index: entry.index, pose: pose,
                                         boxX: left, boxSize: CGSize(width: h, height: w),
@@ -4319,8 +4371,8 @@ private struct BookshelfShelfView: View {
         return previous.boardMaxX + spacing
     }
 
-    private func rows(_ items: [BookshelfShelfItem], perched: [String: (ShelfOrnament, CGSize)]) -> [[BookshelfShelfPlacement]] {
-        let perchedIDs = Set(perched.values.map { "o:" + $0.0.id })
+    private func rows(_ items: [BookshelfShelfItem], perched: [String: [(ShelfOrnament, CGSize)]]) -> [[BookshelfShelfPlacement]] {
+        let perchedIDs = Set(perched.values.flatMap { $0.map { "o:" + $0.0.id } })
         let sequence = items.filter { !perchedIDs.contains($0.id) }
         var result: [[BookshelfShelfPlacement]] = []
         var current: [(item: BookshelfShelfItem, index: Int)] = []
@@ -4396,10 +4448,10 @@ private struct BookshelfShelfView: View {
         }
     }
 
-    private func isRaised(_ placement: BookshelfShelfPlacement, perched: [String: (ShelfOrnament, CGSize)]) -> Bool {
+    private func isRaised(_ placement: BookshelfShelfPlacement, perched: [String: [(ShelfOrnament, CGSize)]]) -> Bool {
         if placement.id == draggingID || placement.id == "b:" + (selectedURL ?? "") { return true }
-        if let key = placement.item.poseKey, let ornament = perched[key]?.0 {
-            return "o:" + ornament.id == draggingID
+        if let key = placement.item.poseKey, let list = perched[key] {
+            return list.contains { "o:" + $0.0.id == draggingID }
         }
         return false
     }
@@ -4415,7 +4467,7 @@ private struct BookshelfShelfView: View {
     private var hasSelection: Bool { selectedURL != nil || folderPickerID != nil }
 
     private func shelfRow(_ row: [BookshelfShelfPlacement], rowIndex: Int, rows: [[BookshelfShelfPlacement]],
-                          perched: [String: (ShelfOrnament, CGSize)]) -> some View {
+                          perched: [String: [(ShelfOrnament, CGSize)]]) -> some View {
         VStack(spacing: 0) {
             ZStack(alignment: .bottomLeading) {
                 Color.clear
@@ -4424,9 +4476,12 @@ private struct BookshelfShelfView: View {
                 ForEach(row) { placement in
                     placementView(placement, rows: rows)
                         .zIndex(placement.id == draggingID ? 3 : (placement.id == "b:" + (selectedURL ?? "") ? 2 : 0))
-                    if let key = placement.item.poseKey, let perch = perched[key] {
-                        perchedOrnamentView(perch.0, size: perch.1, on: placement, rows: rows)
-                            .zIndex("o:" + perch.0.id == draggingID ? 3 : 1)
+                    if let key = placement.item.poseKey, let list = perched[key] {
+                        ForEach(Array(list.enumerated()), id: \.offset) { position, perch in
+                            perchedOrnamentView(perch.0, size: perch.1, on: placement,
+                                                x: perchX(list, position: position, on: placement), rows: rows)
+                                .zIndex("o:" + perch.0.id == draggingID ? 3 : 1)
+                        }
                     }
                 }
                 if let marker = insertionMarker, marker.row == rowIndex {
@@ -4508,11 +4563,18 @@ private struct BookshelfShelfView: View {
         }
     }
 
+    /// 并排放在平躺书上的第 position 个摆件的横向位置：整组在书上居中。
+    private func perchX(_ list: [(ShelfOrnament, CGSize)], position: Int, on placement: BookshelfShelfPlacement) -> CGFloat {
+        let total = list.reduce(CGFloat(0)) { $0 + $1.1.width } + CGFloat(max(list.count - 1, 0)) * Self.perchGap
+        var x = placement.boxX + max((placement.boxSize.width - total) / 2, 0)
+        for index in 0..<position { x += list[index].1.width + Self.perchGap }
+        return x
+    }
+
     private func perchedOrnamentView(_ ornament: ShelfOrnament, size: CGSize, on placement: BookshelfShelfPlacement,
-                                     rows: [[BookshelfShelfPlacement]]) -> some View {
+                                     x: CGFloat, rows: [[BookshelfShelfPlacement]]) -> some View {
         let id = "o:" + ornament.id
         let isDragging = id == draggingID
-        let x = placement.boxX + max((placement.boxSize.width - size.width) / 2, 0)
         return ornamentView(ornament, size: size, drag: dragGesture(id: id, index: placement.index, rows: rows))
             .scaleEffect(isDragging ? 1.06 : 1, anchor: .bottom)
             .shadow(color: .black.opacity(isDragging ? 0.25 : 0), radius: isDragging ? 8 : 0, y: isDragging ? 6 : 0)
@@ -4618,7 +4680,7 @@ private struct BookshelfShelfView: View {
         guard let draggingID else { return }
         let items = allItems
         let perched = perchedOrnaments(in: items)
-        let perchedIDs = Set(perched.values.map { "o:" + $0.0.id })
+        let perchedIDs = Set(perched.values.flatMap { $0.map { "o:" + $0.0.id } })
         let target = dropTargetID
         let insertion = insertionIndex
 
@@ -4643,9 +4705,21 @@ private struct BookshelfShelfView: View {
             } else if draggingID.hasPrefix("o:"),
                       let key = items.first(where: { $0.id == target })?.poseKey {
                 let ornamentID = String(draggingID.dropFirst(2))
-                perches = perches.filter { $0.value != key }
-                perches[ornamentID] = key
-                ShelfOrnamentPerches.save(perches)
+                // 一本平躺的书上可以并排放几个摆件，放不下时提示，不再把原来的摆件挤下去。
+                let width = items.compactMap { item -> CGFloat? in
+                    if case .ornament(let ornament, let size) = item, ornament.id == ornamentID { return size.width }
+                    return nil
+                }.first ?? 0
+                let room = perchRoom(for: key, items: items, excluding: ornamentID)
+                let othersOnIt = perches.contains { $0.key != ornamentID && $0.value == key }
+                if width <= room - (othersOnIt ? Self.perchGap : 0) + 0.5 {
+                    perches[ornamentID] = key
+                    ShelfOrnamentPerches.save(perches)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } else {
+                    UINotificationFeedbackGenerator().notificationOccurred(.warning)
+                    showToast("这本书上放不下了，可以先调小摆件")
+                }
             }
         } else if let insertion {
             // 序列里不含放在平躺书上的摆件；拖动的是它时先从书上拿下来。
@@ -5033,27 +5107,34 @@ private struct BookshelfSpineLayout {
         var chars = Array(title).filter { !$0.isWhitespace }.map(String.init)
         if chars.isEmpty { chars = ["未", "命", "名"] }
 
-        // 作者：完整显示，底部最多占书脊两成多一点，放不下时排两列、字再小一点。
-        let authorChars = Array(author).filter { !$0.isWhitespace }.map(String.init)
-        var authorColumns: [[String]] = []
-        var authorFont: CGFloat = 0
-        var authorSpace: CGFloat = 0
-        if showsAuthor, !authorChars.isEmpty, width >= 8 {
-            let room = height * 0.22
-            let fitted = Self.fit(authorChars, width: width, height: room, maxFont: min(8, width * 0.42))
-            authorFont = max(fitted.1, 4.5)
-            authorColumns = Self.split(authorChars, into: fitted.0)
-            let rows = authorColumns.map(\.count).max() ?? 0
-            authorSpace = CGFloat(rows) * authorFont * Self.lineFactor + 5
+        // 书名优先：书名字号一定比作者大（之前作者先占位、字号上限 8，长书名被挤到 5 号，
+        // 出现「书名小、作者大」）。先给作者留一个小位置排书名，再让作者字号不超过书名的七成。
+        let authorChars = showsAuthor && width >= 8
+            ? Array(author).filter { !$0.isWhitespace }.map(String.init) : []
+        let authorRoom = height * 0.17
+        func authorLayout(titleFont: CGFloat) -> (columns: [[String]], font: CGFloat, space: CGFloat) {
+            guard !authorChars.isEmpty else { return ([], 0, 0) }
+            let cap = max(min(8, width * 0.42, titleFont * 0.7), 4)
+            let fitted = Self.fit(authorChars, width: width, height: authorRoom, maxFont: cap)
+            let font = max(fitted.1, 4)
+            let columns = Self.split(authorChars, into: fitted.0)
+            let rows = columns.map(\.count).max() ?? 0
+            return (columns, font, CGFloat(rows) * font * Self.lineFactor + 6)
         }
-        self.authorColumns = authorColumns
-        authorFontSize = authorFont
-
-        // 书名：一定完整显示，字尽量大；一列放不下就排两列、三列。
-        let usable = max(height - top - bottom - authorSpace, 16)
-        let fitted = Self.fit(chars, width: width, height: usable, maxFont: maxFont)
-        fontSize = max(fitted.1, 5)
-        columns = Self.split(chars, into: fitted.0)
+        func titleLayout(authorSpace: CGFloat) -> (Int, CGFloat) {
+            let usable = max(height - top - bottom - authorSpace, 16)
+            return Self.fit(chars, width: width, height: usable, maxFont: maxFont)
+        }
+        // 第一遍：按作者最多占的位置排书名；第二遍：作者实际用得少，把省下的高度还给书名。
+        // （作者沿用第一遍的排法：字号已不超过第一遍书名的七成，书名只会更大，占位也不变。）
+        var titleFit = titleLayout(authorSpace: authorChars.isEmpty ? 0 : authorRoom + 6)
+        let authorFit = authorLayout(titleFont: titleFit.1)
+        let refined = titleLayout(authorSpace: authorFit.space)
+        if refined.1 > titleFit.1 { titleFit = refined }
+        fontSize = max(titleFit.1, 5)
+        columns = Self.split(chars, into: titleFit.0)
+        self.authorColumns = authorFit.columns
+        authorFontSize = authorFit.font
     }
 }
 
@@ -5188,6 +5269,9 @@ private struct BookshelfSpine: View {
     /// 抽出时书脊上的旋转按钮（修改摆放形态）；为 nil 时不显示（文件夹里的小书）。
     var onRotate: (() -> Void)?
     @State private var tint: UIColor?
+    /// 封面书脊用的封面图：放在书自己身上（之前嵌在封面组件里，平躺、抽出时视图重建，
+    /// 图片状态丢了，封面就消失变成纯色）。
+    @State private var coverImage: UIImage?
 
     static let leanAngle: Double = 10
     private static let depth: CGFloat = 8
@@ -5217,6 +5301,16 @@ private struct BookshelfSpine: View {
         self.style = style
         self.onRotate = onRotate
         _tint = State(initialValue: BookshelfSpineTintCache.shared.cached(book.coverUrl))
+        _coverImage = State(initialValue: appearance.design == .cover ? Self.cachedCover(book.coverUrl) : nil)
+    }
+
+    /// 只查内存/磁盘缓存（以及 data: 内嵌封面），第一帧就能画出来。
+    static func cachedCover(_ urlString: String?) -> UIImage? {
+        guard let urlString, !urlString.isEmpty else { return nil }
+        if urlString.hasPrefix("data:image/"), let comma = urlString.firstIndex(of: ",") {
+            return Data(base64Encoded: String(urlString[urlString.index(after: comma)...])).flatMap(UIImage.init(data:))
+        }
+        return URL(string: urlString).flatMap { CoverImageCache.shared.cachedImage(for: $0) }
     }
 
     nonisolated static func seed(_ book: Book) -> Int {
@@ -5310,10 +5404,7 @@ private struct BookshelfSpine: View {
         let w = style.bookWidth, h = style.bookHeight
         return ZStack(alignment: .topLeading) {
             if showsCover {
-                BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
-                                 width: max(h * 0.7, w), height: h)
-                    .frame(width: w, height: h, alignment: .leading)
-                    .clipped()
+                coverArt(width: w, height: h)
             } else {
                 fillColor
             }
@@ -5333,6 +5424,29 @@ private struct BookshelfSpine: View {
         }
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: min(2, w * 0.08), style: .continuous))
+    }
+
+    /// 封面书脊：取封面靠左的一条，模糊处理——保留封面的颜色和图案氛围，
+    /// 封面上原有的文字糊成色块、不再和书脊书名打架；再压一层暗色让书名清楚。
+    @ViewBuilder private func coverArt(width w: CGFloat, height h: CGFloat) -> some View {
+        if let coverImage {
+            ZStack {
+                Image(uiImage: coverImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: max(h * 0.7, w), height: h)
+                    .frame(width: w, height: h, alignment: .leading)
+                    .clipped()
+                    .blur(radius: min(max(w * 0.16, 3), 6), opaque: true)
+                    .saturation(1.1)
+                LinearGradient(colors: [Color.black.opacity(0.18), Color.black.opacity(0.32)],
+                               startPoint: .top, endPoint: .bottom)
+            }
+            .frame(width: w, height: h)
+            .clipped()
+        } else {
+            fillColor
+        }
     }
 
     /// 各装帧样式的装饰。
@@ -5603,53 +5717,19 @@ private struct BookshelfSpine: View {
         .offset(x: m.leading)
     }
 
-    /// 平躺时的书名：横排，沿书脊长边，避开两端的装饰。
-    private func flatTitle(length w: CGFloat, thickness h: CGFloat) -> some View {
-        // 竖立时的「上」在平躺后是左边，「左」在平躺后是下边。
-        let m = titleMetrics(width: h, height: w)
-        let font = min(12, max(m.width * 0.5, 6))
-        return HStack(spacing: 4) {
-            Text(title)
-                .font(AppFontStyle.system(size: font, weight: .semibold, design: titleUsesSerif ? .serif : .default).themed)
-                .lineLimit(1)
-                .minimumScaleFactor(0.45)
-            if !book.author.isEmpty, w > 90 {
-                Text(book.author)
-                    .font(AppFontStyle.system(size: font * 0.72).themed)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.6)
-                    .opacity(0.75)
-            }
-        }
-        .foregroundStyle(m.color)
-        .shadow(color: showsCover ? .black.opacity(0.7) : .clear, radius: 1)
-        .padding(.leading, m.top)
-        .padding(.trailing, m.bottom)
-        .frame(width: w, height: m.width)
-        .offset(y: (h - m.width) / 2 - m.leading)
-        .frame(width: w, height: h)
-    }
-
     /// 抽出时露出的顶面（书页）与右侧面（封面）。见 `BookshelfPulledFaces`。
     private var uprightDepthFaces: some View {
         BookshelfPulledFaces(progress: pull, book: book, width: style.bookWidth, height: style.bookHeight,
                              depth: pulledDepth, pageColor: pageColor)
     }
 
-    /// 平躺：书脊朝外横放。底色、花纹、饰带直接用竖立的书脊转 90° 画（之前单独画一块纯色，
-    /// 平躺后花纹全没了）；书名改成横排。
+    /// 平躺：书脊朝外横放，就是把竖立的书脊整个转 90°——底色、花纹、饰带、书名和作者
+    /// 都和竖立时一模一样（像现实里把书放倒），不再另排横向书名。
     private var flatFront: some View {
         let w = style.bookHeight, h = style.bookWidth
-        return ZStack {
-            spineFace(showsTitle: false)
-                .rotationEffect(.degrees(-90))
-                .frame(width: w, height: h)
-            if !style.hideTitles {
-                flatTitle(length: w, thickness: h)
-            }
-        }
-        .frame(width: w, height: h)
-        .clipShape(RoundedRectangle(cornerRadius: min(2, h * 0.08), style: .continuous))
+        return spineFace(showsTitle: !style.hideTitles)
+            .rotationEffect(.degrees(-90))
+            .frame(width: w, height: h)
     }
 
     /// 平躺抽出时露出的封面（顶面）与书页（右端）。
@@ -5789,8 +5869,15 @@ private struct BookshelfSpine: View {
                     .allowsHitTesting(false)
             }
         }
-        .task(id: book.coverUrl ?? "") {
-            guard !showsCover || tint == nil else { return }
+        .task(id: (book.coverUrl ?? "") + (showsCover ? "|cover" : "")) {
+            if showsCover, coverImage == nil {
+                if let cached = Self.cachedCover(book.coverUrl) {
+                    coverImage = cached
+                } else if let text = book.coverUrl, let url = URL(string: text),
+                          let loaded = await CoverImageCache.shared.image(for: url) {
+                    withAnimation(.easeOut(duration: 0.2)) { coverImage = loaded }
+                }
+            }
             if tint == nil, let loaded = await BookshelfSpineTintCache.shared.tint(for: book.coverUrl) {
                 withAnimation(.easeOut(duration: 0.25)) { tint = loaded }
             }
@@ -6277,7 +6364,7 @@ struct BookshelfShelfSettingsSheet: View {
                     }
                     toggleRow(title: "书名浮标", detail: "仿真书架抽出书时，在书旁浮出深色胶囊显示完整书名", isOn: $showsPulledTitle)
                     toggleRow(title: "高矮随字数", detail: "字数越多书越高（以「书高」为最高），厚薄只轻微变化；关闭后所有书一样大", isOn: $variedSizes)
-                    toggleRow(title: "封面书脊", detail: "开启后随机的书全部显示封面截取图案；关闭则按「书架装扮」随机搭配", isOn: $coverSpine)
+                    toggleRow(title: "封面书脊", detail: "开启后所有有封面的书都显示封面图案（柔化处理，封面上的字不会干扰书名），单本指定的装帧也会被覆盖；关闭则按「书架装扮」搭配", isOn: $coverSpine)
                     toggleRow(title: "隐藏旋转按钮", detail: "仿真视图隐藏书脊与文件夹上的旋转按钮（透明后依旧可点击）", isOn: $hideRotateButtons)
                     boardStyleRow
                 }
@@ -6650,6 +6737,7 @@ private enum BookshelfDressSample {
 /// 书匣小样。
 private struct BookshelfFolderSkinSample: View {
     let skin: BookshelfFolderSkin
+    @ObservedObject private var store = BookshelfSpineDesignStore.shared
 
     var body: some View {
         ZStack {
@@ -6688,7 +6776,7 @@ private struct BookshelfFolderSkinSample: View {
             VStack {
                 Text(skin.title ?? "文件夹").font(.system(size: 7, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.6)
                 Spacer()
-                Text(skin.footer ?? skin.name)
+                Text(store.folderFooter(for: skin, count: 6))
                     .font(.system(size: 7, weight: .medium, design: skin.monospaced ? .monospaced : .default))
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
@@ -6755,7 +6843,7 @@ struct BookshelfDressSettingsSheet: View {
 
     private var spinePage: some View {
         VStack(alignment: .leading, spacing: 14) {
-            caption("勾选的装帧会随机分给书架上的每本书（每本书固定一套，不会每次变）。只勾一款就是全部统一。书架设置里打开「封面书脊」时，所有书改为直接显示封面图案。")
+            caption("勾选的装帧会随机分给书架上的每本书（每本书固定一套，不会每次变）。只勾一款就是全部统一。书架设置里打开「封面书脊」时，所有有封面的书改为显示柔化的封面图案。")
             Text("内置装帧").font(AppFontStyle.headline.themed)
             LazyVGrid(columns: bookshelfDressColumns, spacing: 12) {
                 ForEach(BookshelfSpineDesign.concrete) { design in
@@ -6818,6 +6906,20 @@ struct BookshelfDressSettingsSheet: View {
     private var folderPage: some View {
         VStack(alignment: .leading, spacing: 14) {
             caption("勾选的装扮会随机分给每个书匣（文件夹），每个书匣固定一套。只勾一款就是全部统一。")
+            Text("底部文字").font(AppFontStyle.headline.themed)
+            Picker("", selection: $store.folderFooterMode) {
+                ForEach(BookshelfSpineDesignStore.folderFooterModes.indices, id: \.self) { index in
+                    Text(BookshelfSpineDesignStore.folderFooterModes[index].1)
+                        .tag(BookshelfSpineDesignStore.folderFooterModes[index].0)
+                }
+            }
+            .pickerStyle(.segmented)
+            if store.folderFooterMode == "custom" {
+                TextField("比如：藏书、私人收藏、共#册", text: $store.folderFooterText)
+                    .textFieldStyle(.roundedBorder)
+                    .font(AppFontStyle.body.themed)
+            }
+            caption("书匣下边的文字，所有书匣通用（之前显示的是装扮名）。自定义文字里的「#」会自动换成书的本数；自定义书匣里单独填了底部文字的，以它为准。")
             Text("内置装扮").font(AppFontStyle.headline.themed)
             LazyVGrid(columns: bookshelfDressColumns, spacing: 12) {
                 ForEach(BookshelfFolderSkin.presets.indices, id: \.self) { index in
@@ -7052,7 +7154,7 @@ private struct ShelfFolderStyleEditor: View {
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         Text("底部标签").font(AppFontStyle.subheadline.weight(.medium).themed)
-                        TextField("留空显示「名称 · 册数」", text: Binding(get: { style.footer ?? "" },
+                        TextField("留空跟随「书匣装扮」里的底部文字，# 代表本数", text: Binding(get: { style.footer ?? "" },
                                                                     set: { style.footer = $0.isEmpty ? nil : String($0.prefix(16)) }))
                             .padding(12)
                             .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
