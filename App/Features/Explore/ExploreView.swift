@@ -846,10 +846,10 @@ private struct ExploreKindSettingsSheet: View {
     private func chip(_ kind: ExploreKind) -> some View {
         let hidden = settings.isHidden(kind, in: source)
         return Text(kind.title)
+            .strikethrough(hidden, color: .secondary)
             .font(AppFontStyle.subheadline.themed)
             .lineLimit(1)
             .minimumScaleFactor(0.75)
-            .strikethrough(hidden, color: .secondary)
             .foregroundStyle(hidden ? Color.secondary : ReadingTheme.ink)
             .padding(.horizontal, 8)
             .frame(maxWidth: .infinity, minHeight: 34)
