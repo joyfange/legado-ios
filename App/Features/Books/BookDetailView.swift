@@ -15,6 +15,13 @@ struct BookDetailView: View {
     /// 区块还没内容时 Group 里没有视图，.task 根本不会执行，于是永远不显示。
     @StateObject private var similar = BookSimilarModel()
 
+    private static let minimumContentHeight: CGFloat = UIScreen.main.bounds.height + 300
+
+    private var similarKey: String {
+        let kind: String = model.book.kind ?? ""
+        return [model.source.bookSourceUrl, model.book.bookUrl, kind].joined(separator: "\u{1F}")
+    }
+
     init(searchBook: SearchBook, source: BookSource) {
         _model = StateObject(wrappedValue: BookDetailViewModel(searchBook: searchBook, source: source))
     }
@@ -28,61 +35,12 @@ struct BookDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 26) {
-                hero
-                if let intro = MetadataTextSanitizer().clean(model.book.displayIntro), !intro.isEmpty {
-                    introSection(intro)
-                }
-                chapterCard
-                if model.isCaching || model.cacheCompleted > 0 { cacheProgressCard }
-                if similar.hasContent {
-                    BookSimilarSection(book: model.book, source: model.source, model: similar)
-                }
-                infoSection
-            }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 34)
-            // 内容不满一屏时也要能把书名推到导航栏下面：否则只能拉到临界处又回弹，
-            // 右上角的「开始阅读」一出一收地闪。留出一屏高度，滑下去后停得住。
-            .frame(minHeight: UIScreen.main.bounds.height + 300, alignment: .top)
-        }
-        .task(id: model.source.bookSourceUrl + "\u{1F}" + model.book.bookUrl + "\u{1F}" + (model.book.kind ?? "")) {
-            await similar.load(for: model.book, source: model.source)
-        }
+        scrollBody
         .coordinateSpace(name: "bookDetailScroll")
         .readingCanvas()
         .navigationTitle("书籍详情")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Text(model.book.name)
-                    .font(AppFontStyle.subheadline.weight(.semibold).themed)
-                    .lineLimit(1)
-                    .opacity(showsCompactBar ? 1 : 0)
-                    .accessibilityHidden(!showsCompactBar)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                // 只有书名滚出屏幕后才放「开始阅读」；以前用透明度隐藏，按钮仍占位，
-                // 右上角出现一大块空白的胶囊。
-                HStack(spacing: 14) {
-                    moreMenu
-                    if showsCompactBar {
-                        Button { showsReader = true } label: {
-                            Text(readButtonTitle)
-                                .font(AppFontStyle.subheadline.weight(.semibold).themed)
-                                .foregroundStyle(ReadingTheme.ink)
-                                .lineLimit(1)
-                                .fixedSize()
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(model.chapters.isEmpty)
-                        .opacity(model.chapters.isEmpty ? 0.5 : 1)
-                        .transition(.opacity)
-                    }
-                }
-            }
-        }
+        .toolbar { detailToolbar }
         .readingNavigationDestination(isPresented: $showsReader) { readingDestination }
         .task {
             model.restoreSourceAfterReading(from: library.books, sources: sourceLibrary.sources)
@@ -123,6 +81,61 @@ struct BookDetailView: View {
             Button("取消", role: .cancel) { }
         }
     }
+
+    private var scrollBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 26) {
+                hero
+                if let intro = MetadataTextSanitizer().clean(model.book.displayIntro), !intro.isEmpty {
+                    introSection(intro)
+                }
+                chapterCard
+                if model.isCaching || model.cacheCompleted > 0 { cacheProgressCard }
+                if similar.hasContent {
+                    BookSimilarSection(book: model.book, source: model.source, model: similar)
+                }
+                infoSection
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 34)
+            // 内容不满一屏时也要能把书名推到导航栏下面：否则只能拉到临界处又回弹，
+            // 右上角的「开始阅读」一出一收地闪。留出一屏高度，滑下去后停得住。
+            .frame(minHeight: Self.minimumContentHeight, alignment: .top)
+        }
+        .task(id: similarKey) {
+            await similar.load(for: model.book, source: model.source)
+        }
+    }
+
+    @ToolbarContentBuilder private var detailToolbar: some ToolbarContent {
+            ToolbarItem(placement: .principal) {
+                Text(model.book.name)
+                    .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                    .lineLimit(1)
+                    .opacity(showsCompactBar ? 1 : 0)
+                    .accessibilityHidden(!showsCompactBar)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                // 只有书名滚出屏幕后才放「开始阅读」；以前用透明度隐藏，按钮仍占位，
+                // 右上角出现一大块空白的胶囊。
+                HStack(spacing: 14) {
+                    moreMenu
+                    if showsCompactBar {
+                        Button { showsReader = true } label: {
+                            Text(readButtonTitle)
+                                .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                                .foregroundStyle(ReadingTheme.ink)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.chapters.isEmpty)
+                        .opacity(model.chapters.isEmpty ? 0.5 : 1)
+                        .transition(.opacity)
+                    }
+                }
+            }
+            }
 
     /// 状态栏 + 导航栏的高度：书名底边滚到这条线以上，就是被导航栏挡住了。
     private var compactThreshold: CGFloat {
