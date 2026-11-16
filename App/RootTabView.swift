@@ -110,6 +110,7 @@ struct RootTabView: View {
         .readingTabBarBackground()
         .onChange(of: selection) { Self.lastSelection = $0 }
         .overlay { BookshelfFolderOverlay() }
+        .background(CoverRegistrySync())
         .preferredColorScheme(themeMode == "2" ? .dark : (themeMode == "1" || themeMode == "3" ? .light : nil))
         .transaction { transaction in
             if themeMode == "3" { transaction.animation = nil }
@@ -8293,5 +8294,30 @@ private struct ShelfOrnamentPhotoPicker: UIViewControllerRepresentable {
                 onFinish(collected.keys.sorted().compactMap { collected[$0] })
             }
         }
+    }
+}
+
+
+/// 把书架上每本书的封面登记到它的书源：重启后封面同样带书源请求头，并按 coverDecodeJs 解密。
+private struct CoverRegistrySync: View {
+    @EnvironmentObject private var library: BookLibraryModel
+    @EnvironmentObject private var sourceLibrary: SourceLibraryModel
+
+    private var signature: String {
+        "\(library.books.count)|\(sourceLibrary.sources.count)|\(library.books.first?.coverUrl ?? "")"
+    }
+
+    var body: some View {
+        Color.clear
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .task(id: signature) {
+                let sources = Dictionary(sourceLibrary.sources.map { ($0.bookSourceUrl, $0) }, uniquingKeysWith: { first, _ in first })
+                for book in library.books {
+                    guard let source = sources[book.origin] else { continue }
+                    CoverRequestRegistry.shared.register(cover: book.coverUrl, source: source)
+                    CoverRequestRegistry.shared.register(cover: book.customCoverUrl, source: source)
+                }
+            }
     }
 }

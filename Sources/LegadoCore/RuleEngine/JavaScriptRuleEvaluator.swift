@@ -1698,3 +1698,86 @@ final class JSMemoryCache: @unchecked Sendable {
         values[key] = value
     }
 }
+
+
+/// 封面解密（coverDecodeJs）的原生实现。常见写法是 AES/DES 对整张图片解密：
+/// 密钥写在 `java.strToBytes("…")` 或 `createSymmetricCrypto("AES/CBC/…", "key", "iv")` 里，
+/// IV 要么是字面量，要么取图片数据的前 16 字节（`copyOfRange(result, 0, 16)` / `result.read(iv…)`）。
+/// 图片有几十 KB，交给 JavaScriptCore 按字节数组跑太慢，这里识别出参数后直接用 CommonCrypto 解。
+public enum CoverDecodeScript {
+    public static func decode(_ data: Data, script: String) -> Data? {
+        let algorithmMatch = firstMatch(#"\b(AES|DESede|DES)(?:/(CBC|ECB|CTR)(?:/(\w+))?)?"#, in: script)
+        let algorithm = algorithmMatch?[1] ?? "AES"
+        let mode = algorithmMatch?[2] ?? "CBC"
+        let padding = algorithmMatch?[3] ?? "PKCS5Padding"
+        var literals = allMatches(#"strToBytes\(\s*"((?:[^"\\]|\\.)*)"\s*\)"#, in: script).map { $0[1] }
+        if let call = firstMatch(#"createSymmetricCrypto\(\s*"[^"]+"\s*,\s*"((?:[^"\\]|\\.)*)"(?:\s*,\s*"((?:[^"\\]|\\.)*)")?"#, in: script) {
+            literals = [call[1]] + (call[2].isEmpty ? [] : [call[2]]) + literals
+        }
+        guard let keyText = literals.first else { return nil }
+        let key = Data(keyText.utf8)
+        var input = data
+        var iv = Data()
+        let blockSize = algorithm == "AES" ? kCCBlockSizeAES128 : kCCBlockSizeDES
+        if mode != "ECB" {
+            if let prefix = firstMatch(#"copyOfRange\(\s*result\s*,\s*0\s*,\s*(\d+)\s*\)"#, in: script),
+               let length = Int(prefix[1]), length == blockSize, data.count > length {
+                iv = data.prefix(length)
+                input = data.dropFirst(length)
+            } else if script.contains("result.read(iv") , data.count > blockSize {
+                iv = data.prefix(blockSize)
+                input = data.dropFirst(blockSize)
+            } else if literals.count > 1 {
+                iv = Data(literals[1].utf8)
+            } else {
+                iv = Data(repeating: 0, count: blockSize)
+            }
+            guard iv.count == blockSize else { return nil }
+        }
+        let ccAlgorithm: CCAlgorithm
+        switch algorithm {
+        case "AES":
+            guard [16, 24, 32].contains(key.count) else { return nil }
+            ccAlgorithm = CCAlgorithm(kCCAlgorithmAES)
+        case "DESede":
+            guard key.count == 24 || key.count == 16 else { return nil }
+            ccAlgorithm = CCAlgorithm(kCCAlgorithm3DES)
+        default:
+            guard key.count >= 8 else { return nil }
+            ccAlgorithm = CCAlgorithm(kCCAlgorithmDES)
+        }
+        guard mode != "CTR" else { return nil }
+        let keyBytes = algorithm == "DES" ? key.prefix(8) : key
+        var options = CCOptions(0)
+        if mode == "ECB" { options |= CCOptions(kCCOptionECBMode) }
+        if padding.uppercased() != "NOPADDING" { options |= CCOptions(kCCOptionPKCS7Padding) }
+        var output = [UInt8](repeating: 0, count: input.count + blockSize)
+        let capacity = output.count
+        var written = 0
+        let status = keyBytes.withUnsafeBytes { keyPointer in
+            iv.withUnsafeBytes { ivPointer in
+                input.withUnsafeBytes { inputPointer in
+                    CCCrypt(CCOperation(kCCDecrypt), ccAlgorithm, options,
+                            keyPointer.baseAddress, keyBytes.count,
+                            iv.isEmpty ? nil : ivPointer.baseAddress,
+                            inputPointer.baseAddress, input.count, &output, capacity, &written)
+                }
+            }
+        }
+        guard status == kCCSuccess, written > 0 else { return nil }
+        return Data(output.prefix(written))
+    }
+
+    private static func allMatches(_ pattern: String, in text: String) -> [[String]] {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
+        return regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).map { match in
+            (0..<match.numberOfRanges).map { index in
+                Range(match.range(at: index), in: text).map { String(text[$0]) } ?? ""
+            }
+        }
+    }
+
+    private static func firstMatch(_ pattern: String, in text: String) -> [String]? {
+        allMatches(pattern, in: text).first
+    }
+}

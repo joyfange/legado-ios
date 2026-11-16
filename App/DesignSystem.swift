@@ -477,13 +477,25 @@ final class CoverImageCache {
         if let image = cachedImage(for: cover.url) { return image }
         if let running = inFlight[cover.url] { return await running.value }
         let attempts = cover.attempts
+        let decodeScript = cover.decodeScript
         let target = fileURL(for: cover.url)
         let key = cover.url.absoluteString
         let task = Task<UIImage?, Never> {
             for request in attempts {
                 guard let (data, response) = try? await URLSession.shared.data(for: request) else { continue }
                 if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { continue }
-                if let image = UIImage(data: data) ?? CoverImageCache.decodeDataImage(data) {
+                // 加密封面（书源的 coverDecodeJs）：先解密再解码；没加密的图直接解码。
+                var payload = data
+                var image = UIImage(data: data) ?? CoverImageCache.decodeDataImage(data)
+                if image == nil, let decodeScript,
+                   let decoded = await Task.detached(priority: .utility, operation: {
+                       CoverDecodeScript.decode(data, script: decodeScript)
+                   }).value {
+                    image = UIImage(data: decoded)
+                    payload = decoded
+                }
+                if let image {
+                    let data = payload
                     CoverImageCache.shared.memory.setObject(image, forKey: key as NSString)
                     try? data.write(to: target, options: .atomic)
                     return image
@@ -513,12 +525,14 @@ final class CoverImageCache {
 struct CoverRequest {
     let url: URL
     let headers: [String: String]
+    let decodeScript: String?
 
     init?(address raw: String) {
         var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !text.hasPrefix("data:") else { return nil }
-        let registered = CoverRequestRegistry.shared.headers(forCover: text)
-        var headers: [String: String] = registered
+        let registered = CoverRequestRegistry.shared.entry(forCover: text)
+        var headers: [String: String] = registered?.headers ?? [:]
+        decodeScript = registered?.decodeScript
         if let range = text.range(of: #",\s*\{"#, options: .regularExpression) {
             let options = String(text[text.index(before: range.upperBound)...])
             text = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)

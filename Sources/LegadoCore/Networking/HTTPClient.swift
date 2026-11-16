@@ -980,14 +980,20 @@ public actor SourceNetworkPolicy {
 }
 
 
-/// 记住每个封面地址来自哪个书源，加载封面时带上书源的请求头和 Referer。
-/// 安卓阅读加载封面时会用书源的 header（User-Agent、Referer、Cookie 等），
-/// 很多图床有防盗链，不带这些头会返回 403 或占位图，iOS 上就一直显示默认封面。
+/// 记住每个封面地址来自哪个书源，加载封面时带上书源的请求头、Referer 和封面解密规则（coverDecodeJs）。
+/// 安卓阅读加载封面时会用书源的 header，并对加密封面执行 coverDecodeJs；很多图床有防盗链，
+/// 也有书源（如搬山人）把封面 AES 加密，不处理就只能显示默认封面。
 public final class CoverRequestRegistry: @unchecked Sendable {
     public static let shared = CoverRequestRegistry()
 
+    public struct Entry: Sendable {
+        public var headers: [String: String]
+        public var decodeScript: String?
+    }
+
     private let lock = NSLock()
-    private var headersByCover: [String: [String: String]] = [:]
+    private var entries: [String: Entry] = [:]
+    private var bySource: [String: Entry] = [:]
 
     public init() {}
 
@@ -1009,20 +1015,40 @@ public final class CoverRequestRegistry: @unchecked Sendable {
         return headers
     }
 
+    public static func entry(for source: BookSource) -> Entry {
+        let script = source.coverDecodeJs?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return Entry(headers: headers(for: source), decodeScript: script?.isEmpty == false ? script : nil)
+    }
+
     public func register(cover: String?, source: BookSource) {
         guard let cover = cover?.trimmingCharacters(in: .whitespacesAndNewlines), !cover.isEmpty,
               !cover.hasPrefix("data:") else { return }
-        let headers = Self.headers(for: source)
-        guard !headers.isEmpty else { return }
+        let entry = Self.entry(for: source)
+        guard !entry.headers.isEmpty || entry.decodeScript != nil else { return }
         lock.lock()
-        if headersByCover.count > 5_000 { headersByCover.removeAll() }
-        headersByCover[cover] = headers
+        if entries.count > 5_000 { entries.removeAll() }
+        entries[cover] = entry
+        bySource[source.bookSourceUrl] = entry
         lock.unlock()
     }
 
-    public func headers(forCover cover: String) -> [String: String] {
+    /// 书架上的书重启后没有经过搜索/发现，按书源登记一次，封面同样能带头、解密。
+    public func register(source: BookSource) {
+        let entry = Self.entry(for: source)
+        lock.lock()
+        bySource[source.bookSourceUrl] = entry
+        lock.unlock()
+    }
+
+    public func entry(forCover cover: String, origin: String? = nil) -> Entry? {
         lock.lock()
         defer { lock.unlock() }
-        return headersByCover[cover] ?? [:]
+        if let entry = entries[cover] { return entry }
+        if let origin, let entry = bySource[origin] { return entry }
+        return nil
+    }
+
+    public func headers(forCover cover: String) -> [String: String] {
+        entry(forCover: cover)?.headers ?? [:]
     }
 }

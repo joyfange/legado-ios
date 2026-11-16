@@ -498,3 +498,43 @@ struct JavaScriptRuleEvaluatorTests {
         #expect(result.diagnostics.contains { $0.code == "rule.resource_limit" })
     }
 }
+
+
+@Test func coverDecodeScriptDecryptsAESCoverWithPrefixedIV() throws {
+    // 搬山人小说网的 coverDecodeJs：AES/CBC，密钥字面量，IV 是图片数据的前 16 字节。
+    let script = #"""
+(function(){
+  var key = java.strToBytes("V4@.Tx+uXZn)AiH>");
+  var iv = java.strToBytes("0000000000000000");
+  var aes = "AES/CBC/PKCS5Padding";
+  if (typeof result.read == "function") {
+    var n = 0;
+    while (n < 16) {
+      var r = result.read(iv, n, 16 - n);
+      if (r < 0) break;
+      n += r;
+    }
+    return java.createSymmetricCrypto(aes, key, iv).decrypt(result);
+  }
+  var A = Packages.java.util.Arrays;
+  iv = A.copyOfRange(result, 0, 16);
+  var data = A.copyOfRange(result, 16, result.length);
+  return java.createSymmetricCrypto(aes, key, iv).decrypt(data);
+})()
+"""#
+    let encrypted = try #require(Data(base64Encoded: "ABEiM0RVZneImaq7zN3u/zikVqAhn5rTCvphgRsYcOzcSb1BcDhcdHMI43g4cdsb"))
+    let decoded = try #require(CoverDecodeScript.decode(encrypted, script: script))
+    #expect(String(decoding: decoded, as: UTF8.self) == "RIFFxxxxWEBPVP8X-hello-cover")
+}
+
+@Test func coverRequestRegistryCarriesSourceHeadersAndDecodeScript() {
+    var source = BookSource(bookSourceUrl: "https://www.banshanren.com", bookSourceName: "搬山人")
+    source.header = #"{"User-Agent": "UA", "Referer": "https://www.banshanren.com/"}"#
+    source.coverDecodeJs = "java.strToBytes(\"k\")"
+    let registry = CoverRequestRegistry()
+    registry.register(cover: "https://cdn.banshanren.com/a.webp", source: source)
+    let entry = registry.entry(forCover: "https://cdn.banshanren.com/a.webp")
+    #expect(entry?.headers["User-Agent"] == "UA")
+    #expect(entry?.headers["Referer"] == "https://www.banshanren.com/")
+    #expect(entry?.decodeScript != nil)
+}
