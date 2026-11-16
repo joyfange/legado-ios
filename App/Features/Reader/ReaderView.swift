@@ -283,6 +283,16 @@ struct ReaderView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .dismissesSheetOnOutsideTap(Binding(
+            get: { showsStyleControls || showsReaderSettings || showsBookActions },
+            set: { shown in
+                if !shown {
+                    showsStyleControls = false
+                    showsReaderSettings = false
+                    showsBookActions = false
+                }
+            }
+        ))
         .sheet(isPresented: $showsTableOfContents) { tableOfContents }
         .sheet(isPresented: $showsBookmarks) { bookmarksSheet }
         .sheet(item: $reviewPage) { page in

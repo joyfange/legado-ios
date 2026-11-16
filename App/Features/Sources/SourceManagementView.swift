@@ -54,6 +54,18 @@ struct SourceManagementView: View {
         }
     }
 
+    private struct SortMode: Hashable {
+        let tag: String
+        let title: String
+    }
+
+    private static let sortModes: [SortMode] = [
+        SortMode(tag: "manual", title: "手动排序"), SortMode(tag: "weight", title: "自动排序"),
+        SortMode(tag: "name", title: "按名称"), SortMode(tag: "url", title: "按网址"),
+        SortMode(tag: "update", title: "按更新时间"), SortMode(tag: "respond", title: "按响应时间"),
+        SortMode(tag: "enabled", title: "按启用状态")
+    ]
+
     var body: some View {
         Group {
             if library.sources.isEmpty, !library.isWorking {
@@ -177,17 +189,39 @@ struct SourceManagementView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Menu("排序", systemImage: "arrow.up.arrow.down") {
-                    Toggle("倒序", isOn: $sortDescending)
-                    Picker("排序方式", selection: $sortMode) {
-                        Text("手动排序").tag("manual")
-                        Text("自动排序").tag("weight")
-                        Text("按名称").tag("name")
-                        Text("按网址").tag("url")
-                        Text("按更新时间").tag("update")
-                        Text("按响应时间").tag("respond")
-                        Text("按启用状态").tag("enabled")
+                // 排序菜单：图标改为「排序」专用的 line.3.horizontal.decrease（原来的上下箭头像「倒序」开关）；
+                // 去掉菜单里的 Toggle（iOS 15/16 菜单里显示成灰色、上面还空出一大块），
+                // 改成两组带勾选的按钮：排序方式 + 顺序（手动排序没有正倒序，不显示顺序组）。
+                Menu {
+                    Section("排序方式") {
+                        ForEach(Self.sortModes, id: \.tag) { mode in
+                            Button {
+                                sortMode = mode.tag
+                            } label: {
+                                if sortMode == mode.tag {
+                                    Label(mode.title, systemImage: "checkmark")
+                                } else {
+                                    Text(mode.title)
+                                }
+                            }
+                        }
                     }
+                    if sortMode != "manual" {
+                        Section("顺序") {
+                            Button {
+                                sortDescending = false
+                            } label: {
+                                if !sortDescending { Label("正序", systemImage: "checkmark") } else { Text("正序") }
+                            }
+                            Button {
+                                sortDescending = true
+                            } label: {
+                                if sortDescending { Label("倒序", systemImage: "checkmark") } else { Text("倒序") }
+                            }
+                        }
+                    }
+                } label: {
+                    Label("排序", systemImage: "line.3.horizontal.decrease")
                 }
             }
         }

@@ -408,6 +408,21 @@ extension View {
         }
     }
 
+    /// 配合 `readingLivePreviewSheet`：半屏面板不压暗背景，背后的页面仍能收到点击——
+    /// 之前点面板外面会翻页、打开书、拖动书架。面板显示时在背后盖一层透明挡板，
+    /// 点面板以外的任何地方只会收起面板，不会操作后面的内容。
+    func dismissesSheetOnOutsideTap(_ isPresented: Binding<Bool>) -> some View {
+        overlay {
+            if isPresented.wrappedValue {
+                Color.black.opacity(0.002)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture { isPresented.wrappedValue = false }
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
     /// 半屏且不压暗背景的面板：调整阅读样式时能直接看到后面正文的变化。
     @ViewBuilder
     func readingLivePreviewSheet() -> some View {
