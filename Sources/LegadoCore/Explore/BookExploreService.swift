@@ -124,6 +124,7 @@ public struct BookExploreService: Sendable {
                 )
                 book.kind = fields.kind
                 book.coverURL = fields.coverURL.map { resolve($0, against: response.finalURL) }
+                CoverRequestRegistry.shared.register(cover: book.coverURL, source: source)
                 book.intro = MetadataTextSanitizer().clean(fields.intro)
                 book.wordCount = fields.wordCount
                 book.latestChapterTitle = fields.lastChapter

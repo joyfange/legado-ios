@@ -145,6 +145,7 @@ public struct NetworkBookService: Sendable {
             book.wordCount = nonempty(wordCount.joinedString) ?? book.wordCount
             if let value = nonempty(cover.joinedString) {
                 book.coverUrl = resolve(value, against: response.finalURL)
+                CoverRequestRegistry.shared.register(cover: book.coverUrl, source: source)
             }
             let tocValue = document.isHTML ? toc.leadingString : toc.joinedString
             book.tocUrl = nonempty(tocValue).map { resolve($0, against: response.finalURL) }

@@ -22,6 +22,7 @@ final class BookDetailViewModel: ObservableObject {
     private let contentCoordinator: ChapterContentCoordinator
     private let sourceSwitchService: BookSourceSwitchService
     private var cacheTask: Task<Void, Never>?
+    private var loadTask: Task<Void, Never>?
 
     init(
         searchBook: SearchBook,
@@ -85,9 +86,26 @@ final class BookDetailViewModel: ObservableObject {
         cacheTotal = chapters.filter { !$0.isVolume }.count
     }
 
+    /// 加载放在模型自己的任务里：页面因隐藏底栏、转场等原因被系统重新出现时，
+    /// 视图的 `.task` 会被取消再重跑；以前取消后状态停在「加载中」，第二次又因不是 idle 直接返回，
+    /// 目录一直转圈、简介也不出来。现在重跑的 `.task` 只是等同一个加载任务完成。
     func load(sources: [BookSource] = []) async {
+        if let loadTask {
+            await loadTask.value
+            return
+        }
         guard state == .idle else { return }
         state = .loading
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performLoad(sources: sources)
+        }
+        loadTask = task
+        await task.value
+        if loadTask == task { loadTask = nil }
+    }
+
+    private func performLoad(sources: [BookSource]) async {
         if searchBook == nil {
             let stored = await updateCoordinator.storedChapters(bookURL: book.bookUrl)
             if !stored.isEmpty {
@@ -210,6 +228,8 @@ final class BookDetailViewModel: ObservableObject {
     }
 
     func refresh(sources: [BookSource] = []) async {
+        loadTask?.cancel()
+        loadTask = nil
         cancelCaching()
         chapters = []
         diagnostics = []

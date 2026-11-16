@@ -52,21 +52,23 @@ struct BookDetailView: View {
                     .accessibilityHidden(!showsCompactBar)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                HStack(spacing: 10) {
-                    Button { showsReader = true } label: {
-                        Text(readButtonTitle)
-                            .font(AppFontStyle.footnote.weight(.semibold).themed)
-                            .padding(.horizontal, 12)
-                            .frame(minHeight: 30)
-                            .foregroundStyle(ReadingTheme.onAccent)
-                            .background(ReadingTheme.accentFill, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.chapters.isEmpty)
-                    .opacity(showsCompactBar ? (model.chapters.isEmpty ? 0.5 : 1) : 0)
-                    .allowsHitTesting(showsCompactBar)
-                    .accessibilityHidden(!showsCompactBar)
+                // 只有书名滚出屏幕后才放「开始阅读」；以前用透明度隐藏，按钮仍占位，
+                // 右上角出现一大块空白的胶囊。
+                HStack(spacing: 14) {
                     moreMenu
+                    if showsCompactBar {
+                        Button { showsReader = true } label: {
+                            Text(readButtonTitle)
+                                .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                                .foregroundStyle(ReadingTheme.ink)
+                                .lineLimit(1)
+                                .fixedSize()
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.chapters.isEmpty)
+                        .opacity(model.chapters.isEmpty ? 0.5 : 1)
+                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                    }
                 }
             }
         }
@@ -109,6 +111,14 @@ struct BookDetailView: View {
             }
             Button("取消", role: .cancel) { }
         }
+    }
+
+    /// 状态栏 + 导航栏的高度：书名底边滚到这条线以上，就是被导航栏挡住了。
+    private var compactThreshold: CGFloat {
+        let top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.windows.first(where: \.isKeyWindow)?.safeAreaInsets.top }
+            .first ?? 47
+        return top + 44
     }
 
     private var readButtonTitle: String {
@@ -281,7 +291,7 @@ struct BookDetailView: View {
                 .padding(.top, 4)
                 .background(GeometryReader { proxy in
                     // 书名滚到导航栏下面后，导航栏显示书名和「开始阅读」，随时可以开始读。
-                    let compact = proxy.frame(in: .named("bookDetailScroll")).maxY < 8
+                    let compact = proxy.frame(in: .global).maxY < compactThreshold
                     Color.clear.onChange(of: compact) { value in
                         withAnimation(.easeOut(duration: 0.18)) { showsCompactBar = value }
                     }
@@ -521,24 +531,36 @@ private final class BookSimilarModel: ObservableObject {
     @Published private(set) var books: [SearchBook] = []
     @Published private(set) var isLoading = false
     private var loadedKey: String?
+    private var loadTask: Task<Void, Never>?
 
+    /// 同样放在模型自己的任务里，页面重新出现时不会因取消而永远不显示。
     func load(for book: Book, source: BookSource) async {
         let key = source.bookSourceUrl + "\u{1F}" + (book.kind ?? "")
-        guard loadedKey != key else { return }
+        guard loadedKey != key else {
+            await loadTask?.value
+            return
+        }
         loadedKey = key
         guard !(source.exploreUrl?.isEmpty ?? true), source.enabledExplore,
               !ProcessInfo.processInfo.arguments.contains("-uiDemo") else { return }
-        let report = await BookExploreService().kinds(for: source)
-        kinds = report.kinds.filter { $0.navigableURL != nil }
-        guard let match = Self.bestKind(for: book, in: kinds) else { return }
-        await select(match, source: source, excluding: book)
+        loadTask?.cancel()
+        let task = Task { [weak self] in
+            let report = await ExploreCache.shared.kinds(for: source)
+            guard let self, !Task.isCancelled else { return }
+            let options = report.kinds.filter { $0.navigableURL != nil }
+            self.kinds = options
+            guard let match = BookSimilarModel.bestKind(for: book, in: options) else { return }
+            await self.select(match, source: source, excluding: book)
+        }
+        loadTask = task
+        await task.value
     }
 
     func select(_ option: ExploreKind, source: BookSource, excluding book: Book) async {
         kind = option
         books = []
         isLoading = true
-        let outcome = await BookExploreService().explore(source: source, kind: option, page: 1)
+        let outcome = await ExploreCache.shared.firstPage(source: source, kind: option)
         guard kind?.id == option.id else { return }
         books = outcome.books.filter { $0.name != book.name }.prefix(20).map { $0 }
         isLoading = false
@@ -546,7 +568,11 @@ private final class BookSimilarModel: ObservableObject {
 
     /// 书的分类里任一词（去掉「小说」）出现在分区标题里，就是同题材分区。
     static func bestKind(for book: Book, in kinds: [ExploreKind]) -> ExploreKind? {
-        guard let raw = book.kind, !raw.isEmpty else { return nil }
+        // 没有分类或分类对不上分区时，用第一个不是「最近更新/最新」之类的分区兜底，区块不再整个消失。
+        let fallback = kinds.first { kind in
+            !["最近", "更新", "最新", "推荐", "新书"].contains { kind.title.contains($0) }
+        } ?? kinds.first
+        guard let raw = book.kind, !raw.isEmpty else { return fallback }
         let words = raw.components(separatedBy: CharacterSet(charactersIn: ",，|/、;；\n\t "))
             .map { $0.replacingOccurrences(of: "小说", with: "").replacingOccurrences(of: "连载中", with: "")
                 .replacingOccurrences(of: "已完结", with: "").trimmingCharacters(in: .whitespaces) }
@@ -554,7 +580,7 @@ private final class BookSimilarModel: ObservableObject {
         for word in words {
             if let hit = kinds.first(where: { $0.title.contains(word) }) { return hit }
         }
-        return nil
+        return fallback
     }
 }
 
@@ -573,8 +599,17 @@ private struct BookTableOfContentsView: View {
         return descending ? Array(filtered.reversed()) : filtered
     }
 
+    private var currentChapterID: BookChapter.ID? {
+        chapters.first { $0.index == book.durChapterIndex && !$0.isVolume }?.id
+    }
+
+    private var hasProgress: Bool {
+        book.durChapterTitle?.isEmpty == false || book.durChapterIndex > 0
+    }
+
     var body: some View {
         ReadingNavigationStack {
+            ScrollViewReader { proxy in
             List(displayedChapters) { chapter in
                 if chapter.isVolume {
                     Text(chapter.title).font(AppFontStyle.headline.themed).foregroundStyle(ReadingTheme.accent)
@@ -607,15 +642,40 @@ private struct BookTableOfContentsView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                HStack {
-                    Text(book.durChapterTitle ?? "尚未阅读").lineLimit(1)
-                    Spacer()
-                    Text("\(min(book.durChapterIndex + 1, chapters.count))/\(chapters.count)")
-                        .monospacedDigit().foregroundStyle(.secondary)
+                // 底部改为悬浮的小胶囊：显示读到哪一章，点一下定位到那一章；没读过时只显示总章数。
+                Button {
+                    guard let id = currentChapterID else { return }
+                    searchText = ""
+                    withAnimation(.easeInOut(duration: 0.25)) { proxy.scrollTo(id, anchor: .center) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: hasProgress ? "location.fill" : "list.bullet")
+                            .font(AppFontStyle.caption2.themed)
+                            .foregroundStyle(ReadingTheme.accent)
+                        if hasProgress {
+                            Text(book.durChapterTitle ?? "第 \(book.durChapterIndex + 1) 章")
+                                .lineLimit(1)
+                                .foregroundStyle(ReadingTheme.ink)
+                            Text("\(min(book.durChapterIndex + 1, chapters.count))/\(chapters.count)")
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("共 \(chapters.filter { !$0.isVolume }.count) 章").foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(AppFontStyle.footnote.themed)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 34)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(ReadingTheme.separator.opacity(0.6), lineWidth: 0.5))
+                    .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+                    .frame(maxWidth: 300)
                 }
-                .font(AppFontStyle.caption.themed)
-                .padding(.horizontal, 16).padding(.vertical, 10)
-                .background(.bar)
+                .buttonStyle(.plain)
+                .disabled(currentChapterID == nil)
+                .padding(.bottom, 6)
+                .accessibilityLabel(hasProgress ? "定位到当前阅读章节" : "目录章节数")
+            }
             }
         }
     }

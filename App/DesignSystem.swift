@@ -297,7 +297,7 @@ struct BookCoverArtwork: View {
                let image = UIImage(data: data) {
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
-                CachedCoverImage(url: remoteURL.flatMap(URL.init(string:))) {
+                CachedCoverImage(address: remoteURL) {
                     placeholder
                 }
             }
@@ -467,26 +467,133 @@ final class CoverImageCache {
 
     func image(for url: URL) async -> UIImage? {
         if let image = cachedImage(for: url) { return image }
-        guard let (data, response) = try? await URLSession.shared.data(from: url) else { return nil }
-        if let image = memory.object(forKey: url.absoluteString as NSString) { return image }
-        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { return nil }
-        guard let image = UIImage(data: data) else { return nil }
-        memory.setObject(image, forKey: url.absoluteString as NSString)
-        try? data.write(to: fileURL(for: url), options: .atomic)
+        guard let cover = CoverRequest(address: url.absoluteString) else { return nil }
+        return await image(for: cover)
+    }
+
+    /// 按书源写法的封面地址取图：支持 `地址,{"headers":{…}}`、中文或空格未编码、`//` 开头的地址，
+    /// 自动带上书源的请求头和 Referer；失败时再用图片所在站点做 Referer 重试一次（防盗链图床）。
+    func image(for cover: CoverRequest) async -> UIImage? {
+        if let image = cachedImage(for: cover.url) { return image }
+        if let running = inFlight[cover.url] { return await running.value }
+        let attempts = cover.attempts
+        let target = fileURL(for: cover.url)
+        let key = cover.url.absoluteString
+        let task = Task<UIImage?, Never> {
+            for request in attempts {
+                guard let (data, response) = try? await URLSession.shared.data(for: request) else { continue }
+                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) { continue }
+                if let image = UIImage(data: data) ?? CoverImageCache.decodeDataImage(data) {
+                    CoverImageCache.shared.memory.setObject(image, forKey: key as NSString)
+                    try? data.write(to: target, options: .atomic)
+                    return image
+                }
+            }
+            return nil
+        }
+        inFlight[cover.url] = task
+        let image = await task.value
+        inFlight[cover.url] = nil
         return image
+    }
+
+    private var inFlight: [URL: Task<UIImage?, Never>] = [:]
+
+    /// 有的接口把图片包成 `data:image/...;base64,` 文本返回。
+    nonisolated static func decodeDataImage(_ data: Data) -> UIImage? {
+        guard data.count < 4_000_000, let text = String(data: data, encoding: .utf8),
+              text.hasPrefix("data:image"), let comma = text.firstIndex(of: ","),
+              let decoded = Data(base64Encoded: String(text[text.index(after: comma)...]).trimmingCharacters(in: .whitespacesAndNewlines))
+        else { return nil }
+        return UIImage(data: decoded)
+    }
+}
+
+/// 把书源给出的封面地址整理成可以请求的 URLRequest。
+struct CoverRequest {
+    let url: URL
+    let headers: [String: String]
+
+    init?(address raw: String) {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !text.hasPrefix("data:") else { return nil }
+        let registered = CoverRequestRegistry.shared.headers(forCover: text)
+        var headers: [String: String] = registered
+        if let range = text.range(of: #",\s*\{"#, options: .regularExpression) {
+            let options = String(text[text.index(before: range.upperBound)...])
+            text = String(text[..<range.lowerBound]).trimmingCharacters(in: .whitespaces)
+            if let value = try? LegadoURLBuilder.decodeLenientJSON(options), case .object(let object) = value,
+               let header = object["headers"] ?? object["header"] {
+                switch header {
+                case .object(let fields):
+                    for (key, item) in fields { headers[key] = item.stringValue }
+                case .string(let json):
+                    if let parsed = try? LegadoURLBuilder.decodeLenientJSON(json), case .object(let fields) = parsed {
+                        for (key, item) in fields { headers[key] = item.stringValue }
+                    }
+                default: break
+                }
+            }
+        }
+        if text.hasPrefix("//") { text = "https:" + text }
+        guard let url = URL(string: text) ?? Self.encoded(text),
+              let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return nil }
+        self.url = url
+        self.headers = headers
+    }
+
+    private static func encoded(_ text: String) -> URL? {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.insert(charactersIn: "#%")
+        return text.addingPercentEncoding(withAllowedCharacters: allowed).flatMap(URL.init(string:))
+    }
+
+    private static let userAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+
+    /// 先用书源的请求头；不行再用图片站点自己做 Referer；最后不带 Referer。
+    var attempts: [URLRequest] {
+        func request(_ fields: [String: String]) -> URLRequest {
+            var request = URLRequest(url: url, cachePolicy: .returnCacheDataElseLoad, timeoutInterval: 20)
+            request.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+            request.setValue("image/avif,image/webp,image/apng,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+            for (key, value) in fields { request.setValue(value, forHTTPHeaderField: key) }
+            return request
+        }
+        var result = [request(headers)]
+        let hasReferer = headers.keys.contains { $0.caseInsensitiveCompare("Referer") == .orderedSame }
+        if let scheme = url.scheme, let host = url.host {
+            var withOrigin = headers.filter { $0.key.caseInsensitiveCompare("Referer") != .orderedSame }
+            withOrigin["Referer"] = "\(scheme)://\(host)/"
+            if withOrigin != headers { result.append(request(withOrigin)) }
+        }
+        if hasReferer {
+            result.append(request(headers.filter { $0.key.caseInsensitiveCompare("Referer") != .orderedSame }))
+        }
+        return result
     }
 }
 
 /// 带缓存的远程封面。已缓存的图片在第一帧就显示。
 struct CachedCoverImage<Placeholder: View>: View {
     let url: URL?
+    private let cover: CoverRequest?
     let placeholder: () -> Placeholder
     @State private var image: UIImage?
 
     init(url: URL?, @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.url = url
+        cover = url.flatMap { CoverRequest(address: $0.absoluteString) }
         self.placeholder = placeholder
         _image = State(initialValue: url.flatMap { CoverImageCache.shared.cachedImage(for: $0) })
+    }
+
+    /// 直接用书源给的封面字符串（可能带请求头参数、未编码的中文）。
+    init(address: String?, @ViewBuilder placeholder: @escaping () -> Placeholder) {
+        let cover = address.flatMap { CoverRequest(address: $0) }
+        self.cover = cover
+        url = cover?.url
+        self.placeholder = placeholder
+        _image = State(initialValue: cover.flatMap { CoverImageCache.shared.cachedImage(for: $0.url) })
     }
 
     var body: some View {
@@ -503,7 +610,12 @@ struct CachedCoverImage<Placeholder: View>: View {
                 if image !== cached { image = cached }
                 return
             }
-            let loaded = await CoverImageCache.shared.image(for: url)
+            var loaded: UIImage?
+            if let cover {
+                loaded = await CoverImageCache.shared.image(for: cover)
+            } else {
+                loaded = await CoverImageCache.shared.image(for: url)
+            }
             if !Task.isCancelled, let loaded { image = loaded }
         }
     }

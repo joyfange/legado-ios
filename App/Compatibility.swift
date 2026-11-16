@@ -335,6 +335,19 @@ extension View {
         modifier(ReadingPhotoPickerModifier(isPresented: isPresented, onData: onData, onError: onError))
     }
 
+    /// 横向滚动按子视图对齐停下（iOS 17+）；更早的系统保持普通滚动。
+    @ViewBuilder
+    func readingViewAlignedScrolling() -> some View {
+        if #available(iOS 17.0, *) { scrollTargetBehavior(.viewAligned) }
+        else { self }
+    }
+
+    @ViewBuilder
+    func readingScrollTargetLayout() -> some View {
+        if #available(iOS 17.0, *) { scrollTargetLayout() }
+        else { self }
+    }
+
     @ViewBuilder
     func readingNumericTransition() -> some View {
         if #available(iOS 16.0, *) { contentTransition(.numericText()) }

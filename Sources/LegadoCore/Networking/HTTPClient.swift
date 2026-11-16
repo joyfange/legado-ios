@@ -978,3 +978,51 @@ public actor SourceNetworkPolicy {
         return order.compactMap { name in values[name].map { "\(name)=\($0)" } }.joined(separator: "; ")
     }
 }
+
+
+/// 记住每个封面地址来自哪个书源，加载封面时带上书源的请求头和 Referer。
+/// 安卓阅读加载封面时会用书源的 header（User-Agent、Referer、Cookie 等），
+/// 很多图床有防盗链，不带这些头会返回 403 或占位图，iOS 上就一直显示默认封面。
+public final class CoverRequestRegistry: @unchecked Sendable {
+    public static let shared = CoverRequestRegistry()
+
+    private let lock = NSLock()
+    private var headersByCover: [String: [String: String]] = [:]
+
+    public init() {}
+
+    /// 书源默认请求头 + Referer（书源地址）。
+    public static func headers(for source: BookSource) -> [String: String] {
+        var headers: [String: String] = [:]
+        if let raw = source.header?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+           !raw.lowercased().hasPrefix("@js:"), !raw.lowercased().hasPrefix("<js>"),
+           let value = try? LegadoURLBuilder.decodeLenientJSON(raw),
+           case .object(let object) = value {
+            for (key, item) in object { headers[key] = item.stringValue }
+        }
+        if !headers.keys.contains(where: { $0.caseInsensitiveCompare("Referer") == .orderedSame }),
+           let base = URL(string: source.bookSourceUrl.components(separatedBy: "#").first ?? ""),
+           let scheme = base.scheme?.lowercased(), scheme == "http" || scheme == "https",
+           let host = base.host {
+            headers["Referer"] = "\(scheme)://\(host)/"
+        }
+        return headers
+    }
+
+    public func register(cover: String?, source: BookSource) {
+        guard let cover = cover?.trimmingCharacters(in: .whitespacesAndNewlines), !cover.isEmpty,
+              !cover.hasPrefix("data:") else { return }
+        let headers = Self.headers(for: source)
+        guard !headers.isEmpty else { return }
+        lock.lock()
+        if headersByCover.count > 5_000 { headersByCover.removeAll() }
+        headersByCover[cover] = headers
+        lock.unlock()
+    }
+
+    public func headers(forCover cover: String) -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return headersByCover[cover] ?? [:]
+    }
+}
