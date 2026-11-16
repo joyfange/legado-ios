@@ -706,7 +706,7 @@ private struct BookshelfBookLink: View {
     @ViewBuilder private var label: some View {
         switch mode {
         case .grid(let width):
-            BookshelfGridItem(book: book, width: width)
+            BookshelfGridItem(book: book, width: width, coverMenu: selection.isActive ? nil : AnyView(menuItems))
                 .overlay(alignment: .topTrailing) {
                     if selection.isActive {
                         BookshelfSelectionBadge(selected: selection.urls.contains(book.bookUrl))
@@ -723,41 +723,21 @@ private struct BookshelfBookLink: View {
         }
     }
 
-    /// 长按预览只框住书本身：网格只取封面，列表铺上页面底色并用圆角，不再出现半透明的大方框。
+    /// 长按预览只框住书本身：网格的菜单挂在封面上（见 BookshelfGridItem），列表铺上页面底色并用圆角，
+    /// 不再出现半透明的大方框。
     @ViewBuilder private var previewFramedLabel: some View {
         switch mode {
-        case .grid(let width):
-            label.contentShape(.contextMenuPreview,
-                               BookshelfCoverPreviewShape(height: BookshelfGridMetrics.coverHeight(width: width)))
+        case .grid:
+            label
         case .list, .compact:
             label
                 .background(ReadingTheme.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
                 .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contextMenu { menuItems }
         }
     }
 
-    var body: some View {
-        if selection.isActive {
-            Button { selection.toggle(book.bookUrl) } label: {
-                label.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(selection.urls.contains(book.bookUrl) ? .isSelected : [])
-        } else {
-            link
-        }
-    }
-
-    private var link: some View {
-        NavigationLink {
-            BookshelfBookDestination(book: book, source: source)
-        } label: {
-            previewFramedLabel
-        }
-        .buttonStyle(.plain)
-        .onDrag { NSItemProvider(object: book.bookUrl as NSString) }
-        .modifier(BookshelfDropModifier(targetURL: book.bookUrl, folderID: nil, groupID: groupID))
-        .contextMenu {
+    @ViewBuilder private var menuItems: some View {
             NavigationLink {
                 if let source { BookDetailView(book: book, source: source) }
                 else { LocalBookDetailView(book: book) }
@@ -784,12 +764,34 @@ private struct BookshelfBookLink: View {
             Button("移出书架", systemImage: "trash", role: .destructive) {
                 Task { await BookshelfRemoval.remove(book, library: library) }
             }
+            }
+
+    var body: some View {
+        if selection.isActive {
+            Button { selection.toggle(book.bookUrl) } label: {
+                label.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(selection.urls.contains(book.bookUrl) ? .isSelected : [])
+        } else {
+            link
         }
+    }
+
+    private var link: some View {
+        NavigationLink {
+            BookshelfBookDestination(book: book, source: source)
+        } label: {
+            previewFramedLabel
+        }
+        .buttonStyle(.plain)
+        .onDrag { NSItemProvider(object: book.bookUrl as NSString) }
+        .modifier(BookshelfDropModifier(targetURL: book.bookUrl, folderID: nil, groupID: groupID))
         .sheet(isPresented: $showsGroupSelector) {
             BookGroupSelectView(book: book).environmentObject(library)
         }
         .sheet(isPresented: $showsInfoEditor) {
-            BookInfoEditView(book: book).environmentObject(library)
+            BookInfoEditView(book: book).environmentObject(library).environmentObject(sources)
         }
     }
 }
@@ -830,6 +832,8 @@ private struct BookshelfGridLabel: View {
 private struct BookshelfGridItem: View {
     let book: Book
     let width: CGFloat
+    /// 长按菜单只挂在封面上：预览就是封面本身，菜单收起时书名和作者不会被系统隐藏再淡入（不再延迟出现）。
+    var coverMenu: AnyView? = nil
     @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
     @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
@@ -866,6 +870,7 @@ private struct BookshelfGridItem: View {
                     }
                 }
                 .frame(width: width, height: height)
+                .modifier(BookshelfCoverMenuModifier(menu: coverMenu))
             if !hideTitles {
                 BookshelfGridLabel(title: book.name,
                                    subtitle: book.author.isEmpty ? "未知作者" : book.author,
@@ -8425,6 +8430,7 @@ private struct CoverRegistrySync: View {
 struct BookInfoEditView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var library: BookLibraryModel
+    @EnvironmentObject private var sourceLibrary: SourceLibraryModel
     @ObservedObject private var folderStore = BookshelfFolderStore.shared
     let original: Book
     @State private var name: String
@@ -8435,6 +8441,10 @@ struct BookInfoEditView: View {
     @State private var folderID: String?
     @State private var showsPhotoPicker = false
     @State private var coverMessage: String?
+    @State private var coverCandidates: [BookCoverCandidate] = []
+    @State private var isSearchingCovers = false
+    @State private var coverSearchDone = false
+    @State private var coverSearchTask: Task<Void, Never>?
 
     init(book: Book) {
         original = book
@@ -8476,6 +8486,13 @@ struct BookInfoEditView: View {
                     }
                     .padding(.vertical, 8)
                     .listRowBackground(Color.clear)
+                }
+                Section {
+                    coverSearchRow
+                } header: {
+                    Text("封面搜索")
+                } footer: {
+                    Text("按书名在已启用的书源里找同一本书的封面，轻点一张即可换上。")
                 }
                 Section {
                     Button { showsPhotoPicker = true } label: {
@@ -8546,6 +8563,7 @@ struct BookInfoEditView: View {
                 }
             }
             .readingThemedListBackground()
+            .onDisappear { coverSearchTask?.cancel() }
             .navigationTitle("书籍信息")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -8570,6 +8588,84 @@ struct BookInfoEditView: View {
             } onError: { error in
                 coverMessage = error.localizedDescription
             }
+        }
+    }
+
+    @ViewBuilder private var coverSearchRow: some View {
+        if coverCandidates.isEmpty {
+            Button { searchCovers() } label: {
+                HStack {
+                    Label(isSearchingCovers ? "正在搜索封面…" : (coverSearchDone ? "没找到封面，再搜一次" : "搜索封面"),
+                          systemImage: "magnifyingglass")
+                    Spacer()
+                    if isSearchingCovers { ProgressView() }
+                }
+            }
+            .disabled(isSearchingCovers)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 12) {
+                    ForEach(coverCandidates) { candidate in
+                        Button {
+                            customCover = candidate.url
+                            coverText = candidate.url
+                            coverMessage = "已选「\(candidate.sourceName)」的封面，保存后生效。"
+                        } label: {
+                            VStack(spacing: 5) {
+                                BookCoverArtwork(title: name, author: author, remoteURL: candidate.url, width: 66, height: 94)
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                            .strokeBorder(ReadingTheme.accent, lineWidth: customCover == candidate.url ? 2.5 : 0)
+                                    )
+                                Text(candidate.sourceName)
+                                    .font(AppFontStyle.system(size: 10).themed)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .frame(width: 70)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    if isSearchingCovers {
+                        ProgressView().frame(width: 66, height: 94)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+
+    /// 按书名在启用的书源里搜，同名（作者对得上或没有作者）且带封面的结果收进来，去重。
+    private func searchCovers() {
+        let keyword = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !keyword.isEmpty else { return }
+        coverSearchTask?.cancel()
+        coverCandidates = []
+        isSearchingCovers = true
+        coverSearchDone = false
+        let sources = sourceLibrary.sources.filter(\.enabled)
+        let byID = Dictionary(sources.map { ($0.bookSourceUrl, $0) }, uniquingKeysWith: { first, _ in first })
+        let wantedAuthor = author.trimmingCharacters(in: .whitespacesAndNewlines)
+        coverSearchTask = Task {
+            var seen = Set<String>()
+            if let own = original.coverUrl, !own.isEmpty { seen.insert(own) }
+            for await outcome in BookSearchService().searchOutcomes(keyword: keyword, page: 1, sources: sources) {
+                if Task.isCancelled { break }
+                for book in outcome.books {
+                    guard book.name.trimmingCharacters(in: .whitespacesAndNewlines) == keyword,
+                          wantedAuthor.isEmpty || book.author.isEmpty || book.author.contains(wantedAuthor) || wantedAuthor.contains(book.author),
+                          let cover = book.coverURL?.trimmingCharacters(in: .whitespacesAndNewlines), !cover.isEmpty,
+                          seen.insert(cover).inserted else { continue }
+                    if let source = byID[outcome.sourceID] {
+                        CoverRequestRegistry.shared.register(cover: cover, source: source)
+                    }
+                    let sourceName = byID[outcome.sourceID]?.bookSourceName ?? book.originName
+                    coverCandidates.append(BookCoverCandidate(url: cover, sourceName: sourceName))
+                }
+                if coverCandidates.count >= 30 { break }
+            }
+            isSearchingCovers = false
+            coverSearchDone = true
         }
     }
 
@@ -8614,6 +8710,12 @@ struct BookInfoEditView: View {
         guard let jpeg = resized.jpegData(compressionQuality: 0.82) else { return nil }
         return "data:image/jpeg;base64," + jpeg.base64EncodedString()
     }
+}
+
+private struct BookCoverCandidate: Identifiable, Hashable {
+    let url: String
+    let sourceName: String
+    var id: String { url }
 }
 
 private struct LabeledTextRow: View {
@@ -8810,13 +8912,18 @@ private struct BookshelfAddToFolderSheet: View {
 }
 
 
-/// 网格长按预览只取封面那一块（不含下面透明的书名区）。
-private struct BookshelfCoverPreviewShape: Shape {
-    let height: CGFloat
 
-    func path(in rect: CGRect) -> Path {
-        let cover = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(height, rect.height))
-        return Path(roundedRect: cover, cornerRadius: 6, style: .continuous)
+/// 网格封面的长按菜单（多选时不挂）。
+private struct BookshelfCoverMenuModifier: ViewModifier {
+    let menu: AnyView?
+
+    func body(content: Content) -> some View {
+        if let menu {
+            content
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 6, style: .continuous))
+                .contextMenu { menu }
+        } else {
+            content
+        }
     }
 }
-

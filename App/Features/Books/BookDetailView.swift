@@ -11,6 +11,9 @@ struct BookDetailView: View {
     @State private var showsReader = false
     @State private var showsCompactBar = false
     @State private var introExpanded = false
+    /// 同题材作品放在页面自己的模型里加载：以前挂在一个可能为空的 Group 上，
+    /// 区块还没内容时 Group 里没有视图，.task 根本不会执行，于是永远不显示。
+    @StateObject private var similar = BookSimilarModel()
 
     init(searchBook: SearchBook, source: BookSource) {
         _model = StateObject(wrappedValue: BookDetailViewModel(searchBook: searchBook, source: source))
@@ -33,11 +36,19 @@ struct BookDetailView: View {
                 }
                 chapterCard
                 if model.isCaching || model.cacheCompleted > 0 { cacheProgressCard }
-                BookSimilarSection(book: model.book, source: model.source)
+                if similar.hasContent {
+                    BookSimilarSection(book: model.book, source: model.source, model: similar)
+                }
                 infoSection
             }
             .padding(.horizontal, 18)
             .padding(.bottom, 34)
+            // 内容不满一屏时也要能把书名推到导航栏下面：否则只能拉到临界处又回弹，
+            // 右上角的「开始阅读」一出一收地闪。留出一屏高度，滑下去后停得住。
+            .frame(minHeight: UIScreen.main.bounds.height + 300, alignment: .top)
+        }
+        .task(id: model.source.bookSourceUrl + "\u{1F}" + model.book.bookUrl + "\u{1F}" + (model.book.kind ?? "")) {
+            await similar.load(for: model.book, source: model.source)
         }
         .coordinateSpace(name: "bookDetailScroll")
         .readingCanvas()
@@ -478,7 +489,7 @@ struct BookDetailView: View {
 private struct BookSimilarSection: View {
     let book: Book
     let source: BookSource
-    @StateObject private var model = BookSimilarModel()
+    @ObservedObject var model: BookSimilarModel
 
     var body: some View {
         Group {
@@ -499,7 +510,6 @@ private struct BookSimilarSection: View {
                 }
             }
         }
-        .task(id: book.bookUrl + "\u{1F}" + (book.kind ?? "")) { await model.load(for: book, source: source) }
     }
 
     @ViewBuilder private var titleSwitcher: some View {
@@ -549,7 +559,7 @@ private struct BookSimilarSection: View {
 }
 
 @MainActor
-private final class BookSimilarModel: ObservableObject {
+final class BookSimilarModel: ObservableObject {
     @Published private(set) var kinds: [ExploreKind] = []
     @Published private(set) var kind: ExploreKind?
     /// 发现分区用不上时改用搜索，记下搜索词（分类词）。
