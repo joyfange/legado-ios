@@ -5192,67 +5192,136 @@ struct ShelfPatternView: View {
 private struct BookshelfSpineLayout {
     /// 每个字占的行高（按字号的倍数）。每个字单独排、固定行高，不受字体行距影响，算出来的一定放得下。
     static let lineFactor: CGFloat = 1.12
+    /// 竖排标点只占半格多一点（实体书竖排也是这样），保留标点又不浪费书脊高度。
+    static let punctuationFactor: CGFloat = 0.6
 
     let fontSize: CGFloat
-    /// 书名各列（第一列在最右边），每列是一串单字。
+    /// 书名各列（第一列在最右边），每列是一串单字（标点已换成竖排写法）。
     let columns: [[String]]
     let authorColumns: [[String]]
     let authorFontSize: CGFloat
     let topInset: CGFloat
     let bottomInset: CGFloat
 
-    /// 把字平均分成 count 列。
-    private static func split(_ chars: [String], into count: Int) -> [[String]] {
-        guard count > 1 else { return [chars] }
-        let per = Int((Double(chars.count) / Double(count)).rounded(.up))
-        var result: [[String]] = []
-        var index = 0
-        while index < chars.count {
-            let end = min(index + per, chars.count)
-            result.append(Array(chars[index..<end]))
-            index = end
+    /// 横排标点 → 竖排标点（Unicode 竖排字形），书名、作者里的标点全部保留。
+    private static let verticalForms: [Character: String] = [
+        "，": "︐", ",": "︐", "、": "︑", "。": "︒", ".": "︒", "：": "︓", ":": "︓",
+        "；": "︔", ";": "︔", "！": "︕", "!": "︕", "？": "︖", "?": "︖",
+        "〖": "︗", "〗": "︘", "…": "︙", "‥": "︰", "—": "︱", "–": "︲", "-": "︲", "～": "︴", "~": "︴",
+        "（": "︵", "(": "︵", "）": "︶", ")": "︶", "｛": "︷", "{": "︷", "｝": "︸", "}": "︸",
+        "〔": "︹", "〕": "︺", "【": "︻", "[": "︻", "】": "︼", "]": "︼",
+        "《": "︽", "》": "︾", "〈": "︿", "〉": "﹀", "<": "︿", ">": "﹀",
+        "「": "﹁", "」": "﹂", "『": "﹃", "』": "﹄",
+        "“": "﹁", "”": "﹂", "‘": "﹃", "’": "﹄", "\"": "﹁", "'": "﹃"
+    ]
+    private static let compactSet: Set<String> = Set(verticalForms.values).union(["·", "・", "•"])
+    /// 不能出现在一列开头的标点（避头）。
+    private static let noLineStart: Set<String> = ["︐", "︑", "︒", "︓", "︔", "︕", "︖", "︘", "︶", "︸", "︺", "︼", "︾", "﹀", "﹂", "﹄", "︙", "︰"]
+
+    static func weight(_ ch: String) -> CGFloat { compactSet.contains(ch) ? punctuationFactor : 1 }
+    static func isCompact(_ ch: String) -> Bool { compactSet.contains(ch) }
+
+    static func verticalCharacters(_ text: String) -> [String] {
+        var result: [String] = []
+        for ch in text where !ch.isWhitespace {
+            result.append(verticalForms[ch] ?? String(ch))
         }
         return result
     }
 
-    /// 在给定宽高里排 chars：试 1…maxColumns 列，尽量少分列（多一列要大三成以上才换，
-    /// 之前多一列大一成就换，长书名常被排成三列细字，很难看）。
-    private static func fit(_ chars: [String], width: CGFloat, height: CGFloat, maxFont: CGFloat,
-                            maxColumns: Int) -> (Int, CGFloat) {
-        var best: (Int, CGFloat) = (1, 0)
-        for count in 1...max(min(maxColumns, chars.count), 1) {
-            let per = (Double(chars.count) / Double(count)).rounded(.up)
-            let font = min((width - CGFloat(count + 1)) / CGFloat(count), maxFont,
-                           height / (CGFloat(per) * lineFactor))
-            if count == 1 || font > best.1 * 1.3 { best = (count, font) }
+    private static func units(_ chars: [String]) -> CGFloat { chars.reduce(0) { $0 + weight($1) } }
+
+    /// 按高度把字均匀分成 count 列；标点不放在列首（挪到上一列末尾）。
+    private static func split(_ chars: [String], into count: Int) -> [[String]] {
+        guard count > 1, chars.count > 1 else { return [chars] }
+        let target = units(chars) / CGFloat(count)
+        var result: [[String]] = []
+        var current: [String] = []
+        var used: CGFloat = 0
+        for ch in chars {
+            let w = weight(ch)
+            let remainingColumns = count - result.count
+            if !current.isEmpty, remainingColumns > 1, used + w > target + 0.3, !noLineStart.contains(ch) {
+                result.append(current)
+                current = []
+                used = 0
+            }
+            current.append(ch)
+            used += w
         }
-        return best
+        if !current.isEmpty { result.append(current) }
+        return result
     }
 
-    /// 排版并保证字号不小于 minFont：放不下时截断，末尾用竖排省略号「︙」（完整书名在抽出时的胶囊里看）。
+    private static func font(for columns: [[String]], width: CGFloat, height: CGFloat, maxFont: CGFloat) -> CGFloat {
+        let count = CGFloat(max(columns.count, 1))
+        let tallest = columns.map { units($0) }.max() ?? 1
+        return min((width - (count + 1)) / count, maxFont, height / (max(tallest, 0.6) * lineFactor))
+    }
+
+    /// 排版：保证完整显示（含标点）。先在 maxColumns 列内找不小于 minFont 的最大字号
+    /// （多一列要大三成以上才换，避免无谓分列）；放不下时把下限放宽到 floorFont，
+    /// 再不行才允许多一列；全都放不下（极端长的书名）才截断并补「︙」。
     private static func arrange(_ chars: [String], width: CGFloat, height: CGFloat, maxFont: CGFloat,
-                                minFont: CGFloat, maxColumns: Int) -> (columns: [[String]], font: CGFloat) {
-        let fitted = fit(chars, width: width, height: height, maxFont: maxFont, maxColumns: maxColumns)
-        if fitted.1 >= minFont || chars.count <= 1 {
-            return (split(chars, into: fitted.0), max(fitted.1, 1))
+                                minFont: CGFloat, floorFont: CGFloat, maxColumns: Int,
+                                extraColumns: Int = 0) -> (columns: [[String]], font: CGFloat) {
+        guard chars.count > 1 else {
+            return ([chars], max(min(width - 2, maxFont, height / lineFactor), 1))
         }
-        // 字太小：按最小字号算出能放下的列数和每列字数，截断后补省略号。
-        let font = min(minFont, maxFont, max(width - 2, 1))
-        let count = max(min(maxColumns, Int((width - 1) / (font + 1))), 1)
-        let rows = max(Int(height / (font * lineFactor)), 1)
-        let capacity = max(rows * count, 1)
-        guard chars.count > capacity else { return (split(chars, into: count), font) }
-        var kept = Array(chars.prefix(max(capacity - 1, 1)))
-        kept.append("︙")
-        // 截断后按列平均分时，前面的列要排满 rows 个字（保证省略号在最后一列末尾）。
+        func candidates(upTo limit: Int) -> [(cols: [[String]], font: CGFloat)] {
+            (1...max(min(limit, chars.count), 1)).map { count in
+                let cols = split(chars, into: count)
+                return (cols, font(for: cols, width: width, height: height, maxFont: maxFont))
+            }
+        }
+        func pick(_ list: [(cols: [[String]], font: CGFloat)], minimum: CGFloat) -> (columns: [[String]], font: CGFloat)? {
+            var best: (columns: [[String]], font: CGFloat)?
+            for item in list where item.font >= minimum {
+                if let current = best {
+                    if item.font > current.font * 1.3 { best = (item.cols, item.font) }
+                } else {
+                    best = (item.cols, item.font)
+                }
+            }
+            return best
+        }
+        let normal = candidates(upTo: maxColumns)
+        if let best = pick(normal, minimum: minFont) { return best }
+        if let best = pick(normal, minimum: floorFont) { return best }
+        if extraColumns > 0 {
+            let wider = candidates(upTo: maxColumns + extraColumns)
+            if let best = pick(Array(wider.dropFirst(maxColumns)), minimum: floorFont) { return best }
+        }
+        // 实在放不下：按下限字号截断，末尾补竖排省略号（完整书名在抽出时的胶囊里看）。
+        let fontSize = min(floorFont, maxFont, max(width - 2, 1))
+        let count = max(min(maxColumns + extraColumns, Int((width - 1) / (fontSize + 1))), 1)
+        let rows = max(height / (fontSize * lineFactor), 1)
         var result: [[String]] = []
+        var current: [String] = []
+        var used: CGFloat = 0
         var index = 0
-        while index < kept.count {
-            let end = min(index + rows, kept.count)
-            result.append(Array(kept[index..<end]))
-            index = end
+        while index < chars.count {
+            let w = weight(chars[index])
+            if used + w > rows {
+                result.append(current)
+                current = []
+                used = 0
+                if result.count == count { break }
+            }
+            current.append(chars[index])
+            used += w
+            index += 1
         }
-        return (result, font)
+        if index >= chars.count {
+            if !current.isEmpty { result.append(current) }
+            return (result, fontSize)
+        }
+        if var last = result.popLast() {
+            if !last.isEmpty { last.removeLast() }
+            last.append("︙")
+            result.append(last)
+        }
+        return (result, fontSize)
     }
 
     init(title: String, author: String, width: CGFloat, height: CGFloat,
@@ -5262,45 +5331,57 @@ private struct BookshelfSpineLayout {
         let bottom = customBottom ?? (height * 0.05 + 6)
         topInset = top
         bottomInset = bottom
-        // 书脊上竖排的书名去掉标点（实体书书脊也不印逗号问号），省出位置给字号。
-        let punctuation = Set("，。！？、：；,.!?:;·\"'“”‘’")
-        var chars = Array(title).filter { !$0.isWhitespace && !punctuation.contains($0) }.map(String.init)
-        if chars.isEmpty { chars = Array(title).filter { !$0.isWhitespace }.map(String.init) }
+        // 书名完整保留（含标点），标点换成竖排写法、只占半格。
+        var chars = Self.verticalCharacters(title)
         if chars.isEmpty { chars = ["未", "命", "名"] }
 
-        // 书名最多 maxColumns 列（默认两列），字号不小于 7；作者字号不小于 5.5（之前跟着长书名
-        // 一起缩到 4 号，几乎看不清），但仍不超过书名，书名始终比作者醒目。
-        let authorChars = showsAuthor && width >= 8
-            ? Array(author).filter { !$0.isWhitespace }.map(String.init) : []
+        // 书名默认最多两列，字号不小于 7；长书名放不下时先把下限放宽到 6，
+        // 书脊够宽时再允许第三列，尽量完整显示。作者字号不小于 5.5，且不超过书名。
+        let authorChars = showsAuthor && width >= 8 ? Self.verticalCharacters(author) : []
         let authorRoom = min(height * 0.24, max(height - top - bottom, 0) * 0.32)
         let titleMin = min(7, max(width * 0.42, 5))
+        let titleFloor = min(6, titleMin)
         let authorMin = min(5.5, max(width * 0.36, 4))
-        func authorLayout(titleFont: CGFloat) -> (columns: [[String]], font: CGFloat, space: CGFloat) {
+        let extra = width >= 20 ? 1 : 0
+        func authorLayout(titleFont: CGFloat, room: CGFloat) -> (columns: [[String]], font: CGFloat, space: CGFloat) {
             guard !authorChars.isEmpty else { return ([], 0, 0) }
             let cap = max(min(8, width * 0.42, max(titleFont * 0.82, authorMin)), authorMin)
             // 作者先试单列，单列放不下才分两列。
-            var arranged = Self.arrange(authorChars, width: width, height: authorRoom, maxFont: cap,
-                                        minFont: authorMin, maxColumns: 1)
+            var arranged = Self.arrange(authorChars, width: width, height: room, maxFont: cap,
+                                        minFont: authorMin, floorFont: authorMin, maxColumns: 1)
             if arranged.columns.joined().contains("︙") {
-                arranged = Self.arrange(authorChars, width: width, height: authorRoom, maxFont: cap,
-                                        minFont: authorMin, maxColumns: 2)
+                arranged = Self.arrange(authorChars, width: width, height: room, maxFont: cap,
+                                        minFont: authorMin, floorFont: authorMin, maxColumns: 2)
             }
-            let rows = arranged.columns.map(\.count).max() ?? 0
-            return (arranged.columns, arranged.font, CGFloat(rows) * arranged.font * Self.lineFactor + 6)
+            let rows = arranged.columns.map { Self.units($0) }.max() ?? 0
+            return (arranged.columns, arranged.font, rows * arranged.font * Self.lineFactor + 6)
         }
         func titleLayout(authorSpace: CGFloat) -> (columns: [[String]], font: CGFloat) {
             let usable = max(height - top - bottom - authorSpace, 16)
             return Self.arrange(chars, width: width, height: usable, maxFont: maxFont,
-                                minFont: titleMin, maxColumns: maxColumns)
+                                minFont: titleMin, floorFont: titleFloor, maxColumns: maxColumns,
+                                extraColumns: extra)
+        }
+        func truncated(_ fit: (columns: [[String]], font: CGFloat)) -> Bool {
+            fit.columns.joined().count != chars.count || (fit.columns.last?.last == "︙" && chars.last != "︙")
         }
         // 第一遍：按作者最多占的位置排书名；第二遍：作者实际用得少，把省下的高度还给书名。
         var titleFit = titleLayout(authorSpace: authorChars.isEmpty ? 0 : authorRoom + 6)
-        let authorFit = authorLayout(titleFont: titleFit.font)
+        var authorFit = authorLayout(titleFont: titleFit.font, room: authorRoom)
         let refined = titleLayout(authorSpace: authorFit.space)
         if refined.font > titleFit.font
             || (refined.font == titleFit.font && refined.columns.count < titleFit.columns.count)
-            || (refined.font == titleFit.font && !refined.columns.joined().contains("︙") && titleFit.columns.joined().contains("︙")) {
+            || (truncated(titleFit) && !truncated(refined)) {
             titleFit = refined
+        }
+        // 书名仍放不下：作者让出一部分高度（改为两列），书名优先完整。
+        if truncated(titleFit), !authorChars.isEmpty {
+            let squeezed = authorLayout(titleFont: titleFit.font, room: authorRoom * 0.55)
+            let retry = titleLayout(authorSpace: squeezed.space)
+            if !truncated(retry) {
+                titleFit = retry
+                authorFit = squeezed
+            }
         }
         fontSize = max(titleFit.font, 5)
         columns = titleFit.columns
@@ -5617,7 +5698,10 @@ private struct BookshelfSpine: View {
     private func coverThumbRect(width w: CGFloat, height h: CGFloat) -> CGRect {
         let inset = min(max(w * 0.1, 2), 4)
         let tw = max(w - inset * 2, 4)
-        let th = min(tw / 0.72, h * 0.27)
+        // 长书名时小封面让出高度给书名，保证书名完整显示。
+        let titleLength = title.filter { !$0.isWhitespace }.count
+        let cap: CGFloat = titleLength > 12 ? 0.16 : (titleLength > 8 ? 0.2 : 0.27)
+        let th = min(tw / 0.72, h * cap)
         return CGRect(x: inset, y: inset + 1, width: tw, height: th)
     }
 
@@ -5774,18 +5858,18 @@ private struct BookshelfSpine: View {
         return ZStack(alignment: .top) {
             Rectangle()
                 .fill(Self.paper)
-                .frame(width: w, height: h * 0.66)
+                .frame(width: w, height: h * 0.78)
                 .overlay(alignment: .top) { Rectangle().fill(Color.black.opacity(0.2)).frame(height: 0.6) }
                 .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.2)).frame(height: 0.6) }
-                .offset(y: h * 0.17)
+                .offset(y: h * 0.11)
             Circle()
                 .strokeBorder(Color.white.opacity(0.85), lineWidth: 0.8)
                 .frame(width: ring, height: ring)
-                .offset(y: max(h * 0.085 - ring / 2, 2))
+                .offset(y: max(h * 0.055 - ring / 2, 2))
             Capsule()
                 .fill(Color.white.opacity(0.75))
                 .frame(width: w * 0.4, height: 1.2)
-                .offset(y: h * 0.915)
+                .offset(y: h * 0.945)
         }
         .frame(width: w, height: h, alignment: .top)
     }
@@ -5796,10 +5880,10 @@ private struct BookshelfSpine: View {
         return ZStack(alignment: .top) {
             Rectangle().fill(Self.gold.opacity(0.85)).frame(width: w, height: 0.6).offset(y: h * 0.03)
             diamond(Self.gold, size: d).offset(y: h * 0.055)
-            rib(width: w).offset(y: h * 0.10)
-            rib(width: w).offset(y: h * 0.15)
-            rib(width: w).offset(y: h * 0.82)
-            rib(width: w).offset(y: h * 0.87)
+            rib(width: w).offset(y: h * 0.085)
+            rib(width: w).offset(y: h * 0.115)
+            rib(width: w).offset(y: h * 0.855)
+            rib(width: w).offset(y: h * 0.885)
             Rectangle().fill(Self.gold.opacity(0.85)).frame(width: w, height: 0.6).offset(y: h * 0.96)
         }
         .frame(width: w, height: h, alignment: .top)
@@ -5815,10 +5899,10 @@ private struct BookshelfSpine: View {
                 Spacer(minLength: 0)
                 ZStack(alignment: .bottom) {
                     LinearGradient(colors: [wash.opacity(0), wash.opacity(0.35)], startPoint: .top, endPoint: .bottom)
-                    ShelfHillsShape().fill(wash.opacity(0.55)).frame(height: h * 0.15)
-                    ShelfHillsShape(flipped: true).fill(wash.opacity(0.8)).frame(height: h * 0.09)
+                    ShelfHillsShape().fill(wash.opacity(0.55)).frame(height: h * 0.11)
+                    ShelfHillsShape(flipped: true).fill(wash.opacity(0.8)).frame(height: h * 0.065)
                 }
-                .frame(width: w, height: h * 0.3)
+                .frame(width: w, height: h * 0.2)
             }
             .frame(width: w, height: h)
         }
@@ -5885,14 +5969,14 @@ private struct BookshelfSpine: View {
             .frame(width: inner)
             .offset(x: edge, y: h * 0.05)
         case 3:
-            Rectangle().fill(accent).frame(width: inner, height: h * 0.12).offset(x: edge)
+            Rectangle().fill(accent).frame(width: inner, height: h * 0.09).offset(x: edge)
         case 4:
             let d = customDiamondSize(inner: inner)
             diamond(accent, size: d).offset(x: edge + (inner - d * 1.42) / 2, y: h * 0.05)
         case 5:
             ZStack(alignment: .topLeading) {
-                rib(width: inner).offset(y: h * 0.10)
-                rib(width: inner).offset(y: h * 0.15)
+                rib(width: inner).offset(y: h * 0.085)
+                rib(width: inner).offset(y: h * 0.115)
             }
             .offset(x: edge)
         default:
@@ -5920,14 +6004,14 @@ private struct BookshelfSpine: View {
             sealView(size: sealSize)
                 .offset(x: edge + (inner - sealSize) / 2, y: h * 0.94 - sealSize)
         case 4:
-            Rectangle().fill(accent).frame(width: inner, height: h * 0.12).offset(x: edge, y: h * 0.88)
+            Rectangle().fill(accent).frame(width: inner, height: h * 0.09).offset(x: edge, y: h * 0.91)
         case 5:
             let d = customDiamondSize(inner: inner)
             diamond(accent, size: d).offset(x: edge + (inner - d * 1.42) / 2, y: h * 0.95 - d * 1.42)
         case 6:
             ZStack(alignment: .topLeading) {
-                rib(width: inner).offset(y: h * 0.80)
-                rib(width: inner).offset(y: h * 0.85)
+                rib(width: inner).offset(y: h * 0.84)
+                rib(width: inner).offset(y: h * 0.87)
             }
             .offset(x: edge)
         default:
@@ -5986,7 +6070,7 @@ private struct BookshelfSpine: View {
         case .classic:
             return TitleMetrics(top: h * 0.06 + max(h * 0.075, 8) + 6, bottom: h * 0.11, leading: 0, width: w, color: textColor)
         case .label:
-            let base = TitleMetrics(top: h * 0.13 + 2, bottom: h * 0.12 + 4, leading: 0, width: w, color: textColor)
+            let base = TitleMetrics(top: h * 0.11 + 2, bottom: h * 0.1 + 4, leading: 0, width: w, color: textColor)
             return withPanel(base, kind: 1, color: Color(red: 0.96, green: 0.95, blue: 0.92),
                              textColor: customText ?? Self.ink, areaLeading: 0, areaWidth: w)
         case .thread:
@@ -5996,11 +6080,11 @@ private struct BookshelfSpine: View {
         case .gilded:
             return TitleMetrics(top: h * 0.05 + 10, bottom: h * 0.05 + 9, leading: 0, width: w, color: textColor)
         case .tripart:
-            return TitleMetrics(top: h * 0.17 + 7, bottom: h * 0.17 + 6, leading: 0, width: w, color: textColor)
+            return TitleMetrics(top: h * 0.11 + 5, bottom: h * 0.11 + 4, leading: 0, width: w, color: textColor)
         case .ribbed:
-            return TitleMetrics(top: h * 0.15 + 3.5 + 6, bottom: h * 0.18 + 6, leading: 0, width: w, color: textColor)
+            return TitleMetrics(top: h * 0.115 + 3.5 + 4, bottom: h * 0.145 + 4, leading: 0, width: w, color: textColor)
         case .inkwash:
-            return TitleMetrics(top: h * 0.04 + min(max(w * 0.3, 4.5), 8) + 6, bottom: h * 0.3 + 2,
+            return TitleMetrics(top: h * 0.04 + min(max(w * 0.3, 4.5), 8) + 6, bottom: h * 0.2 + 2,
                                 leading: 0, width: w, color: textColor)
         case .framed:
             return TitleMetrics(top: h * 0.035 + min(max(w * 0.16, 2.5), 4) * 1.42 + 6,
@@ -6015,9 +6099,9 @@ private struct BookshelfSpine: View {
             switch p.top ?? 0 {
             case 1: top = h * 0.06 + max(h * 0.075, 8) + 6
             case 2: top = h * 0.05 + 10
-            case 3: top = h * 0.12 + 6
+            case 3: top = h * 0.09 + 5
             case 4: top = h * 0.05 + d + 5
-            case 5: top = h * 0.15 + 3.5 + 6
+            case 5: top = h * 0.115 + 3.5 + 4
             default: top = h * 0.05 + 6
             }
             let bottom: CGFloat
@@ -6025,9 +6109,9 @@ private struct BookshelfSpine: View {
             case 1: bottom = h * 0.11
             case 2: bottom = h * 0.05 + 9
             case 3: bottom = h * 0.06 + min(max(w * 0.38, 5), 10) + 6
-            case 4: bottom = h * 0.12 + 6
+            case 4: bottom = h * 0.09 + 5
             case 5: bottom = h * 0.05 + d + 5
-            case 6: bottom = h * 0.20 + 6
+            case 6: bottom = h * 0.16 + 4
             default: bottom = h * 0.05 + 6
             }
             let base = TitleMetrics(top: top, bottom: bottom, leading: edge, width: inner, color: textColor)
@@ -6100,7 +6184,7 @@ private struct BookshelfSpine: View {
                             .font(AppFontStyle.system(size: layout.fontSize,
                                                       weight: design == .plain ? .medium : .semibold,
                                                       design: titleUsesSerif ? .serif : .default).themed)
-                            .frame(height: lineHeight)
+                            .frame(height: lineHeight * BookshelfSpineLayout.weight(ch))
                             .fixedSize()
                     }
                 }
@@ -6116,7 +6200,7 @@ private struct BookshelfSpine: View {
                     ForEach(Array(column.enumerated()), id: \.offset) { _, ch in
                         Text(ch)
                             .font(AppFontStyle.system(size: layout.authorFontSize, weight: .regular).themed)
-                            .frame(height: authorLine)
+                            .frame(height: authorLine * BookshelfSpineLayout.weight(ch))
                             .fixedSize()
                     }
                 }

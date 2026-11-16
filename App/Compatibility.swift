@@ -24,6 +24,43 @@ struct ReadingNavigationStack<Content: View>: View {
     }
 }
 
+/// 应用内统一的推入链接：所有二级及更深页面都隐藏底部 Tab 栏，
+/// 只有书架、发现、统计、我的四个根页面显示底栏（同 hidesBottomBarWhenPushed）。
+/// 与 SwiftUI.NavigationLink 同名，模块内的 NavigationLink { … } label: { … } 写法自动生效。
+struct NavigationLink<Label: View, Destination: View>: View {
+    private let destination: Destination
+    private let label: Label
+
+    init(@ViewBuilder destination: () -> Destination, @ViewBuilder label: () -> Label) {
+        self.destination = destination()
+        self.label = label()
+    }
+
+    init(destination: Destination, @ViewBuilder label: () -> Label) {
+        self.destination = destination
+        self.label = label()
+    }
+
+    var body: some View {
+        SwiftUI.NavigationLink {
+            destination.readingTabBarHidden()
+        } label: {
+            label
+        }
+    }
+}
+
+extension NavigationLink where Label == Text {
+    init(_ titleKey: LocalizedStringKey, @ViewBuilder destination: () -> Destination) {
+        self.init(destination: destination) { Text(titleKey) }
+    }
+
+    @_disfavoredOverload
+    init<S: StringProtocol>(_ title: S, @ViewBuilder destination: () -> Destination) {
+        self.init(destination: destination) { Text(title) }
+    }
+}
+
 struct ReadingLabeledContent<Content: View>: View {
     let title: String
     @ViewBuilder var content: Content
@@ -309,9 +346,11 @@ extension View {
         isPresented: Binding<Bool>, @ViewBuilder destination: () -> Destination
     ) -> some View {
         if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {
-            navigationDestination(isPresented: isPresented, destination: destination)
+            let page = destination()
+            navigationDestination(isPresented: isPresented) { page.readingTabBarHidden() }
         } else {
-            background(NavigationLink(isActive: isPresented, destination: destination) { EmptyView() }.hidden())
+            let page = destination()
+            background(SwiftUI.NavigationLink(isActive: isPresented) { page.readingTabBarHidden() } label: { EmptyView() }.hidden())
         }
     }
 
@@ -502,8 +541,11 @@ private struct ReadingHiddenTabBar: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: Controller, context: Context) {}
 
     final class Controller: UIViewController {
+        /// 所有二级页面都隐藏底栏：推入下一页时新页先出现、旧页后消失，用计数判断，
+        /// 只有最后一个隐藏底栏的页面消失（回到根页面）时才重新显示底栏。
+        private static var visibleCount = 0
         private weak var hiddenBar: UITabBar?
-        private var previouslyHidden = false
+        private var counted = false
 
         override func loadView() { view = UIView(); view.isUserInteractionEnabled = false }
 
@@ -511,13 +553,19 @@ private struct ReadingHiddenTabBar: UIViewControllerRepresentable {
             super.viewWillAppear(animated)
             guard let bar = tabBarController?.tabBar else { return }
             hiddenBar = bar
-            previouslyHidden = bar.isHidden
+            if !counted {
+                counted = true
+                Self.visibleCount += 1
+            }
             bar.isHidden = true
         }
 
         override func viewWillDisappear(_ animated: Bool) {
             super.viewWillDisappear(animated)
-            hiddenBar?.isHidden = previouslyHidden
+            guard counted else { return }
+            counted = false
+            Self.visibleCount = max(Self.visibleCount - 1, 0)
+            if Self.visibleCount == 0 { hiddenBar?.isHidden = false }
         }
     }
 }

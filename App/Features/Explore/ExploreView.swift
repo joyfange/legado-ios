@@ -3,9 +3,14 @@ import SwiftUI
 @MainActor
 final class ExploreSourceViewModel: ObservableObject {
     enum State: Equatable { case idle, loading, ready, empty, failed }
+    enum SectionState { case loading, loaded([SearchBook]), failed(String) }
 
     let source: BookSource
     @Published private(set) var kinds: [ExploreKind] = []
+    /// 书源返回的全部发现项（含没有链接的分组标题），发现页设置里按分组显示。
+    @Published private(set) var allKinds: [ExploreKind] = []
+    /// 杂志布局：每个分区第一页的书。
+    @Published private(set) var sections: [String: SectionState] = [:]
     @Published private(set) var selectedKind: ExploreKind?
     @Published private(set) var books: [SearchBook] = []
     @Published private(set) var diagnostics: [RuleDiagnostic] = []
@@ -34,6 +39,8 @@ final class ExploreSourceViewModel: ObservableObject {
         paginationTask?.cancel()
         selectedKind = nil
         kinds = []
+        allKinds = []
+        sections = [:]
         books = []
         diagnostics = []
         page = 1
@@ -42,13 +49,61 @@ final class ExploreSourceViewModel: ObservableObject {
 
         let report = await service.kinds(for: source)
         guard !Task.isCancelled else { return }
+        allKinds = report.kinds
         kinds = report.kinds.filter { $0.navigableURL != nil }
         diagnostics = report.diagnostics
-        guard let first = kinds.first else {
+        guard !kinds.isEmpty else {
             state = diagnostics.contains(where: { $0.severity == .error }) ? .failed : .empty
             return
         }
+        if ExploreDisplaySettings.shared.layout == .magazine {
+            state = .ready
+            return
+        }
+        await selectFirstVisible()
+    }
+
+    /// 发现页设置里隐藏的分区不显示；选中的分区被隐藏后改选第一个可见分区。
+    var visibleKinds: [ExploreKind] {
+        let settings = ExploreDisplaySettings.shared
+        return kinds.filter { !settings.isHidden($0, in: source) }
+    }
+
+    func selectFirstVisible() async {
+        if let selectedKind, visibleKinds.contains(where: { $0.id == selectedKind.id }) { return }
+        guard let first = visibleKinds.first ?? kinds.first else { return }
         await select(kind: first)
+    }
+
+    /// 单个分区的完整列表页（杂志布局点分区标题进入、同题材作品「查看全部」进入）。
+    func showOnly(_ kind: ExploreKind) async {
+        guard state == .idle else { return }
+        kinds = [kind]
+        allKinds = [kind]
+        await select(kind: kind)
+    }
+
+    func loadSection(_ kind: ExploreKind) async {
+        guard sections[kind.id] == nil, kind.navigableURL != nil else { return }
+        sections[kind.id] = .loading
+        if ProcessInfo.processInfo.arguments.contains("-uiDemo") {
+            sections[kind.id] = .loaded(DemoContent.exploreBooks)
+            return
+        }
+        let outcome = await service.explore(source: source, kind: kind, page: 1)
+        guard !Task.isCancelled else {
+            sections[kind.id] = nil
+            return
+        }
+        let found = Self.newBooks(outcome.books, excluding: [])
+        sections[kind.id] = found.isEmpty
+            ? .failed(outcome.diagnostics.first?.message ?? "这个分区暂时没有内容")
+            : .loaded(found)
+    }
+
+    func retrySection(_ kind: ExploreKind) {
+        sections[kind.id] = nil
+        Task { await loadSection(kind) }
     }
 
     func select(kind: ExploreKind) async {
@@ -257,52 +312,164 @@ private struct ExploreSourceRow: View {
     }
 }
 
+/// 发现页显示设置（所有书源共用）：布局、竖排榜单关键词、榜单展示数量、预加载；
+/// 以及每个书源各自隐藏的分区。
+@MainActor
+final class ExploreDisplaySettings: ObservableObject {
+    static let shared = ExploreDisplaySettings()
+
+    enum Layout: String, CaseIterable, Identifiable {
+        case list, magazine
+        var id: String { rawValue }
+        var title: String { self == .list ? "列表" : "杂志" }
+        var symbol: String { self == .list ? "list.bullet" : "square.grid.2x2" }
+    }
+
+    static let defaultKeywords = ["榜", "排行", "畅销", "暢銷", "热销", "熱銷", "热门", "熱門", "完本", "完结", "完結", "top"]
+    static let verticalCountOptions = [3, 4, 5, 6, 8, 10]
+    /// 0 表示全部。
+    static let horizontalCountOptions = [6, 8, 10, 12, 15, 20, 0]
+    static let preloadOptions = [0, 1, 2, 3, 5]
+
+    private enum Key {
+        static let layout = "explore.layout"
+        static let keywords = "explore.verticalKeywords"
+        static let verticalCount = "explore.verticalCount"
+        static let horizontalCount = "explore.horizontalCount"
+        static let preload = "explore.preloadCount"
+        static let hidden = "explore.hiddenKinds"
+    }
+
+    @Published var layout: Layout { didSet { defaults.set(layout.rawValue, forKey: Key.layout) } }
+    @Published var verticalKeywords: [String] { didSet { defaults.set(verticalKeywords, forKey: Key.keywords) } }
+    @Published var verticalCount: Int { didSet { defaults.set(verticalCount, forKey: Key.verticalCount) } }
+    @Published var horizontalCount: Int { didSet { defaults.set(horizontalCount, forKey: Key.horizontalCount) } }
+    @Published var preloadCount: Int { didSet { defaults.set(preloadCount, forKey: Key.preload) } }
+    /// 书源地址 → 隐藏的分区标题。
+    @Published private var hidden: [String: [String]] { didSet { defaults.set(hidden, forKey: Key.hidden) } }
+
+    private let defaults = UserDefaults.standard
+
+    private init() {
+        let stored = UserDefaults.standard
+        layout = Layout(rawValue: stored.string(forKey: Key.layout) ?? "") ?? .list
+        verticalKeywords = stored.stringArray(forKey: Key.keywords) ?? Self.defaultKeywords
+        verticalCount = (stored.object(forKey: Key.verticalCount) as? Int) ?? 4
+        horizontalCount = (stored.object(forKey: Key.horizontalCount) as? Int) ?? 0
+        preloadCount = (stored.object(forKey: Key.preload) as? Int) ?? 0
+        hidden = stored.dictionary(forKey: Key.hidden) as? [String: [String]] ?? [:]
+    }
+
+    func isHidden(_ kind: ExploreKind, in source: BookSource) -> Bool {
+        hidden[source.bookSourceUrl]?.contains(kind.title) ?? false
+    }
+
+    func toggle(_ kind: ExploreKind, in source: BookSource) {
+        var list = hidden[source.bookSourceUrl] ?? []
+        if let index = list.firstIndex(of: kind.title) {
+            list.remove(at: index)
+        } else {
+            list.append(kind.title)
+        }
+        hidden[source.bookSourceUrl] = list.isEmpty ? nil : list
+    }
+
+    func showAll(in source: BookSource) { hidden[source.bookSourceUrl] = nil }
+
+    func hideAll(_ kinds: [ExploreKind], keeping keep: ExploreKind?, in source: BookSource) {
+        // 至少保留一个分区，否则页面会空掉。
+        let titles = kinds.map(\.title).filter { $0 != (keep ?? kinds.first)?.title }
+        hidden[source.bookSourceUrl] = titles.isEmpty ? nil : titles
+    }
+
+    func hiddenCount(in source: BookSource) -> Int { hidden[source.bookSourceUrl]?.count ?? 0 }
+
+    /// 分区标题含任一关键词时按竖排序号榜单显示，其余用横滑封面。
+    func isVertical(_ title: String) -> Bool {
+        let lowered = title.lowercased()
+        return verticalKeywords.contains { !$0.isEmpty && lowered.contains($0.lowercased()) }
+    }
+
+    func addKeyword(_ keyword: String) {
+        let value = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !verticalKeywords.contains(value) else { return }
+        verticalKeywords.append(value)
+    }
+
+    func resetKeywords() { verticalKeywords = Self.defaultKeywords }
+}
+
 private struct ExploreSourceView: View {
     @StateObject private var model: ExploreSourceViewModel
+    @ObservedObject private var settings = ExploreDisplaySettings.shared
+    @State private var showsKindSettings = false
 
     init(source: BookSource) {
         _model = StateObject(wrappedValue: ExploreSourceViewModel(source: source))
     }
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                if model.kinds.count > 1 { kindPicker }
-                content
-                if model.isLoadingMore { ProgressView("继续加载…").padding(.vertical, 12) }
+        Group {
+            if settings.layout == .magazine, model.state != .idle, !model.kinds.isEmpty {
+                ExploreMagazineContent(model: model, settings: settings)
+            } else {
+                listContent
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
         }
         .readingCanvas()
         .navigationTitle(model.source.bookSourceName)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await model.load() }
-        .refreshable { await model.reload() }
-    }
-
-    private var kindPicker: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(model.kinds) { kind in
-                    Button(kind.title) { Task { await model.select(kind: kind) } }
-                        .font(AppFontStyle.subheadline.weight(.medium).themed)
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 44)
-                        .foregroundStyle(model.selectedKind?.id == kind.id ? Color.primary : .secondary)
-                        .overlay(alignment: .bottom) {
-                            if model.selectedKind?.id == kind.id {
-                                Rectangle().fill(Color.primary).frame(height: 2)
-                            }
-                        }
-                        .accessibilityAddTraits(model.selectedKind?.id == kind.id ? .isSelected : [])
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { showsKindSettings = true } label: {
+                    Image(systemName: "gearshape")
                 }
+                .disabled(model.allKinds.isEmpty)
+                .accessibilityLabel("发现页设置")
+            }
+        }
+        .task { await model.load() }
+        .onChange(of: settings.layout) { layout in
+            if layout == .list { Task { await model.selectFirstVisible() } }
+        }
+        .sheet(isPresented: $showsKindSettings, onDismiss: {
+            if settings.layout == .list { Task { await model.selectFirstVisible() } }
+        }) {
+            ExploreKindSettingsSheet(source: model.source, kinds: model.allKinds,
+                                     selected: model.selectedKind) { kind in
+                showsKindSettings = false
+                if settings.layout == .list { Task { await model.select(kind: kind) } }
             }
         }
     }
 
-    @ViewBuilder
-    private var content: some View {
+    private var listContent: some View {
+        ScrollView {
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
+                Section {
+                    ExploreBookList(model: model)
+                        .padding(.horizontal, 16)
+                } header: {
+                    if model.visibleKinds.count > 1 {
+                        ExploreKindChips(kinds: model.visibleKinds, selected: model.selectedKind) { kind in
+                            Task { await model.select(kind: kind) }
+                        }
+                        .padding(.vertical, 8)
+                        .background(ReadingTheme.canvas.opacity(0.96))
+                    }
+                }
+            }
+            .padding(.bottom, 12)
+        }
+        .refreshable { await model.reload() }
+    }
+}
+
+/// 一个分区的完整书单（可翻页加载）。
+private struct ExploreBookList: View {
+    @ObservedObject var model: ExploreSourceViewModel
+
+    var body: some View {
         switch model.state {
         case .idle, .loading:
             ProgressView("正在加载小说…")
@@ -323,16 +490,478 @@ private struct ExploreSourceView: View {
             )
             .padding(.vertical, 40)
         default:
-            ForEach(model.books) { book in
+            LazyVStack(spacing: 0) {
+                ForEach(model.books) { book in
+                    NavigationLink {
+                        BookDetailView(searchBook: book, source: model.source)
+                    } label: {
+                        ExploreBookRow(book: book)
+                    }
+                    .buttonStyle(.plain)
+                    .onAppear { model.loadNextPageIfNeeded(current: book) }
+                }
+                if model.isLoadingMore { ProgressView("继续加载…").padding(.vertical, 12) }
+            }
+        }
+    }
+}
+
+/// 顶部一排胶囊分类，选中的实心高亮，横向滑动，吸顶。
+private struct ExploreKindChips: View {
+    let kinds: [ExploreKind]
+    let selected: ExploreKind?
+    let select: (ExploreKind) -> Void
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(kinds) { kind in
+                        let on = selected?.id == kind.id
+                        Button { select(kind) } label: {
+                            Text(kind.title)
+                                .font(AppFontStyle.subheadline.weight(on ? .semibold : .regular).themed)
+                                .lineLimit(1)
+                                .padding(.horizontal, 14)
+                                .frame(minHeight: 34)
+                                .foregroundStyle(on ? ReadingTheme.onAccent : ReadingTheme.ink)
+                                .background(on ? ReadingTheme.accentFill : ReadingTheme.groupedCanvas, in: Capsule())
+                                .overlay(Capsule().strokeBorder(ReadingTheme.separator.opacity(on ? 0 : 1), lineWidth: 0.5))
+                                .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .id(kind.id)
+                        .accessibilityAddTraits(on ? .isSelected : [])
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+            .onChange(of: selected?.id) { id in
+                guard let id else { return }
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+}
+
+/// 杂志布局：每个分区一栏。标题含榜单关键词的分区用竖排序号榜单，其余横滑封面。
+private struct ExploreMagazineContent: View {
+    @ObservedObject var model: ExploreSourceViewModel
+    @ObservedObject var settings: ExploreDisplaySettings
+
+    var body: some View {
+        let kinds = model.visibleKinds
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 26) {
+                ForEach(Array(kinds.enumerated()), id: \.element.id) { index, kind in
+                    section(kind)
+                        .task(id: kind.id) {
+                            await model.loadSection(kind)
+                            // 顺便排队加载后面几个分区。
+                            let upper = min(index + settings.preloadCount, kinds.count - 1)
+                            if upper > index {
+                                for next in kinds[(index + 1)...upper] { await model.loadSection(next) }
+                            }
+                        }
+                }
+            }
+            .padding(.vertical, 12)
+        }
+        .refreshable { await model.reload() }
+    }
+
+    @ViewBuilder
+    private func section(_ kind: ExploreKind) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            NavigationLink {
+                ExploreKindBooksView(source: model.source, kind: kind)
+            } label: {
+                HStack(spacing: 4) {
+                    Text(kind.title).font(AppFontStyle.title3.bold().themed).foregroundStyle(ReadingTheme.ink)
+                    Image(systemName: "chevron.right")
+                        .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .accessibilityAddTraits(.isHeader)
+
+            switch model.sections[kind.id] {
+            case .loaded(let books):
+                if settings.isVertical(kind.title) {
+                    rankedList(Array(books.prefix(settings.verticalCount)))
+                        .padding(.horizontal, 16)
+                } else {
+                    let shown = settings.horizontalCount > 0 ? Array(books.prefix(settings.horizontalCount)) : books
+                    ExploreCoverStrip(books: shown, source: model.source)
+                }
+            case .failed(let message):
+                Button { model.retrySection(kind) } label: {
+                    Label("\(message)，点按重试", systemImage: "arrow.clockwise")
+                        .font(AppFontStyle.footnote.themed)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 60)
+                }
+                .buttonStyle(.plain)
+            case .loading, .none:
+                ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+            }
+        }
+    }
+
+    private func rankedList(_ books: [SearchBook]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(books.enumerated()), id: \.element.id) { offset, book in
                 NavigationLink {
                     BookDetailView(searchBook: book, source: model.source)
                 } label: {
-                    ExploreBookRow(book: book)
+                    HStack(spacing: 12) {
+                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverURL, width: 46, height: 64)
+                        Text("\(offset + 1)")
+                            .font(AppFontStyle.system(size: 18, weight: .bold).themed)
+                            .foregroundStyle(offset < 3 ? ReadingTheme.accent : Color.secondary)
+                            .frame(minWidth: 18)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(book.name)
+                                .font(AppFontStyle.subheadline.weight(.medium).themed)
+                                .foregroundStyle(ReadingTheme.ink)
+                                .lineLimit(1)
+                            Text(book.author.isEmpty ? "未知作者" : book.author)
+                                .font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 7)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .onAppear { model.loadNextPageIfNeeded(current: book) }
+                if offset < books.count - 1 {
+                    Rectangle().fill(ReadingTheme.separator).frame(height: 0.5).padding(.leading, 88)
+                }
             }
         }
+    }
+}
+
+/// 横滑封面（杂志布局的分区、书籍详情里的同题材作品共用）。
+struct ExploreCoverStrip: View {
+    let books: [SearchBook]
+    let source: BookSource
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(books) { book in
+                    NavigationLink {
+                        BookDetailView(searchBook: book, source: source)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverURL, width: 94, height: 132)
+                            Text(book.name)
+                                .font(AppFontStyle.footnote.weight(.medium).themed)
+                                .foregroundStyle(ReadingTheme.ink)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .frame(width: 94, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(book.author)
+                                .font(AppFontStyle.caption2.themed)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .frame(width: 94, alignment: .leading)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+}
+
+/// 单个分区的完整书单页。
+struct ExploreKindBooksView: View {
+    @StateObject private var model: ExploreSourceViewModel
+    private let kind: ExploreKind
+
+    init(source: BookSource, kind: ExploreKind) {
+        self.kind = kind
+        _model = StateObject(wrappedValue: ExploreSourceViewModel(source: source))
+    }
+
+    var body: some View {
+        ScrollView {
+            ExploreBookList(model: model)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+        }
+        .readingCanvas()
+        .navigationTitle(kind.title)
+        .navigationBarTitleDisplayMode(.inline)
+        .task { await model.showOnly(kind) }
+    }
+}
+
+/// 发现页设置（半屏）：搜索分区、全部显示/隐藏、按分组点选显示哪些分区；右上角进入显示设置。
+private struct ExploreKindSettingsSheet: View {
+    let source: BookSource
+    let kinds: [ExploreKind]
+    let selected: ExploreKind?
+    let onOpen: (ExploreKind) -> Void
+    @ObservedObject private var settings = ExploreDisplaySettings.shared
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    private struct KindGroup: Identifiable {
+        let id: Int
+        let title: String
+        let kinds: [ExploreKind]
+    }
+
+    private var navigable: [ExploreKind] { kinds.filter { $0.navigableURL != nil } }
+
+    /// 没有链接的发现项是分组标题（如「全部榜单」），把它后面的分区归到这一组。
+    private var groups: [KindGroup] {
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        var result: [KindGroup] = []
+        var title = "全部分区"
+        var bucket: [ExploreKind] = []
+        func flush() {
+            if !bucket.isEmpty { result.append(KindGroup(id: result.count, title: title, kinds: bucket)) }
+            bucket = []
+        }
+        for kind in kinds {
+            if kind.navigableURL == nil {
+                flush()
+                let trimmed = kind.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                title = trimmed.isEmpty ? "其他" : trimmed
+            } else if keyword.isEmpty || kind.title.localizedCaseInsensitiveContains(keyword) {
+                bucket.append(kind)
+            }
+        }
+        flush()
+        return result
+    }
+
+    var body: some View {
+        ReadingNavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("搜索发现项目", text: $query)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                        if !query.isEmpty {
+                            Button { query = "" } label: {
+                                Image(systemName: "xmark.circle.fill").foregroundStyle(.tertiary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("清除")
+                        }
+                    }
+                    .font(AppFontStyle.body.themed)
+                    .padding(.horizontal, 14)
+                    .frame(minHeight: 44)
+                    .background(ReadingTheme.groupedCanvas, in: Capsule())
+
+                    card {
+                        Text("快捷操作").font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+                        HStack(spacing: 10) {
+                            quickButton("全部显示", filled: settings.hiddenCount(in: source) == 0) {
+                                settings.showAll(in: source)
+                            }
+                            quickButton("只留当前", filled: false) {
+                                settings.hideAll(navigable, keeping: selected, in: source)
+                            }
+                        }
+                    }
+
+                    ForEach(groups) { group in
+                        card {
+                            Text(group.title).font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 74), spacing: 8)], alignment: .leading, spacing: 8) {
+                                ForEach(group.kinds) { kind in chip(kind) }
+                            }
+                        }
+                    }
+                    if groups.isEmpty {
+                        Text("没有找到匹配的分区").font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity).padding(.vertical, 24)
+                    }
+                    Text("点按分区切换显示或隐藏；长按分区直接打开。隐藏的分区不会出现在分类栏和杂志布局里。")
+                        .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(16)
+            }
+            .readingCanvas()
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("关闭")
+                }
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 1) {
+                        Text("发现页设置").font(AppFontStyle.headline.themed)
+                        Text("选择想看的分区").font(AppFontStyle.caption2.themed).foregroundStyle(.secondary)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { ExploreDisplaySettingsView() } label: {
+                        Image(systemName: "slider.horizontal.3")
+                    }
+                    .accessibilityLabel("显示设置")
+                }
+            }
+        }
+        .readingPresentationDetents([.medium, .large])
+        .readingPresentationDragIndicator()
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) { content() }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func quickButton(_ title: String, filled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(AppFontStyle.subheadline.weight(.medium).themed)
+                .padding(.horizontal, 14)
+                .frame(minHeight: 34)
+                .foregroundStyle(filled ? ReadingTheme.onAccent : ReadingTheme.accent)
+                .background(filled ? ReadingTheme.accentFill : ReadingTheme.accentSoft, in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func chip(_ kind: ExploreKind) -> some View {
+        let hidden = settings.isHidden(kind, in: source)
+        return Text(kind.title)
+            .font(AppFontStyle.subheadline.themed)
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+            .strikethrough(hidden, color: .secondary)
+            .foregroundStyle(hidden ? Color.secondary : ReadingTheme.ink)
+            .padding(.horizontal, 8)
+            .frame(maxWidth: .infinity, minHeight: 34)
+            .background(hidden ? Color.clear : ReadingTheme.canvas, in: Capsule())
+            .overlay(Capsule().strokeBorder(hidden ? ReadingTheme.separator : Color.clear,
+                                            style: StrokeStyle(lineWidth: 0.8, dash: [3, 2])))
+            .contentShape(Capsule())
+            .onTapGesture {
+                UISelectionFeedbackGenerator().selectionChanged()
+                settings.toggle(kind, in: source)
+            }
+            .onLongPressGesture {
+                if hidden { settings.toggle(kind, in: source) }
+                onOpen(kind)
+            }
+            .accessibilityElement()
+            .accessibilityLabel(kind.title)
+            .accessibilityValue(hidden ? "已隐藏" : "显示")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { settings.toggle(kind, in: source) }
+    }
+}
+
+/// 显示设置：布局（列表/杂志）、竖排榜单关键词、榜单展示数量、预加载。
+private struct ExploreDisplaySettingsView: View {
+    @ObservedObject private var settings = ExploreDisplaySettings.shared
+    @State private var newKeyword = ""
+
+    var body: some View {
+        List {
+            Section {
+                Picker(selection: $settings.layout) {
+                    ForEach(ExploreDisplaySettings.Layout.allCases) { layout in
+                        Label(layout.title, systemImage: layout.symbol).tag(layout)
+                    }
+                } label: {
+                    Label("布局", systemImage: "rectangle.split.2x1")
+                }
+                .pickerStyle(.menu)
+            } footer: {
+                Text("列表是上方一排分类、下方所选分类的书；杂志是每个分类一排书架或一栏榜单。这页的设置适用于每个书源的发现页。")
+            }
+
+            if settings.layout == .magazine {
+                Section {
+                    ForEach(settings.verticalKeywords, id: \.self) { keyword in
+                        Label {
+                            Text(keyword)
+                        } icon: {
+                            Image(systemName: "number").foregroundStyle(ReadingTheme.accent)
+                        }
+                    }
+                    .onDelete { settings.verticalKeywords.remove(atOffsets: $0) }
+                    HStack {
+                        Image(systemName: "plus.circle").foregroundStyle(.secondary)
+                        TextField("新增关键词", text: $newKeyword)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .submitLabel(.done)
+                            .onSubmit {
+                                settings.addKeyword(newKeyword)
+                                newKeyword = ""
+                            }
+                    }
+                } header: {
+                    Text("竖排榜单关键词")
+                } footer: {
+                    Text("标题含任一关键词的分类用竖排序号，其余用横滑封面。左滑可删除。")
+                }
+
+                Section {
+                    Button {
+                        settings.resetKeywords()
+                    } label: {
+                        Label("恢复默认关键词", systemImage: "arrow.counterclockwise")
+                    }
+                }
+
+                Section("榜单展示数量") {
+                    Picker(selection: $settings.verticalCount) {
+                        ForEach(ExploreDisplaySettings.verticalCountOptions, id: \.self) { Text("\($0)").tag($0) }
+                    } label: {
+                        Label("竖排展示数", systemImage: "list.number")
+                    }
+                    .pickerStyle(.menu)
+                    Picker(selection: $settings.horizontalCount) {
+                        ForEach(ExploreDisplaySettings.horizontalCountOptions, id: \.self) {
+                            Text($0 == 0 ? "全部" : "\($0)").tag($0)
+                        }
+                    } label: {
+                        Label("横滑展示数", systemImage: "rectangle.split.3x1")
+                    }
+                    .pickerStyle(.menu)
+                }
+
+                Section {
+                    Picker(selection: $settings.preloadCount) {
+                        ForEach(ExploreDisplaySettings.preloadOptions, id: \.self) { Text("\($0)").tag($0) }
+                    } label: {
+                        Label("预加载数量", systemImage: "arrow.down.circle")
+                    }
+                    .pickerStyle(.menu)
+                } header: {
+                    Text("预加载")
+                } footer: {
+                    Text("滚到某个分类时，顺便排队加载后面几个分类。数字越大越少看到加载中，但书源请求也越多。")
+                }
+            }
+        }
+        .readingThemedListBackground()
+        .navigationTitle("显示设置")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

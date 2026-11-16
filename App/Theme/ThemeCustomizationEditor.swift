@@ -110,10 +110,12 @@ struct ThemeEditorView: View {
                 ThemeCustomizationEditor(draft: $draft, previewScheme: $previewScheme,
                                          destination: destination, importImage: { imageTarget = $0 },
                                          importIcon: { iconImportTab = $0 })
+                    .toolbar(.hidden, for: .tabBar)
             }
             .navigationDestination(for: LibraryTab.self) { tab in
                 ThemeEditorTabIconPicker(tab: tab, icon: tabIconBinding(for: tab),
                                          importIcon: { iconImportTab = tab })
+                    .toolbar(.hidden, for: .tabBar)
             }
         }
         .environment(\.appTheme, draft)
@@ -155,7 +157,7 @@ struct ThemeEditorView: View {
     }
 
     private func row(_ destination: ThemeEditorDestination, value: String) -> some View {
-        NavigationLink(value: destination) {
+        SwiftUI.NavigationLink(value: destination) {
             HStack(spacing: 14) {
                 Image(systemName: destination.symbol)
                     .font(.system(size: 23, weight: .regular))
@@ -348,7 +350,7 @@ struct ThemeCustomizationEditor: View {
     private var legacyNote: String {
         switch destination {
         case .tab:
-            return "正在保留原有布局。下方显示方式展示自定义初始值，选择任一方式后可继续自定义标签图标；颜色与圆角可独立修改。"
+            return "当前为默认的「图标和文字」。可直接选择显示方式，或在下方为每个标签更换图标。"
         case .effect:
             return "正在保留原有布局。下方界面效果展示自定义初始值（光晕50% · 透明85%），首次更改后启用；颜色与圆角可独立修改。"
         default:
@@ -389,11 +391,8 @@ struct ThemeCustomizationEditor: View {
                 choice(ThemeTabStyle.text.title, selected: draft.customization?.tabStyle == .text,
                        id: "theme.editor.tab.text") { $draft.themeSetting(\.tabStyle).wrappedValue = .text }
             }
-            if draft.customization == nil {
-                note("自定义每个标签的图标前，请先选择上方任一显示方式。")
-            } else {
-                tabIconSection
-            }
+            // 自定义标签图标一直显示：不必先切换显示方式；换图标时自动启用自定义设置。
+            tabIconSection
             ThemeEditorLivePreview(theme: draft, scheme: previewScheme)
         }
     }
@@ -409,7 +408,7 @@ struct ThemeCustomizationEditor: View {
         }
     }
     private func tabIconRow(_ tab: LibraryTab) -> some View {
-        NavigationLink(value: tab) {
+        SwiftUI.NavigationLink(value: tab) {
             HStack(spacing: 12) {
                 Text(tab.title).appFont(.body)
                 Spacer(minLength: 8)
