@@ -424,6 +424,16 @@ extension View {
         }
     }
 
+    /// 按条件隐藏底栏，不改变视图身份（书架多选时用，滚动位置不会丢）。
+    @ViewBuilder
+    func readingTabBarHidden(_ hidden: Bool) -> some View {
+        if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {
+            toolbar(hidden ? .hidden : .visible, for: .tabBar)
+        } else {
+            background { if hidden { ReadingHiddenTabBar() } }
+        }
+    }
+
     @ViewBuilder
     func readingTabBarHidden() -> some View {
         if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {

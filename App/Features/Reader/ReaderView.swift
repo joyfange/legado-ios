@@ -936,7 +936,7 @@ struct ReaderView: View {
             showsReaderMenu = false
             showsBookActions = true
         } label: {
-            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl, width: 40, height: 56)
+            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: 40, height: 56)
                 .frame(width: 38, height: 38, alignment: .center)
                 .clipShape(Circle())
                 .overlay(Circle().strokeBorder(readerChromeTint.opacity(0.12), lineWidth: 0.5))
@@ -968,7 +968,7 @@ struct ReaderView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     HStack(alignment: .top, spacing: 14) {
-                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl, width: 64, height: 88)
+                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: 64, height: 88)
                             .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                             .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
                         VStack(alignment: .leading, spacing: 6) {

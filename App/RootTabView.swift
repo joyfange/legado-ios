@@ -173,6 +173,7 @@ private struct BookshelfView: View {
     @EnvironmentObject private var library: BookLibraryModel
     @EnvironmentObject private var sources: SourceLibraryModel
     @ObservedObject private var folderStore = BookshelfFolderStore.shared
+    @ObservedObject private var selection = BookshelfSelection.shared
     @State private var showsLocalImporter = false
     @State private var pendingLocalFiles: [LocalBookImportFile] = []
     @State private var selectedGroupID = BookGroup.idAll
@@ -209,22 +210,12 @@ private struct BookshelfView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
-                ReadingPageHeader(title: "书架", subtitle: "阅读，让时间有了形状") {
-                    NavigationLink { SearchView() } label: {
-                        ReadingToolbarIcon(systemName: "magnifyingglass")
+                ReadingPageHeader(title: "书架", subtitle: selection.isActive ? "已选 \(selection.urls.count) 本" : "阅读，让时间有了形状") {
+                    if selection.isActive {
+                        selectionHeaderButtons
+                    } else {
+                        normalHeaderButtons
                     }
-                    .accessibilityLabel("搜索")
-                    if bookshelfLayout == "shelf" {
-                        Button { showsOrnamentManager = true } label: {
-                            ReadingToolbarIcon(systemName: "leaf")
-                        }
-                        .accessibilityLabel("书架摆件")
-                    }
-                    Button { showsShelfSettings = true } label: {
-                        ReadingToolbarIcon(systemName: "slider.horizontal.3")
-                    }
-                    .accessibilityLabel("书架设置")
-                    bookshelfMenu
                 }
                 if library.visibleGroups.count > 1 {
                     bookshelfGroups.padding(.bottom, 24)
@@ -276,6 +267,15 @@ private struct BookshelfView: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: showsSideSwitcher)
+        .overlay(alignment: .bottom) {
+            if selection.isActive {
+                BookshelfSelectionBar(groupID: selectedGroup.groupId)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .readingTabBarHidden(selection.isActive)
+        .onChange(of: selectedGroupID) { _ in selection.urls = [] }
+        .onDisappear { if selection.isActive { selection.end() } }
         .navigationBarHidden(true)
         .onReceive(library.$books) { books in
             ReadRecordCoverStore.remember(books)
@@ -476,6 +476,8 @@ private struct BookshelfView: View {
                 BookshelfFolderGridTile(folder: folder, books: inside, width: width)
             }
             .buttonStyle(.plain)
+            .opacity(selection.isActive ? 0.4 : 1)
+            .disabled(selection.isActive)
             .modifier(BookshelfDropModifier(targetURL: nil, folderID: folder.id, groupID: selectedGroup.groupId))
             .accessibilityLabel("文件夹「\(folder.name)」，\(inside.count) 本书")
             .accessibilityHint("轻点打开")
@@ -500,6 +502,8 @@ private struct BookshelfView: View {
                         BookshelfFolderRow(folder: folder, books: inside, compact: compact)
                     }
                     .buttonStyle(.plain)
+                    .opacity(selection.isActive ? 0.4 : 1)
+                    .disabled(selection.isActive)
                     .modifier(BookshelfDropModifier(targetURL: nil, folderID: folder.id, groupID: selectedGroup.groupId))
                 }
                 if solid {
@@ -558,11 +562,51 @@ private struct BookshelfView: View {
     }
 
     @ViewBuilder
+    private var normalHeaderButtons: some View {
+        NavigationLink { SearchView() } label: {
+            ReadingToolbarIcon(systemName: "magnifyingglass")
+        }
+        .accessibilityLabel("搜索")
+        if bookshelfLayout == "shelf" {
+            Button { showsOrnamentManager = true } label: {
+                ReadingToolbarIcon(systemName: "leaf")
+            }
+            .accessibilityLabel("书架摆件")
+        }
+        Button { showsShelfSettings = true } label: {
+            ReadingToolbarIcon(systemName: "slider.horizontal.3")
+        }
+        .accessibilityLabel("书架设置")
+        bookshelfMenu
+    }
+
+    /// 多选时右上角：全选 / 全不选。
+    private var selectionHeaderButtons: some View {
+        let selectable = displayedBooks.map(\.bookUrl)
+        let allSelected = !selectable.isEmpty && selectable.allSatisfy { selection.urls.contains($0) }
+        return Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            if allSelected { selection.urls.subtract(selectable) } else { selection.urls.formUnion(selectable) }
+        } label: {
+            Text(allSelected ? "全不选" : "全选")
+                .font(AppFontStyle.subheadline.weight(.medium).themed)
+                .foregroundStyle(.primary)
+                .padding(.horizontal, 14)
+                .frame(height: 36)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
     private var bookshelfMenu: some View {
         if library.isCheckingUpdates {
             ProgressView().controlSize(.small).frame(width: 44, height: 44)
         } else {
             Menu {
+                if bookshelfLayout != "shelf" {
+                    Button("选择", systemImage: "checkmark.circle") { selection.begin() }
+                }
                 Button("更新目录", systemImage: "arrow.clockwise") {
                     Task { await library.checkForUpdates(sources: sources.sources) }
                 }
@@ -639,6 +683,11 @@ private enum BookshelfLinkMode {
     case grid(CGFloat)
     case list
     case compact
+
+    var isCompact: Bool {
+        if case .compact = self { return true }
+        return false
+    }
 }
 
 private struct BookshelfBookLink: View {
@@ -648,19 +697,62 @@ private struct BookshelfBookLink: View {
     let book: Book
     let mode: BookshelfLinkMode
     let groupID: Int64
+    @ObservedObject private var selection = BookshelfSelection.shared
     @State private var showsGroupSelector = false
+    @State private var showsInfoEditor = false
 
     private var source: BookSource? { sources.sources.first { $0.bookSourceUrl == book.origin } }
 
+    @ViewBuilder private var label: some View {
+        switch mode {
+        case .grid(let width):
+            BookshelfGridItem(book: book, width: width)
+                .overlay(alignment: .topTrailing) {
+                    if selection.isActive {
+                        BookshelfSelectionBadge(selected: selection.urls.contains(book.bookUrl))
+                            .frame(width: width, height: BookshelfGridMetrics.coverHeight(width: width), alignment: .bottomTrailing)
+                    }
+                }
+        case .list, .compact:
+            HStack(spacing: 0) {
+                BookshelfRow(book: book, compact: mode.isCompact)
+                if selection.isActive {
+                    BookshelfSelectionBadge(selected: selection.urls.contains(book.bookUrl))
+                }
+            }
+        }
+    }
+
+    /// 长按预览只框住书本身：网格只取封面，列表铺上页面底色并用圆角，不再出现半透明的大方框。
+    @ViewBuilder private var previewFramedLabel: some View {
+        switch mode {
+        case .grid(let width):
+            label.contentShape(.contextMenuPreview,
+                               BookshelfCoverPreviewShape(height: BookshelfGridMetrics.coverHeight(width: width)))
+        case .list, .compact:
+            label
+                .background(ReadingTheme.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+    }
+
     var body: some View {
+        if selection.isActive {
+            Button { selection.toggle(book.bookUrl) } label: {
+                label.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(selection.urls.contains(book.bookUrl) ? .isSelected : [])
+        } else {
+            link
+        }
+    }
+
+    private var link: some View {
         NavigationLink {
             BookshelfBookDestination(book: book, source: source)
         } label: {
-            switch mode {
-            case .grid(let width): BookshelfGridItem(book: book, width: width)
-            case .list: BookshelfRow(book: book, compact: false)
-            case .compact: BookshelfRow(book: book, compact: true)
-            }
+            previewFramedLabel
         }
         .buttonStyle(.plain)
         .onDrag { NSItemProvider(object: book.bookUrl as NSString) }
@@ -670,8 +762,10 @@ private struct BookshelfBookLink: View {
                 if let source { BookDetailView(book: book, source: source) }
                 else { LocalBookDetailView(book: book) }
             } label: {
-                Label("书籍信息", systemImage: "info.circle")
+                Label("作品详情", systemImage: "books.vertical")
             }
+            Button("编辑书籍信息", systemImage: "pencil") { showsInfoEditor = true }
+            Button("选择", systemImage: "checkmark.circle") { selection.begin(with: book.bookUrl) }
             Button("移至书架", systemImage: "rectangle.3.group") { showsGroupSelector = true }
             let folders = folderStore.folders(inGroup: groupID)
             if !folders.isEmpty {
@@ -693,6 +787,9 @@ private struct BookshelfBookLink: View {
         }
         .sheet(isPresented: $showsGroupSelector) {
             BookGroupSelectView(book: book).environmentObject(library)
+        }
+        .sheet(isPresented: $showsInfoEditor) {
+            BookInfoEditView(book: book).environmentObject(library)
         }
     }
 }
@@ -868,7 +965,7 @@ private struct ContinueReadingCard: View {
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
             if !dynamicTypeSize.isAccessibilitySize {
-                BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl, width: 44, height: 62)
+                BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: 44, height: 62)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(book.name)
@@ -3837,7 +3934,7 @@ struct BookshelfCover: View {
 
     var body: some View {
         let solid = coverStyle == "solid"
-        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl, width: width, height: height)
+        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: width, height: height)
             .overlay(alignment: .leading) {
                 if solid {
                     BookshelfSolidSpineShade(width: width)
@@ -3875,7 +3972,7 @@ struct BookshelfFolderIcon: View {
                                 let index = row * 2 + column
                                 if index < shown.count {
                                     BookCoverArtwork(title: shown[index].name, author: shown[index].author,
-                                                     remoteURL: shown[index].coverUrl, width: cellWidth, height: cellHeight)
+                                                     remoteURL: shown[index].displayCoverUrl, width: cellWidth, height: cellHeight)
                                 } else {
                                     Color.clear.frame(width: cellWidth, height: cellHeight)
                                 }
@@ -5077,7 +5174,7 @@ private struct BookshelfPulledFaces: View, Animatable {
                             .scaledToFill()
                             .frame(width: max(h * 0.7, depth), height: h)
                     } else {
-                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
+                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
                                          width: max(h * 0.7, depth), height: h)
                     }
                 }
@@ -6265,7 +6362,7 @@ private struct BookshelfSpine: View {
                 if let coverImage {
                     Image(uiImage: coverImage).resizable().scaledToFill()
                 } else {
-                    BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverUrl,
+                    BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
                                      width: coverWidth, height: w)
                 }
             }
@@ -8321,3 +8418,405 @@ private struct CoverRegistrySync: View {
             }
     }
 }
+
+// MARK: - 编辑书籍信息
+
+/// 长按书籍 →「编辑书籍信息」：换封面（相册图片或网址）、改书名作者、改简介、选分组，下面是阅读进度。
+struct BookInfoEditView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var library: BookLibraryModel
+    @ObservedObject private var folderStore = BookshelfFolderStore.shared
+    let original: Book
+    @State private var name: String
+    @State private var author: String
+    @State private var intro: String
+    @State private var coverText: String
+    @State private var customCover: String?
+    @State private var folderID: String?
+    @State private var showsPhotoPicker = false
+    @State private var coverMessage: String?
+
+    init(book: Book) {
+        original = book
+        _name = State(initialValue: book.name)
+        _author = State(initialValue: book.author)
+        _intro = State(initialValue: book.displayIntro ?? "")
+        _customCover = State(initialValue: book.customCoverUrl)
+        let current = book.customCoverUrl ?? ""
+        _coverText = State(initialValue: current.hasPrefix("data:") ? "" : current)
+        _folderID = State(initialValue: BookshelfFolderStore.shared.folders.first { $0.bookURLs.contains(book.bookUrl) }?.id)
+    }
+
+    private var shownCover: String? {
+        if let customCover, !customCover.isEmpty { return customCover }
+        return original.coverUrl
+    }
+
+    private var folderOptions: [BookshelfFolder] { folderStore.folders(inGroup: BookGroup.idAll) }
+
+    private var addedDate: String {
+        let seconds = original.syncTime > 0 ? original.syncTime : original.durChapterTime
+        guard seconds > 0 else { return "—" }
+        let date = Date(timeIntervalSince1970: TimeInterval(seconds > 10_000_000_000 ? seconds / 1000 : seconds))
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "yyyy年M月d日"
+        return formatter.string(from: date)
+    }
+
+    var body: some View {
+        ReadingNavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Spacer()
+                        BookCoverArtwork(title: name, author: author, remoteURL: shownCover, width: 120, height: 170)
+                            .shadow(color: .black.opacity(0.18), radius: 10, y: 6)
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                    .listRowBackground(Color.clear)
+                }
+                Section {
+                    Button { showsPhotoPicker = true } label: {
+                        Label("选择图片", systemImage: "photo")
+                    }
+                    if customCover?.isEmpty == false {
+                        Button(role: .destructive) {
+                            customCover = nil
+                            coverText = ""
+                        } label: {
+                            Label("恢复书源封面", systemImage: "arrow.uturn.backward")
+                        }
+                    }
+                } header: {
+                    Text("封面")
+                } footer: {
+                    Text(coverMessage ?? "从相册选一张图片作为封面，只改本机书架上的显示。")
+                }
+                Section {
+                    TextField("粘贴图片网址", text: $coverText)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button {
+                        let value = coverText.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard value.hasPrefix("http") || value.hasPrefix("//") else {
+                            coverMessage = "请输入以 http 开头的图片网址。"
+                            return
+                        }
+                        customCover = value
+                        coverMessage = "已应用，保存后生效。"
+                    } label: {
+                        Label("应用网址", systemImage: "arrow.down.circle")
+                    }
+                } footer: {
+                    Text("粘贴图片网址后，轻点「应用网址」即可换为封面。")
+                }
+                Section("基本信息") {
+                    LabeledTextRow(title: "书名", text: $name)
+                    LabeledTextRow(title: "作者", text: $author)
+                    Picker("分组", selection: $folderID) {
+                        Text("未分组").tag(String?.none)
+                        ForEach(folderOptions) { folder in
+                            Text(folder.name).tag(Optional(folder.id))
+                        }
+                    }
+                }
+                Section {
+                    ZStack(alignment: .topLeading) {
+                        if intro.isEmpty {
+                            Text("简介").foregroundStyle(.tertiary).padding(.top, 8).padding(.leading, 4)
+                        }
+                        TextEditor(text: $intro)
+                            .frame(minHeight: 110)
+                            .readingScrollContentBackgroundHidden()
+                    }
+                } header: {
+                    Text("简介")
+                } footer: {
+                    Text("留空时显示书源提供的简介。")
+                }
+                Section("阅读进度") {
+                    infoRow("当前进度", BookReadingPresentation.hasStarted(original)
+                            ? "\(Int((BookReadingPresentation.progress(original) * 100).rounded()))%" : "0%")
+                    infoRow("当前章节", BookReadingPresentation.position(original))
+                    infoRow("加入时间", addedDate)
+                    infoRow("来源", original.origin == "local" ? "本地书籍" : (original.originName.isEmpty ? "网络书籍" : original.originName))
+                }
+            }
+            .readingThemedListBackground()
+            .navigationTitle("书籍信息")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: { Image(systemName: "xmark") }
+                        .accessibilityLabel("取消")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { save() } label: { Image(systemName: "checkmark") }
+                        .accessibilityLabel("保存")
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .readingPhotoPicker(isPresented: $showsPhotoPicker) { data in
+                if let dataURL = Self.coverDataURL(from: data) {
+                    customCover = dataURL
+                    coverText = ""
+                    coverMessage = "已选择图片，保存后生效。"
+                } else {
+                    coverMessage = "这张图片无法读取，换一张试试。"
+                }
+            } onError: { error in
+                coverMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func infoRow(_ title: String, _ value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value).foregroundStyle(.secondary).lineLimit(1)
+        }
+    }
+
+    private func save() {
+        var book = library.books.first { $0.bookUrl == original.bookUrl } ?? original
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        book.name = trimmedName.isEmpty ? book.name : trimmedName
+        book.author = author.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedIntro = intro.trimmingCharacters(in: .whitespacesAndNewlines)
+        book.customIntro = trimmedIntro.isEmpty || trimmedIntro == (book.intro ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            ? nil : trimmedIntro
+        book.customCoverUrl = customCover?.isEmpty == false ? customCover : nil
+        let currentFolder = folderStore.folders.first { $0.bookURLs.contains(book.bookUrl) }?.id
+        if folderID != currentFolder {
+            if let currentFolder { folderStore.remove([book.bookUrl], from: currentFolder) }
+            if let folderID { folderStore.add(book.bookUrl, to: folderID) }
+        }
+        Task {
+            await library.replace(oldBookURL: original.bookUrl, with: book)
+            dismiss()
+        }
+    }
+
+    /// 相册图片缩到 600 像素宽、JPEG 压缩后存成 data 地址，书架数据不会被大图撑大。
+    static func coverDataURL(from data: Data) -> String? {
+        guard let image = UIImage(data: data) else { return nil }
+        let scale = min(1, 600 / max(image.size.width, 1))
+        let size = CGSize(width: (image.size.width * scale).rounded(), height: (image.size.height * scale).rounded())
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        let resized = UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            image.draw(in: CGRect(origin: .zero, size: size))
+        }
+        guard let jpeg = resized.jpegData(compressionQuality: 0.82) else { return nil }
+        return "data:image/jpeg;base64," + jpeg.base64EncodedString()
+    }
+}
+
+private struct LabeledTextRow: View {
+    let title: String
+    @Binding var text: String
+
+    var body: some View {
+        HStack {
+            Text(title)
+            TextField(title, text: $text)
+                .multilineTextAlignment(.trailing)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - 书架多选
+
+/// 书架多选：「选择」后轻点书勾选，底栏可一次把多本书加入分组（文件夹）、新建分组或移出书架。
+@MainActor
+final class BookshelfSelection: ObservableObject {
+    static let shared = BookshelfSelection()
+    @Published var isActive = false
+    @Published var urls: Set<String> = []
+
+    func begin(with url: String? = nil) {
+        urls = url.map { [$0] } ?? []
+        withAnimation(.easeOut(duration: 0.2)) { isActive = true }
+    }
+
+    func end() {
+        withAnimation(.easeOut(duration: 0.2)) { isActive = false }
+        urls = []
+    }
+
+    func toggle(_ url: String) {
+        if !urls.insert(url).inserted { urls.remove(url) }
+        UISelectionFeedbackGenerator().selectionChanged()
+    }
+}
+
+/// 多选时盖在书上的勾选圈。
+private struct BookshelfSelectionBadge: View {
+    let selected: Bool
+
+    var body: some View {
+        ZStack {
+            Circle().fill(selected ? ReadingTheme.accentFill : Color.black.opacity(0.25))
+            Circle().stroke(Color.white, lineWidth: 1.5)
+            if selected {
+                Image(systemName: "checkmark")
+                    .font(AppFontStyle.system(size: 11, weight: .bold).themed)
+                    .foregroundStyle(ReadingTheme.onAccent)
+            }
+        }
+        .frame(width: 22, height: 22)
+        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+        .padding(6)
+    }
+}
+
+/// 多选底栏：移出书架 · 加入分组 · 移至书架。
+private struct BookshelfSelectionBar: View {
+    @EnvironmentObject private var library: BookLibraryModel
+    @ObservedObject private var selection = BookshelfSelection.shared
+    let groupID: Int64
+    @State private var showsFolderSheet = false
+    @State private var showsRemoveConfirmation = false
+
+    private var selectedBooks: [Book] { library.books.filter { selection.urls.contains($0.bookUrl) } }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button { showsRemoveConfirmation = true } label: {
+                Image(systemName: "trash")
+                    .font(AppFontStyle.system(size: 16, weight: .medium).themed)
+                    .foregroundStyle(selection.urls.isEmpty ? Color.secondary : ReadingTheme.coral)
+                    .frame(width: 46, height: 46)
+                    .background(.regularMaterial, in: Circle())
+            }
+            .accessibilityLabel("移出书架")
+            Spacer()
+            Button { showsFolderSheet = true } label: {
+                Label(selection.urls.isEmpty ? "加入分组" : "加入分组（\(selection.urls.count)）", systemImage: "folder.badge.plus")
+                    .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                    .foregroundStyle(selection.urls.isEmpty ? Color.secondary : ReadingTheme.accent)
+                    .padding(.horizontal, 20)
+                    .frame(height: 46)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            Spacer()
+            Button { selection.end() } label: {
+                Text("完成")
+                    .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                    .foregroundStyle(.primary)
+                    .frame(width: 58, height: 46)
+                    .background(.regularMaterial, in: Capsule())
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 10)
+        .sheet(isPresented: $showsFolderSheet) {
+            BookshelfAddToFolderSheet(bookURLs: selectedBooks.map(\.bookUrl), groupID: groupID) {
+                selection.end()
+            }
+            .readingPresentationDetents([.medium, .large])
+        }
+        .confirmationDialog("把选中的 \(selection.urls.count) 本书移出书架？", isPresented: $showsRemoveConfirmation,
+                            titleVisibility: .visible) {
+            Button("移出书架", role: .destructive) {
+                let books = selectedBooks
+                selection.end()
+                Task { for book in books { await BookshelfRemoval.remove(book, library: library) } }
+            }
+            Button("取消", role: .cancel) { }
+        }
+    }
+}
+
+/// 加入分组：新建一个分组放进选中的书，或放进已有分组。
+private struct BookshelfAddToFolderSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var folderStore = BookshelfFolderStore.shared
+    let bookURLs: [String]
+    let groupID: Int64
+    let onDone: () -> Void
+    @State private var newName = ""
+    @FocusState private var nameFocused: Bool
+
+    private var folders: [BookshelfFolder] { folderStore.folders(inGroup: groupID) }
+
+    var body: some View {
+        ReadingNavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "plus").foregroundStyle(ReadingTheme.accent)
+                        TextField("新建分组名称", text: $newName)
+                            .focused($nameFocused)
+                            .submitLabel(.done)
+                            .onSubmit(createFolder)
+                        if !newName.trimmingCharacters(in: .whitespaces).isEmpty {
+                            Button("新建", action: createFolder)
+                                .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                                .foregroundStyle(ReadingTheme.accent)
+                        }
+                    }
+                } header: {
+                    Text("新建分组")
+                } footer: {
+                    Text(bookURLs.isEmpty ? "先在书架上勾选要加入的书。" : "选中的 \(bookURLs.count) 本书会放进这个分组。")
+                }
+                if !folders.isEmpty {
+                    Section("已有分组") {
+                        ForEach(folders) { folder in
+                            Button {
+                                for url in bookURLs { folderStore.add(url, to: folder.id) }
+                                finish()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "folder").foregroundStyle(ReadingTheme.accent)
+                                    Text(folder.name).foregroundStyle(.primary)
+                                    Spacer()
+                                    Text("\(folder.bookURLs.count) 本").foregroundStyle(.secondary)
+                                }
+                            }
+                            .disabled(bookURLs.isEmpty)
+                        }
+                    }
+                }
+            }
+            .readingThemedListBackground()
+            .navigationTitle("加入分组")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+            }
+        }
+    }
+
+    private func createFolder() {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !bookURLs.isEmpty else { return }
+        folderStore.makeFolder(groupID: groupID, bookURLs: bookURLs, name: name)
+        finish()
+    }
+
+    private func finish() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        dismiss()
+        onDone()
+    }
+}
+
+
+/// 网格长按预览只取封面那一块（不含下面透明的书名区）。
+private struct BookshelfCoverPreviewShape: Shape {
+    let height: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let cover = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: min(height, rect.height))
+        return Path(roundedRect: cover, cornerRadius: 6, style: .continuous)
+    }
+}
+

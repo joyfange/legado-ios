@@ -28,7 +28,7 @@ struct BookDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
                 hero
-                if let intro = MetadataTextSanitizer().clean(model.book.intro), !intro.isEmpty {
+                if let intro = MetadataTextSanitizer().clean(model.book.displayIntro), !intro.isEmpty {
                     introSection(intro)
                 }
                 chapterCard
@@ -67,7 +67,7 @@ struct BookDetailView: View {
                         .buttonStyle(.plain)
                         .disabled(model.chapters.isEmpty)
                         .opacity(model.chapters.isEmpty ? 0.5 : 1)
-                        .transition(.opacity.combined(with: .move(edge: .trailing)))
+                        .transition(.opacity)
                     }
                 }
             }
@@ -278,7 +278,7 @@ struct BookDetailView: View {
             BookCoverArtwork(
                 title: model.book.name,
                 author: model.book.author,
-                remoteURL: model.book.coverUrl,
+                remoteURL: model.book.displayCoverUrl,
                 width: 108,
                 height: 154
             )
@@ -291,9 +291,16 @@ struct BookDetailView: View {
                 .padding(.top, 4)
                 .background(GeometryReader { proxy in
                     // 书名滚到导航栏下面后，导航栏显示书名和「开始阅读」，随时可以开始读。
-                    let compact = proxy.frame(in: .global).maxY < compactThreshold
-                    Color.clear.onChange(of: compact) { value in
-                        withAnimation(.easeOut(duration: 0.18)) { showsCompactBar = value }
+                    // 显示和隐藏用两条不同的线（回滞）：只用一条线时，手指停在临界处或按钮插入引起的
+                    // 微小位移会让状态来回切换，右上角一闪一闪。
+                    let maxY = proxy.frame(in: .global).maxY
+                    Color.clear.onChange(of: Int(maxY)) { value in
+                        let y = CGFloat(value)
+                        if !showsCompactBar, y < compactThreshold - 6 {
+                            withAnimation(.easeOut(duration: 0.2)) { showsCompactBar = true }
+                        } else if showsCompactBar, y > compactThreshold + 28 {
+                            withAnimation(.easeOut(duration: 0.2)) { showsCompactBar = false }
+                        }
                     }
                 })
             NavigationLink {
@@ -467,6 +474,7 @@ struct BookDetailView: View {
 }
 
 /// 同题材作品：按这本书的分类在当前书源的发现分区里找同类书，横滑封面；可切换分区，「查看全部」进分区书单。
+/// 书源没有发现、分区对不上或分区没有书时，改用分类词在书源里搜索（大多数书源都有搜索），区块不再消失。
 private struct BookSimilarSection: View {
     let book: Book
     let source: BookSource
@@ -474,42 +482,13 @@ private struct BookSimilarSection: View {
 
     var body: some View {
         Group {
-            if let kind = model.kind, !model.books.isEmpty || model.isLoading {
+            if model.hasContent {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text("同题材作品").font(AppFontStyle.title3.bold().themed)
-                        Menu {
-                            ForEach(model.kinds) { option in
-                                Button {
-                                    Task { await model.select(option, source: source, excluding: book) }
-                                } label: {
-                                    if option.id == kind.id {
-                                        Label(option.title, systemImage: "checkmark")
-                                    } else {
-                                        Text(option.title)
-                                    }
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 2) {
-                                Text(kind.title).lineLimit(1)
-                                Image(systemName: "chevron.up.chevron.down").font(AppFontStyle.system(size: 9, weight: .semibold).themed)
-                            }
-                            .font(AppFontStyle.subheadline.themed)
-                            .foregroundStyle(ReadingTheme.accent)
-                        }
+                        titleSwitcher
                         Spacer()
-                        NavigationLink {
-                            ExploreKindBooksView(source: source, kind: kind)
-                        } label: {
-                            HStack(spacing: 3) {
-                                Text("查看全部")
-                                Image(systemName: "chevron.right").font(AppFontStyle.caption.weight(.semibold).themed)
-                            }
-                            .font(AppFontStyle.subheadline.themed)
-                            .foregroundStyle(ReadingTheme.accent)
-                        }
-                        .buttonStyle(.plain)
+                        seeAllLink
                     }
                     if model.isLoading && model.books.isEmpty {
                         ProgressView().frame(maxWidth: .infinity, minHeight: 150)
@@ -520,7 +499,52 @@ private struct BookSimilarSection: View {
                 }
             }
         }
-        .task(id: book.kind ?? "") { await model.load(for: book, source: source) }
+        .task(id: book.bookUrl + "\u{1F}" + (book.kind ?? "")) { await model.load(for: book, source: source) }
+    }
+
+    @ViewBuilder private var titleSwitcher: some View {
+        if let kind = model.kind, model.kinds.count > 1 {
+            Menu {
+                ForEach(model.kinds) { option in
+                    Button {
+                        Task { await model.select(option, source: source, excluding: book) }
+                    } label: {
+                        if option.id == kind.id {
+                            Label(option.title, systemImage: "checkmark")
+                        } else {
+                            Text(option.title)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 2) {
+                    Text(kind.title).lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down").font(AppFontStyle.system(size: 9, weight: .semibold).themed)
+                }
+                .font(AppFontStyle.subheadline.themed)
+                .foregroundStyle(ReadingTheme.accent)
+            }
+        } else if let title = model.kind?.title ?? model.keyword {
+            Text(title).lineLimit(1)
+                .font(AppFontStyle.subheadline.themed)
+                .foregroundStyle(ReadingTheme.accent)
+        }
+    }
+
+    @ViewBuilder private var seeAllLink: some View {
+        let label = HStack(spacing: 3) {
+            Text("查看全部")
+            Image(systemName: "chevron.right").font(AppFontStyle.caption.weight(.semibold).themed)
+        }
+        .font(AppFontStyle.subheadline.themed)
+        .foregroundStyle(ReadingTheme.accent)
+        if let kind = model.kind {
+            NavigationLink { ExploreKindBooksView(source: source, kind: kind) } label: { label }
+                .buttonStyle(.plain)
+        } else if let keyword = model.keyword {
+            NavigationLink { SearchView(initialKeyword: keyword) } label: { label }
+                .buttonStyle(.plain)
+        }
     }
 }
 
@@ -528,29 +552,39 @@ private struct BookSimilarSection: View {
 private final class BookSimilarModel: ObservableObject {
     @Published private(set) var kinds: [ExploreKind] = []
     @Published private(set) var kind: ExploreKind?
+    /// 发现分区用不上时改用搜索，记下搜索词（分类词）。
+    @Published private(set) var keyword: String?
     @Published private(set) var books: [SearchBook] = []
     @Published private(set) var isLoading = false
     private var loadedKey: String?
     private var loadTask: Task<Void, Never>?
 
+    var hasContent: Bool { (kind != nil || keyword != nil) && (!books.isEmpty || isLoading) }
+
     /// 同样放在模型自己的任务里，页面重新出现时不会因取消而永远不显示。
     func load(for book: Book, source: BookSource) async {
-        let key = source.bookSourceUrl + "\u{1F}" + (book.kind ?? "")
+        let key = source.bookSourceUrl + "\u{1F}" + book.bookUrl + "\u{1F}" + (book.kind ?? "")
         guard loadedKey != key else {
             await loadTask?.value
             return
         }
+        guard !ProcessInfo.processInfo.arguments.contains("-uiDemo") else { return }
+        // 分类还没从详情页拿到时先不急着兜底，等 kind 更新后 task 会再跑一次。
         loadedKey = key
-        guard !(source.exploreUrl?.isEmpty ?? true), source.enabledExplore,
-              !ProcessInfo.processInfo.arguments.contains("-uiDemo") else { return }
         loadTask?.cancel()
         let task = Task { [weak self] in
-            let report = await ExploreCache.shared.kinds(for: source)
-            guard let self, !Task.isCancelled else { return }
-            let options = report.kinds.filter { $0.navigableURL != nil }
-            self.kinds = options
-            guard let match = BookSimilarModel.bestKind(for: book, in: options) else { return }
-            await self.select(match, source: source, excluding: book)
+            guard let self else { return }
+            if !(source.exploreUrl?.isEmpty ?? true), source.enabledExplore {
+                let report = await ExploreCache.shared.kinds(for: source)
+                guard !Task.isCancelled else { return }
+                let options = report.kinds.filter { $0.navigableURL != nil }
+                self.kinds = options
+                if let match = BookSimilarModel.matchingKind(for: book, in: options) {
+                    await self.select(match, source: source, excluding: book)
+                    if !self.books.isEmpty || Task.isCancelled { return }
+                }
+            }
+            await self.searchFallback(for: book, source: source, explore: self.kinds)
         }
         loadTask = task
         await task.value
@@ -558,29 +592,73 @@ private final class BookSimilarModel: ObservableObject {
 
     func select(_ option: ExploreKind, source: BookSource, excluding book: Book) async {
         kind = option
+        keyword = nil
         books = []
         isLoading = true
         let outcome = await ExploreCache.shared.firstPage(source: source, kind: option)
         guard kind?.id == option.id else { return }
-        books = outcome.books.filter { $0.name != book.name }.prefix(20).map { $0 }
+        books = Self.filtered(outcome.books, excluding: book)
         isLoading = false
     }
 
-    /// 书的分类里任一词（去掉「小说」）出现在分区标题里，就是同题材分区。
-    static func bestKind(for book: Book, in kinds: [ExploreKind]) -> ExploreKind? {
-        // 没有分类或分类对不上分区时，用第一个不是「最近更新/最新」之类的分区兜底，区块不再整个消失。
-        let fallback = kinds.first { kind in
+    /// 用分类词在本书源搜索；搜不到再用发现里第一个像样的分区兜底。
+    private func searchFallback(for book: Book, source: BookSource, explore: [ExploreKind]) async {
+        for word in Self.kindWords(book.kind).prefix(2) where source.searchUrl?.isEmpty == false {
+            kind = nil
+            keyword = word
+            books = []
+            isLoading = true
+            let outcome = await BookSearchService().search(keyword: word, page: 1, source: source)
+            guard !Task.isCancelled, keyword == word else { return }
+            let found = Self.filtered(outcome.books, excluding: book)
+            isLoading = false
+            if !found.isEmpty {
+                books = found
+                return
+            }
+        }
+        keyword = nil
+        isLoading = false
+        if let fallback = Self.fallbackKind(in: explore) {
+            await select(fallback, source: source, excluding: book)
+            if books.isEmpty { kind = nil }
+        }
+    }
+
+    private static func filtered(_ books: [SearchBook], excluding book: Book) -> [SearchBook] {
+        var seen = Set<String>()
+        return books.filter { $0.name != book.name && seen.insert($0.name + "\u{1F}" + $0.author).inserted }
+            .prefix(20).map { $0 }
+    }
+
+    /// 分类拆词：去掉「小说」「连载中」「已完结」之类，留下题材词。
+    static func kindWords(_ raw: String?) -> [String] {
+        guard let raw, !raw.isEmpty else { return [] }
+        let noise = ["连载中", "连载", "已完结", "完结", "完本", "全本", "小说"]
+        var seen = Set<String>()
+        return raw.components(separatedBy: CharacterSet(charactersIn: ",，|/、;；\n\t ·"))
+            .map { word in
+                var value = word.trimmingCharacters(in: .whitespacesAndNewlines)
+                for item in noise { value = value.replacingOccurrences(of: item, with: "") }
+                return value
+            }
+            .filter { $0.count >= 2 && $0.count <= 8 && !$0.contains(where: \.isNumber) && seen.insert($0).inserted }
+    }
+
+    static func fallbackKind(in kinds: [ExploreKind]) -> ExploreKind? {
+        kinds.first { kind in
             !["最近", "更新", "最新", "推荐", "新书"].contains { kind.title.contains($0) }
         } ?? kinds.first
-        guard let raw = book.kind, !raw.isEmpty else { return fallback }
-        let words = raw.components(separatedBy: CharacterSet(charactersIn: ",，|/、;；\n\t "))
-            .map { $0.replacingOccurrences(of: "小说", with: "").replacingOccurrences(of: "连载中", with: "")
-                .replacingOccurrences(of: "已完结", with: "").trimmingCharacters(in: .whitespaces) }
-            .filter { $0.count >= 2 }
-        for word in words {
-            if let hit = kinds.first(where: { $0.title.contains(word) }) { return hit }
+    }
+
+    /// 书的分类里任一词出现在分区标题里，就是同题材分区。
+    static func matchingKind(for book: Book, in kinds: [ExploreKind]) -> ExploreKind? {
+        for word in kindWords(book.kind) {
+            if let hit = kinds.first(where: { $0.title.contains(word) || word.contains($0.title) && $0.title.count >= 2 }) {
+                return hit
+            }
         }
-        return fallback
+        return nil
     }
 }
 

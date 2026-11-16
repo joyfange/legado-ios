@@ -624,7 +624,8 @@ private struct ExploreMagazineContent: View {
     @ObservedObject var model: ExploreSourceViewModel
     @ObservedObject var settings: ExploreDisplaySettings
 
-    /// 杂志布局的一行：普通分区单独一栏；所有榜单分区并排放进同一个横向翻页栏（如「热门」「完结」两列并排）。
+    /// 杂志布局的一行：普通分区单独一栏；榜单分区按出现顺序就近两个一组，组成一个横向翻页栏
+    /// （两列并排、左右滑动切换）。还有榜单就再两个一组，单独剩下的一个照常竖排。
     private enum Row: Identifiable {
         case single(ExploreKind, index: Int)
         case ranks([ExploreKind], index: Int)
@@ -637,14 +638,20 @@ private struct ExploreMagazineContent: View {
     }
 
     private func rows(_ kinds: [ExploreKind]) -> [Row] {
-        let ranks = kinds.filter { settings.isVertical($0.title) }
+        let rankIndices = kinds.indices.filter { settings.isVertical(kinds[$0].title) }
+        // 每两个相邻榜单配成一对：配对放在第一个榜单的位置，第二个的位置跳过。
+        var pairedAt: [Int: Int] = [:]
+        var skipped = Set<Int>()
+        var position = 0
+        while position + 1 < rankIndices.count {
+            pairedAt[rankIndices[position]] = rankIndices[position + 1]
+            skipped.insert(rankIndices[position + 1])
+            position += 2
+        }
         var result: [Row] = []
-        var placedRanks = false
-        for (index, kind) in kinds.enumerated() {
-            if settings.isVertical(kind.title) {
-                guard !placedRanks else { continue }
-                placedRanks = true
-                result.append(ranks.count > 1 ? .ranks(ranks, index: index) : .single(kind, index: index))
+        for (index, kind) in kinds.enumerated() where !skipped.contains(index) {
+            if let partner = pairedAt[index] {
+                result.append(.ranks([kind, kinds[partner]], index: partner))
             } else {
                 result.append(.single(kind, index: index))
             }

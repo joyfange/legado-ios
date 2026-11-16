@@ -42,7 +42,7 @@ struct ReadingHistoryView: View {
                                     BookCoverArtwork(
                                         title: record.bookName,
                                         author: shelfBook?.author ?? savedCover?.author ?? "",
-                                        remoteURL: shelfBook?.coverUrl ?? savedCover?.url,
+                                        remoteURL: shelfBook?.displayCoverUrl ?? savedCover?.url,
                                         width: 38,
                                         height: 54
                                     )

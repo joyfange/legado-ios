@@ -538,3 +538,17 @@ final class BookLibraryModel: ObservableObject {
         return succeeded
     }
 }
+
+extension Book {
+    /// 用户在「编辑书籍信息」里换过的封面优先，其次书源封面。
+    var displayCoverUrl: String? {
+        if let custom = customCoverUrl?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty { return custom }
+        return coverUrl
+    }
+
+    /// 用户改过的简介优先。
+    var displayIntro: String? {
+        if let custom = customIntro?.trimmingCharacters(in: .whitespacesAndNewlines), !custom.isEmpty { return custom }
+        return intro
+    }
+}
