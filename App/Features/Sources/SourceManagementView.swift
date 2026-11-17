@@ -205,7 +205,7 @@ struct SourceManagementView: View {
                                 }
                             }
                         }
-                    }
+                    }.readingRowBackground()
                     if sortMode != "manual" {
                         Section("顺序") {
                             Button {
@@ -218,7 +218,7 @@ struct SourceManagementView: View {
                             } label: {
                                 if sortDescending { Label("倒序", systemImage: "checkmark") } else { Text("倒序") }
                             }
-                        }
+                        }.readingRowBackground()
                     }
                 } label: {
                     Label("排序", systemImage: "line.3.horizontal.decrease")

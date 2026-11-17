@@ -17,7 +17,7 @@ struct BubbleStyleSettingsView: View {
                 Button { perform { try store.select(nil) } } label: {
                     HStack { Text("默认气泡"); Spacer(); if store.selectedID == nil { Image(systemName: "checkmark") } }
                 }.accessibilityIdentifier("bubble.default")
-            }
+            }.readingRowBackground()
             ForEach(store.styles) { style in
                 HStack {
                     Button { perform { try store.select(style.id) } } label: {
@@ -36,7 +36,7 @@ struct BubbleStyleSettingsView: View {
                 Text("选中的样式应用到所有书源的原生段评气泡，不改变评论点击行为。书源完整图片卡片保持原样。")
                     .font(.footnote).foregroundStyle(.secondary)
                 if let error { Text(error).foregroundStyle(.red) }
-            }
+            }.readingRowBackground()
         }
         .readingThemedListBackground()
         .navigationTitle("段评气泡")
@@ -70,12 +70,12 @@ struct BubbleStyleEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("样式名称") { TextField("自定义气泡", text: $draft.name).accessibilityIdentifier("bubble.name") }
+                Section("样式名称") { TextField("自定义气泡", text: $draft.name).accessibilityIdentifier("bubble.name") }.readingRowBackground()
                 Section("创建方式") {
                     Picker("创建方式", selection: $draft.mode) {
                         Text("模板").tag("template"); Text("SVG").tag("svg"); Text("图片").tag("image")
                     }.pickerStyle(.segmented)
-                }
+                }.readingRowBackground()
                 if draft.mode == "template" {
                     Section("模板") {
                         Picker("模板", selection: $draft.template) {
@@ -83,7 +83,7 @@ struct BubbleStyleEditor: View {
                         }.pickerStyle(.segmented)
                         Text("气泡：简洁轮廓；白色糖果：白底黑边、深灰数字；方泡：方形轮廓和左下尾巴。")
                             .font(.footnote).foregroundStyle(.secondary)
-                    }
+                    }.readingRowBackground()
                 } else if draft.mode == "svg" {
                     Section("SVG 背景") {
                         TextEditor(text: $draft.svg).font(.system(.caption, design: .monospaced)).frame(minHeight: 150)
@@ -91,29 +91,29 @@ struct BubbleStyleEditor: View {
                         Button("填入示例") { draft.svg = "<svg viewBox=\"0 0 40 30\"><rect x=\"2\" y=\"2\" width=\"36\" height=\"26\" rx=\"9\" fill=\"none\" stroke=\"currentColor\"/></svg>" }
                         Text("仅支持静态背景：rect/circle/ellipse/line/polygon/polyline/path（M L H V C Q Z）。颜色用 #RRGGBB 或 currentColor。暂不支持分组、变换、文字、渐变、脚本、外链或嵌入图片；不支持的内容会提示错误，不会加载网络。数字由下方格式绘制。")
                             .font(.footnote).foregroundStyle(.secondary)
-                    }
+                    }.readingRowBackground()
                 } else {
                     Section("背景图片") {
                         PhotosPicker("从相册选择背景图", selection: $photo, matching: .images)
                         if importing { ProgressView("正在导入…") }
                         Text("建议透明 PNG。导入后缩小至 512 像素并保留透明度，原相册图片不修改。最大原图 8 MB。")
                             .font(.footnote).foregroundStyle(.secondary)
-                    }
+                    }.readingRowBackground()
                 }
                 Section("文字与数字") {
                     Toggle("显示评论数字", isOn: $draft.showNumber)
                     TextField("显示格式，可用 {n} 代表评论数", text: $draft.format).accessibilityIdentifier("bubble.format")
                     Toggle("文字颜色跟随正文", isOn: $draft.followText)
                     if !draft.followText { ColorPicker("自定义颜色", selection: customColor, supportsOpacity: false) }
-                }
+                }.readingRowBackground()
                 Section("尺寸") {
                     HStack { Text("整体大小"); Spacer(); Text(String(format: "%.2fx", draft.scale)) }
                     Slider(value: $draft.scale, in: 0.6...1.8, step: 0.05).accessibilityIdentifier("bubble.scale")
                     HStack { Text("宽高比"); Spacer(); Text(String(format: "%.2fx", draft.aspect)) }
                     Slider(value: $draft.aspect, in: 0.6...2, step: 0.05)
-                }
-                if let warning = BubbleStyleStore.validate(draft) { Section { Text(warning).foregroundStyle(.orange) } }
-                if let error { Section { Text(error).foregroundStyle(.red) } }
+                }.readingRowBackground()
+                if let warning = BubbleStyleStore.validate(draft) { Section { Text(warning).foregroundStyle(.orange) }.readingRowBackground() }
+                if let error { Section { Text(error).foregroundStyle(.red) }.readingRowBackground() }
             }
             .safeAreaInset(edge: .top) {
                 VStack(spacing: 8) {

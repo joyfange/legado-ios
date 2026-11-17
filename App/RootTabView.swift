@@ -479,7 +479,7 @@ private struct BookshelfView: View {
                         else { Text(Self.sortTitles[index]) }
                     }
                 }
-            }
+            }.readingRowBackground()
             Section {
                 Button {
                     sortAscending = false
@@ -491,7 +491,7 @@ private struct BookshelfView: View {
                 } label: {
                     if sortAscending { Label("正序", systemImage: "checkmark") } else { Text("正序") }
                 }
-            }
+            }.readingRowBackground()
         } label: {
             sortMenuLabel
         }
@@ -810,6 +810,9 @@ private struct BookshelfView: View {
         switch entry {
         case .book(let book):
             BookshelfBookLink(book: book, mode: .grid(width), groupID: selectedGroup.groupId)
+                // 进入 / 退出多选时整格重建：之前只有部分格子收到 isActive 变化，
+                // 选择圈只出现在个别书上，点一下勾选（urls 变化）后才全部刷新出来。
+                .id("\(book.bookUrl)#\(selection.isActive)")
         case .folder(let folder, let inside):
             Button {
                 openFolder(folder)
@@ -835,6 +838,7 @@ private struct BookshelfView: View {
                 switch entry {
                 case .book(let book):
                     BookshelfBookLink(book: book, mode: compact ? .compact : .list, groupID: selectedGroup.groupId)
+                        .id("\(book.bookUrl)#\(selection.isActive)")
                 case .folder(let folder, let inside):
                     Button {
                         openFolder(folder)
@@ -9105,14 +9109,14 @@ struct BookInfoEditView: View {
                     }
                     .padding(.vertical, 8)
                     .listRowBackground(Color.clear)
-                }
+                }.readingRowBackground()
                 Section {
                     coverSearchRow
                 } header: {
                     Text("封面搜索")
                 } footer: {
                     Text("按书名在已启用的书源里找同一本书的封面，轻点一张即可换上。")
-                }
+                }.readingRowBackground()
                 Section {
                     Button { showsPhotoPicker = true } label: {
                         Label("选择图片", systemImage: "photo")
@@ -9129,7 +9133,7 @@ struct BookInfoEditView: View {
                     Text("封面")
                 } footer: {
                     Text(coverMessage ?? "从相册选一张图片作为封面，只改本机书架上的显示。")
-                }
+                }.readingRowBackground()
                 Section {
                     TextField("粘贴图片网址", text: $coverText)
                         .keyboardType(.URL)
@@ -9148,7 +9152,7 @@ struct BookInfoEditView: View {
                     }
                 } footer: {
                     Text("粘贴图片网址后，轻点「应用网址」即可换为封面。")
-                }
+                }.readingRowBackground()
                 Section("基本信息") {
                     LabeledTextRow(title: "书名", text: $name)
                     LabeledTextRow(title: "作者", text: $author)
@@ -9158,7 +9162,7 @@ struct BookInfoEditView: View {
                             Text(folder.name).tag(Optional(folder.id))
                         }
                     }
-                }
+                }.readingRowBackground()
                 Section {
                     ZStack(alignment: .topLeading) {
                         if intro.isEmpty {
@@ -9172,14 +9176,14 @@ struct BookInfoEditView: View {
                     Text("简介")
                 } footer: {
                     Text("留空时显示书源提供的简介。")
-                }
+                }.readingRowBackground()
                 Section("阅读进度") {
                     infoRow("当前进度", BookReadingPresentation.hasStarted(original)
                             ? "\(Int((BookReadingPresentation.progress(original) * 100).rounded()))%" : "0%")
                     infoRow("当前章节", BookReadingPresentation.position(original))
                     infoRow("加入时间", addedDate)
                     infoRow("来源", original.origin == "local" ? "本地书籍" : (original.originName.isEmpty ? "网络书籍" : original.originName))
-                }
+                }.readingRowBackground()
             }
             .readingThemedListBackground()
             .onDisappear { coverSearchTask?.cancel() }
@@ -9361,12 +9365,15 @@ final class BookshelfSelection: ObservableObject {
     @Published var urls: Set<String> = []
 
     func begin(with url: String? = nil) {
-        urls = url.map { [$0] } ?? []
-        withAnimation(.easeOut(duration: 0.2)) { isActive = true }
+        // 先等长按菜单 / 右上角菜单收起再切换，避免菜单收起动画期间部分格子错过这次刷新。
+        Task { @MainActor [weak self] in
+            self?.urls = url.map { [$0] } ?? []
+            self?.isActive = true
+        }
     }
 
     func end() {
-        withAnimation(.easeOut(duration: 0.2)) { isActive = false }
+        isActive = false
         urls = []
     }
 
@@ -9489,7 +9496,7 @@ private struct BookshelfAddToFolderSheet: View {
                     Text("新建分组")
                 } footer: {
                     Text(bookURLs.isEmpty ? "先在书架上勾选要加入的书。" : "选中的 \(bookURLs.count) 本书会放进这个分组。")
-                }
+                }.readingRowBackground()
                 if !folders.isEmpty {
                     Section("已有分组") {
                         ForEach(folders) { folder in
@@ -9506,7 +9513,7 @@ private struct BookshelfAddToFolderSheet: View {
                             }
                             .disabled(bookURLs.isEmpty)
                         }
-                    }
+                    }.readingRowBackground()
                 }
             }
             .readingThemedListBackground()

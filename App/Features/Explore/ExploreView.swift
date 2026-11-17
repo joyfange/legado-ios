@@ -730,7 +730,7 @@ private struct ExploreSourceView: View {
                         }
                     }
                     .background(ReadingTheme.canvas.opacity(0.96))
-                }
+                }.readingRowBackground()
             }
             .padding(.bottom, 12)
         }
@@ -1379,7 +1379,7 @@ private struct ExploreDisplaySettingsView: View {
                 .pickerStyle(.menu)
             } footer: {
                 Text("列表是上方一排分类、下方所选分类的书；杂志是每个分类一排书架或一栏榜单。这页的设置适用于每个书源的发现页。")
-            }
+            }.readingRowBackground()
 
             if settings.layout == .magazine {
                 Section {
@@ -1406,7 +1406,7 @@ private struct ExploreDisplaySettingsView: View {
                     Text("竖排榜单关键词")
                 } footer: {
                     Text("标题含任一关键词的分类用竖排序号，其余用横滑封面。左滑可删除。")
-                }
+                }.readingRowBackground()
 
                 Section {
                     Button {
@@ -1414,7 +1414,7 @@ private struct ExploreDisplaySettingsView: View {
                     } label: {
                         Label("恢复默认关键词", systemImage: "arrow.counterclockwise")
                     }
-                }
+                }.readingRowBackground()
 
                 Section("榜单展示数量") {
                     Picker(selection: $settings.verticalCount) {
@@ -1431,7 +1431,7 @@ private struct ExploreDisplaySettingsView: View {
                         Label("横滑展示数", systemImage: "rectangle.split.3x1")
                     }
                     .pickerStyle(.menu)
-                }
+                }.readingRowBackground()
 
                 Section {
                     Picker(selection: $settings.preloadCount) {
@@ -1444,7 +1444,7 @@ private struct ExploreDisplaySettingsView: View {
                     Text("预加载")
                 } footer: {
                     Text("滚到某个分类时，顺便排队加载后面几个分类。数字越大越少看到加载中，但书源请求也越多。")
-                }
+                }.readingRowBackground()
             }
         }
         .readingThemedListBackground()
