@@ -508,7 +508,7 @@ private struct BookshelfView: View {
                 .foregroundStyle(sortAscending ? Color.secondary.opacity(0.55) : Color.primary)
         }
         .frame(width: 38, height: 30)
-        .background(ReadingTheme.surface, in: Capsule())
+        .appGlass(in: Capsule(), tint: ReadingTheme.surface, tintOpacity: 0.35)
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
         .contentShape(Capsule())
@@ -540,7 +540,7 @@ private struct BookshelfView: View {
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(shelfBarExpanded ? 180 : 0))
                 .frame(width: 30, height: 30)
-                .background(ReadingTheme.surface, in: Circle())
+                .appGlass(in: Circle(), tint: ReadingTheme.surface, tintOpacity: 0.35)
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
                 .contentShape(Circle())
@@ -607,7 +607,7 @@ private struct BookshelfView: View {
         }
         .padding(10)
         .frame(maxWidth: 320, alignment: .leading)
-        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .appGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
     }
@@ -685,7 +685,7 @@ private struct BookshelfView: View {
             }
             .padding(20)
             .frame(maxWidth: 300)
-            .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .appGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
             .shadow(color: .black.opacity(0.18), radius: 20, y: 8)
         }
     }
@@ -1228,11 +1228,20 @@ private struct BookshelfGridItem: View {
                     }
                 }
                 .modifier(BookshelfCoverMenuModifier(menu: coverMenu))
-                .overlay(alignment: .bottomTrailing) {
+                .overlay {
+                    // 多选：每本书都画选择圈（不做出入场动画，避免部分书的圈停在透明态），
+                    // 选中的书再加一圈主题色描边和淡色蒙层，即使圈被遮住也看得出选没选。
                     if let selected {
-                        BookshelfSelectionBadge(selected: selected)
-                            .allowsHitTesting(false)
-                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                        ZStack(alignment: .bottomTrailing) {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(selected ? ReadingTheme.accent.opacity(0.18) : Color.black.opacity(0.06))
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(selected ? ReadingTheme.accent : Color.clear, lineWidth: 2.5)
+                            BookshelfSelectionBadge(selected: selected)
+                        }
+                        .frame(width: width, height: height)
+                        .allowsHitTesting(false)
+                        .id(selected)
                     }
                 }
                 .zIndex(1)
@@ -1311,7 +1320,7 @@ private struct BookshelfFolderRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, compact ? 9 : 10)
         .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
-        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
+        .appGlass(in: RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
         .contentShape(RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("文件夹「\(folder.name)」，\(books.count) 本书")
@@ -1931,7 +1940,7 @@ private struct BookshelfRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, compact ? 9 : 10)
         .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
-        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        .appGlass(in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
         .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityValue(book.lastCheckCount > 0 ? "有 \(book.lastCheckCount) 章更新" : "")
@@ -9374,17 +9383,17 @@ private struct BookshelfSelectionBadge: View {
     var body: some View {
         ZStack {
             // 未选中也要在浅色、深色封面上都看得清：深色半透明底 + 白圈 + 外圈细描边。
-            Circle().fill(selected ? ReadingTheme.accentFill : Color.black.opacity(0.42))
-            Circle().strokeBorder(Color.white, lineWidth: 2)
-            Circle().stroke(Color.black.opacity(0.18), lineWidth: 0.5)
+            Circle().fill(selected ? ReadingTheme.accentFill : Color.black.opacity(0.5))
+            Circle().strokeBorder(Color.white, lineWidth: 2.5)
+            Circle().stroke(Color.black.opacity(0.25), lineWidth: 0.75)
             if selected {
                 Image(systemName: "checkmark")
                     .font(AppFontStyle.system(size: 11, weight: .bold).themed)
                     .foregroundStyle(ReadingTheme.onAccent)
             }
         }
-        .frame(width: 24, height: 24)
-        .shadow(color: .black.opacity(0.3), radius: 2.5, y: 1)
+        .frame(width: 26, height: 26)
+        .shadow(color: .black.opacity(0.35), radius: 3, y: 1)
         .padding(6)
     }
 }

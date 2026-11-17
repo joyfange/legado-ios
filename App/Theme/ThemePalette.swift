@@ -33,7 +33,9 @@ struct ResolvedAppPalette {
         cardRadiusOverride ?? legacyRadius
     }
 
-    init(theme: AppTheme, scheme: ColorScheme) {
+    /// - Parameter glass: 全局「玻璃模式」。传入 true 时，除主题明确选「透明」外，
+    ///   卡片、列表行一律按玻璃绘制（总开关打开就是全局玻璃）；nil 保持主题原值。
+    init(theme: AppTheme, scheme: ColorScheme, glass: Bool? = nil) {
         let colors = theme.swatches(for: scheme)
         let radius = colors.cardRadius.flatMap { value -> CGFloat? in
             guard value.isFinite else { return nil }
@@ -43,7 +45,11 @@ struct ResolvedAppPalette {
         cardRadius = radius ?? CGFloat(AppTheme.defaultCardRadius)
         cardBorder = colors.cardBorder ?? true
         usesOpaqueSurfaces = colors.hasCustomTextOrSelection
-        interfaceEffect = theme.customization?.effect
+        if glass == true {
+            interfaceEffect = theme.customization?.effect == .transparent ? .transparent : .frosted
+        } else {
+            interfaceEffect = theme.customization?.effect
+        }
         cardBackground = theme.customization?.cardBackground ?? true
         let ink = colors.resolvedInk(style: theme.backgroundStyle)
         if theme.customization?.pageBackgroundImage != nil {
@@ -120,7 +126,8 @@ extension EnvironmentValues {
 struct ThemePalette: DynamicProperty {
     @Environment(\.appTheme) private var theme
     @Environment(\.colorScheme) private var scheme
-    var wrappedValue: ResolvedAppPalette { ResolvedAppPalette(theme: theme, scheme: scheme) }
+    @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
+    var wrappedValue: ResolvedAppPalette { ResolvedAppPalette(theme: theme, scheme: scheme, glass: glassEnabled) }
 }
 
 struct AppThemeCanvas: View {

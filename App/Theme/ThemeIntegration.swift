@@ -314,8 +314,8 @@ struct ThemeAmbientGlow: View {
     @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
 
     var body: some View {
-        if let custom = theme.customization, custom.effect == .frosted, glassEnabled, !reduceTransparency,
-           custom.pageBackgroundImage == nil, palette.glowIntensity > 0 {
+        if palette.interfaceEffect == .frosted, glassEnabled, !reduceTransparency,
+           theme.customization?.pageBackgroundImage == nil, palette.glowIntensity > 0 {
             GeometryReader { geometry in
                 let size = max(geometry.size.width, geometry.size.height)
                 let strength = (scheme == .dark ? 0.30 : 0.22) * palette.glowIntensity

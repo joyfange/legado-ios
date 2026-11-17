@@ -482,16 +482,21 @@ struct SourceLoginFormView: View {
         Group {
             if usesGrid { gridBody } else { formBody }
         }
-        .disabled(isRunning)
-        .overlay { if isRunning || isBuilding { ProgressView().controlSize(.large) } }
+        // 运行脚本时只挡点击，不把整页按钮变灰再恢复（那样每点一次整页都会闪一下）。
+        .allowsHitTesting(!isRunning)
+        // 只有第一次生成界面、还什么都没有时才显示大转圈；切换子菜单时不再盖一层转圈。
+        .overlay { if isBuilding && rows.isEmpty { ProgressView().controlSize(.large) } }
         .overlay {
-            if let toast {
-                SourceLoginToast(text: toast)
-                    .onTapGesture { withAnimation(.easeOut(duration: 0.18)) { self.toast = nil } }
-                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            // 动画只作用在提示框自己身上，不再带着整页按钮一起弹簧动画（之前切换「模式」等子页会整页跳动）。
+            ZStack {
+                if let toast {
+                    SourceLoginToast(text: toast)
+                        .onTapGesture { withAnimation(.easeOut(duration: 0.18)) { self.toast = nil } }
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                }
             }
+            .animation(.easeOut(duration: 0.2), value: toast)
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.86), value: toast)
         .onAppear { SourceWebLoginPresenter.install() }
         .onDisappear { SourceWebLoginPresenter.uninstall() }
         .navigationTitle("登录 · \(source.bookSourceName)")
@@ -590,7 +595,9 @@ struct SourceLoginFormView: View {
             if parsed.isEmpty {
                 if rows.isEmpty { status = "登录界面生成失败：书源脚本没有返回界面配置" }
             } else {
-                withAnimation(.easeInOut(duration: 0.18)) { rows = parsed }
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { rows = parsed }
                 var next = values
                 for row in parsed where row.type != "button" && next[row.name] == nil {
                     next[row.name] = row.defaultValue
@@ -1001,22 +1008,26 @@ private struct SourceLoginToast: View {
     let text: String
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
-                .font(AppFontStyle.subheadline.themed)
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 14)
-        }
-        .frame(maxWidth: 300)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxHeight: 420)
-        .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
-        .padding(32)
-        .accessibilityAddTraits(.isStaticText)
+        // 按内容自适应高短：几行字就是几行高，不再撑成一个大黑框；底用玻璃/主题卡片色。
+        Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+            .font(AppFontStyle.subheadline.themed)
+            .foregroundStyle(ReadingTheme.ink)
+            .multilineTextAlignment(.center)
+            .lineLimit(16)
+            .minimumScaleFactor(0.8)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            .frame(maxWidth: 300)
+            .appGlass(in: RoundedRectangle(cornerRadius: 18, style: .continuous),
+                      tint: ReadingTheme.surface, tintOpacity: 0.55)
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.12), radius: 18, y: 6)
+            .padding(32)
+            .accessibilityAddTraits(.isStaticText)
     }
 }
 
