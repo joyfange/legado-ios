@@ -428,7 +428,9 @@ extension View {
     @ViewBuilder
     func readingTabBarHidden(_ hidden: Bool) -> some View {
         if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {
-            toolbar(hidden ? .hidden : .visible, for: .tabBar)
+            // 不隐藏时用 .automatic，不能用 .visible：根视图上写死 .visible 会压过进入阅读页后
+            // 阅读页自己的 .hidden，导致阅读页下面还留着底栏。
+            toolbar(hidden ? .hidden : .automatic, for: .tabBar)
         } else {
             background { if hidden { ReadingHiddenTabBar() } }
         }

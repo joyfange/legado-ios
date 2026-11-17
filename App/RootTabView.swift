@@ -440,6 +440,8 @@ private struct BookshelfView: View {
         let rows = stride(from: 0, to: entries.count, by: columns).map { Array(entries[$0..<min($0 + columns, entries.count)]) }
         let solid = boardStyle == "solid"
         let boardHeight: CGFloat = solid ? 12 : 5
+        // 层板的台面往上伸进封面底边下面：书底压在台面上，看起来是「立在」书架上，而不是躲在书架后面。
+        let tuck: CGFloat = solid ? 5 : 1
         return VStack(alignment: .leading, spacing: hideShelfBase ? 20 : 22) {
             ForEach(rows.indices, id: \.self) { index in
                 HStack(alignment: .top, spacing: spacing) {
@@ -455,8 +457,8 @@ private struct BookshelfView: View {
                 .background(alignment: .topLeading) {
                     // 书立在书板上：书板紧贴封面底边，书名和作者在书板下面。
                     if !hideShelfBase {
-                        BookshelfBoard(width: contentWidth, height: boardHeight, solid: solid)
-                            .offset(y: coverHeight)
+                        BookshelfBoard(width: contentWidth, height: boardHeight + tuck, solid: solid)
+                            .offset(y: coverHeight - tuck)
                             .allowsHitTesting(false)
                     }
                 }
@@ -489,8 +491,7 @@ private struct BookshelfView: View {
     private var listSection: some View {
         let entries = folderStore.entries(for: displayedBooks, groupID: selectedGroup.groupId)
         let compact = bookshelfLayout == "compact"
-        let solid = boardStyle == "solid"
-        return VStack(alignment: .leading, spacing: 0) {
+        return VStack(alignment: .leading, spacing: 10) {
             ForEach(entries) { entry in
                 switch entry {
                 case .book(let book):
@@ -505,13 +506,6 @@ private struct BookshelfView: View {
                     .opacity(selection.isActive ? 0.4 : 1)
                     .disabled(selection.isActive)
                     .modifier(BookshelfDropModifier(targetURL: nil, folderID: folder.id, groupID: selectedGroup.groupId))
-                }
-                if solid {
-                    BookshelfBoard(width: contentWidth, height: 7, solid: true)
-                        .padding(.bottom, 6)
-                } else if entry.id != entries.last?.id {
-                    Rectangle().fill(ReadingTheme.separator).frame(height: 0.5)
-                        .padding(.leading, compact ? 54 : 66)
                 }
             }
         }
@@ -711,15 +705,12 @@ private struct BookshelfBookLink: View {
                     if selection.isActive {
                         BookshelfSelectionBadge(selected: selection.urls.contains(book.bookUrl))
                             .frame(width: width, height: BookshelfGridMetrics.coverHeight(width: width), alignment: .bottomTrailing)
+                            .allowsHitTesting(false)
                     }
                 }
         case .list, .compact:
-            HStack(spacing: 0) {
-                BookshelfRow(book: book, compact: mode.isCompact)
-                if selection.isActive {
-                    BookshelfSelectionBadge(selected: selection.urls.contains(book.bookUrl))
-                }
-            }
+            BookshelfRow(book: book, compact: mode.isCompact,
+                         selected: selection.isActive ? selection.urls.contains(book.bookUrl) : nil)
         }
     }
 
@@ -731,8 +722,7 @@ private struct BookshelfBookLink: View {
             label
         case .list, .compact:
             label
-                .background(ReadingTheme.canvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
                 .contextMenu { menuItems }
         }
     }
@@ -768,11 +758,15 @@ private struct BookshelfBookLink: View {
 
     var body: some View {
         if selection.isActive {
-            Button { selection.toggle(book.bookUrl) } label: {
-                label.contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityAddTraits(selection.urls.contains(book.bookUrl) ? .isSelected : [])
+            // 多选时整块（封面 + 书名）都能点选：直接用点按手势，不经过按钮，
+            // 避免封面上的长按菜单、拖动等手势把轻点吃掉，出现有的书点了没反应。
+            label
+                .contentShape(Rectangle())
+                .onTapGesture { selection.toggle(book.bookUrl) }
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAddTraits(selection.urls.contains(book.bookUrl) ? .isSelected : [])
+                .accessibilityAction { selection.toggle(book.bookUrl) }
         } else {
             link
         }
@@ -859,17 +853,22 @@ private struct BookshelfGridItem: View {
                 }
                 .overlay(alignment: .topTrailing) {
                     if book.lastCheckCount > 0 {
-                        Text("+\(book.lastCheckCount)")
-                            .font(.system(size: 9, weight: .bold).monospacedDigit())
-                            .foregroundStyle(Color.white)
-                            .padding(.horizontal, 5)
-                            .frame(height: 15)
-                            .background(ReadingTheme.coral, in: Capsule())
-                            .offset(x: 4, y: -5)
-                            .accessibilityLabel("更新 \(book.lastCheckCount) 章")
+                        BookshelfUpdateBadge(count: book.lastCheckCount, compact: width < 76)
+                            .offset(x: 5, y: -6)
                     }
                 }
                 .frame(width: width, height: height)
+                // 书底贴着台面的接触阴影：让书「压」在层板上。
+                .background(alignment: .bottom) {
+                    if !hideShelfBase {
+                        Ellipse()
+                            .fill(Color.black.opacity(0.32))
+                            .frame(width: width * 0.96, height: 7)
+                            .blur(radius: 3)
+                            .offset(y: 2.5)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .modifier(BookshelfCoverMenuModifier(menu: coverMenu))
             if !hideTitles {
                 BookshelfGridLabel(title: book.name,
@@ -924,7 +923,7 @@ private struct BookshelfFolderRow: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            BookshelfFolderIcon(books: books, width: compact ? 40 : coverWidth, height: compact ? 56 : coverWidth * 1.42)
+            BookshelfFolderIcon(books: books, width: compact ? 44 : 58, height: compact ? 62 : 84)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.fill")
@@ -943,8 +942,11 @@ private struct BookshelfFolderRow: View {
                 .font(AppFontStyle.caption.weight(.semibold).themed)
                 .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, compact ? 10 : 12)
-        .contentShape(Rectangle())
+        .padding(.horizontal, 12)
+        .padding(.vertical, compact ? 9 : 10)
+        .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
+        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("文件夹「\(folder.name)」，\(books.count) 本书")
     }
@@ -1488,58 +1490,139 @@ private struct ReaderOpeningPlaceholder: View {
     }
 }
 
+/// 列表视图的一行：圆角卡片，左边封面（右上角有更新标记），右边书名、作者 · 未读章数、读至哪一章、最新章节。
 private struct BookshelfRow: View {
+    static let cornerRadius: CGFloat = 16
     let book: Book
     var compact = false
-    @ScaledMetric(relativeTo: .body) private var coverWidth = 52
+    /// 多选时是否已选中；nil 表示不在多选。
+    var selected: Bool? = nil
 
-    private var readingPosition: String {
-        if let title = book.durChapterTitle, !title.isEmpty { return title }
-        if book.durChapterIndex > 0 || book.durChapterPos > 0 || book.durChapterTime > 0 {
-            return book.totalChapterNum > 0
-                ? "第 \(book.durChapterIndex + 1) 章 / 共 \(book.totalChapterNum) 章"
-                : "已读至第 \(book.durChapterIndex + 1) 章"
+    private var started: Bool {
+        book.durChapterIndex > 0 || book.durChapterPos > 0 || book.durChapterTime > 0
+            || !(book.durChapterTitle ?? "").isEmpty
+    }
+
+    private var statusLine: String {
+        let author = book.author.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = author.isEmpty ? "作者未知" : author
+        let status: String
+        if !started {
+            status = "未读过"
+        } else if book.totalChapterNum > 0 {
+            let remaining = book.totalChapterNum - book.durChapterIndex - 1
+            status = remaining > 0 ? "\(remaining)章未读" : "已读完"
+        } else {
+            status = "阅读中"
         }
-        return "尚未阅读"
+        return "\(name) · \(status)"
+    }
+
+    private var currentLine: String? {
+        guard started else { return nil }
+        if let title = book.durChapterTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return "读至 " + title
+        }
+        return "读至 第\(book.durChapterIndex + 1)章"
+    }
+
+    private var latestLine: String {
+        if let title = book.latestChapterTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty {
+            return title
+        }
+        return "暂无章节信息"
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
-            BookshelfCover(
-                book: book,
-                width: compact ? 40 : coverWidth,
-                height: compact ? 56 : coverWidth * 1.42
-            )
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(book.name)
-                        .font(AppFontStyle.body.weight(.medium).themed)
-                        .foregroundStyle(.primary)
-                        .lineLimit(2)
-                    Spacer(minLength: 0)
+        let coverWidth: CGFloat = compact ? 44 : 58
+        let coverHeight: CGFloat = compact ? 62 : 84
+        HStack(alignment: .center, spacing: 12) {
+            BookshelfCover(book: book, width: coverWidth, height: coverHeight)
+                .frame(width: coverWidth, height: coverHeight)
+                .overlay(alignment: .topTrailing) {
                     if book.lastCheckCount > 0 {
-                        Text("+\(book.lastCheckCount)")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(ReadingTheme.accent)
-                            .fixedSize()
-                            .accessibilityLabel("更新 \(book.lastCheckCount) 章")
+                        BookshelfUpdateBadge(count: book.lastCheckCount, compact: true)
+                            .offset(x: 6, y: -6)
                     }
                 }
-                Text(book.author.isEmpty ? "未知作者" : book.author)
-                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary).lineLimit(1)
-                if !compact {
-                    Text(readingPosition)
-                        .font(AppFontStyle.caption.themed)
-                        .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: compact ? 4 : 7) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(book.name)
+                        .font(AppFontStyle.headline.themed)
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
+                    detail(statusLine)
                 }
+                if let currentLine { detail(currentLine) }
+                if !compact { detail(latestLine) }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if let selected {
+                BookshelfSelectionBadge(selected: selected)
+                    .allowsHitTesting(false)
+            }
         }
-        .padding(.vertical, compact ? 10 : 12)
-        .contentShape(Rectangle())
+        .padding(.horizontal, 12)
+        .padding(.vertical, compact ? 9 : 10)
+        .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
+        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
-        .accessibilityValue(book.latestChapterTitle.map { "最新章节：\($0)" } ?? "")
+        .accessibilityValue(book.lastCheckCount > 0 ? "有 \(book.lastCheckCount) 章更新" : "")
+    }
+
+    private func detail(_ text: String) -> some View {
+        Text(text)
+            .font(AppFontStyle.subheadline.themed)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+}
+
+/// 封面右上角的更新标记：暖红渐变胶囊、白描边，带一点投影。
+struct BookshelfUpdateBadge: View {
+    let count: Int
+    var compact = false
+
+    var body: some View {
+        let number = count > 99 ? "99+" : "\(count)"
+        HStack(spacing: 2) {
+            if !compact {
+                Image(systemName: "sparkle")
+                    .font(.system(size: 7.5, weight: .heavy))
+            }
+            Text(compact ? number : "更新 \(number)")
+                .font(.system(size: compact ? 9.5 : 9.5, weight: .bold).monospacedDigit())
+        }
+        .foregroundStyle(Color.white)
+        .padding(.horizontal, compact ? 5 : 6)
+        .frame(minWidth: 17, minHeight: 17)
+        .background(
+            Capsule().fill(LinearGradient(colors: [Color(red: 1.0, green: 0.46, blue: 0.33),
+                                                   Color(red: 0.93, green: 0.22, blue: 0.32)],
+                                          startPoint: .topLeading, endPoint: .bottomTrailing))
+        )
+        .overlay(Capsule().strokeBorder(Color.white, lineWidth: 1.2))
+        .shadow(color: Color(red: 0.93, green: 0.22, blue: 0.32).opacity(0.35), radius: 3, y: 1.5)
+        .fixedSize()
+        .allowsHitTesting(false)
+        .accessibilityLabel("更新 \(count) 章")
+    }
+}
+
+/// 仿真书架书脊右上角的更新小圆点：暖红渐变、白描边、微微发光。
+struct BookshelfUpdateDot: View {
+    let size: CGFloat
+
+    var body: some View {
+        Circle()
+            .fill(RadialGradient(colors: [Color(red: 1.0, green: 0.55, blue: 0.40),
+                                          Color(red: 0.93, green: 0.20, blue: 0.30)],
+                                 center: .topLeading, startRadius: 0, endRadius: size))
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.95), lineWidth: max(size * 0.14, 1)))
+            .frame(width: size, height: size)
+            .shadow(color: Color(red: 0.93, green: 0.20, blue: 0.30).opacity(0.6), radius: 2.5)
     }
 }
 
@@ -4635,6 +4718,10 @@ private struct BookshelfShelfView: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture { if hasSelection { deselect() } }
+                // 每本书 / 每个摆件底下一抹接触阴影，压在台面上。
+                ForEach(row) { placement in
+                    contactShadow(placement)
+                }
                 ForEach(row) { placement in
                     placementView(placement, rows: rows)
                         .zIndex(placement.id == draggingID ? 3
@@ -4676,6 +4763,19 @@ private struct BookshelfShelfView: View {
                 }
             }
             shelfBoard
+        }
+    }
+
+    @ViewBuilder
+    private func contactShadow(_ placement: BookshelfShelfPlacement) -> some View {
+        if placement.id != draggingID {
+            let footprint: CGFloat = max(placement.boardMaxX - placement.boardMinX, 4)
+            Ellipse()
+                .fill(Color.black.opacity(0.3))
+                .frame(width: footprint * 0.96, height: 6)
+                .blur(radius: 2.5)
+                .offset(x: placement.boardMinX + footprint * 0.02, y: 2.5)
+                .allowsHitTesting(false)
         }
     }
 
@@ -5092,13 +5192,19 @@ private struct BookshelfShelfView: View {
         .shadow(color: .black.opacity(0.18), radius: 6, y: 2)
     }
 
+    /// 层板的台面往上伸进书底下面（被书和摆件盖住一截），书和摆件就像放在台面上，而不是在层板后面。
     private var shelfBoard: some View {
-        BookshelfBoard(width: contentWidth, height: boardStyle == "solid" ? boardHeight : 5, solid: boardStyle == "solid")
-            .frame(height: boardHeight, alignment: .top)
+        let solid = boardStyle == "solid"
+        let tuck: CGFloat = solid ? 6 : 1
+        return BookshelfBoard(width: contentWidth, height: (solid ? boardHeight : 5) + tuck, solid: solid)
+            .frame(height: boardHeight, alignment: .bottom)
+            .allowsHitTesting(false)
     }
 }
 
-/// 一层书架的层板：立体时为浅色台面 + 正面 + 下方柔和的阴影；平面时只是一条薄板。
+/// 一层书架的层板。立体：上面是往里退去的台面（靠书的里侧更暗，前沿有一道高光），
+/// 下面是正面，再往下投一层柔和阴影——书底压在台面上，读起来是「书放在板上」。
+/// 平面：一条带接触阴影的薄板。
 struct BookshelfBoard: View {
     @Environment(\.colorScheme) private var colorScheme
     let width: CGFloat
@@ -5109,33 +5215,41 @@ struct BookshelfBoard: View {
         let dark = colorScheme == .dark
         Group {
             if solid {
+                let top = max((height * 0.55).rounded(), 5)
                 VStack(spacing: 0) {
-                    // 台面（略带透视的浅色条）
+                    // 台面：里侧被书挡住光线更暗，越往外越亮。
                     Rectangle()
-                        .fill(LinearGradient(colors: [dark ? Color(white: 0.30) : Color(white: 0.86),
-                                                      dark ? Color(white: 0.24) : Color(white: 0.93)],
+                        .fill(LinearGradient(colors: [dark ? Color(white: 0.13) : Color(white: 0.74),
+                                                      dark ? Color(white: 0.22) : Color(white: 0.86),
+                                                      dark ? Color(white: 0.27) : Color(white: 0.92)],
                                              startPoint: .top, endPoint: .bottom))
-                        .frame(height: 3)
+                        .frame(height: top)
+                        .overlay(alignment: .bottom) {
+                            // 前沿高光
+                            Rectangle().fill(Color.white.opacity(dark ? 0.18 : 0.9)).frame(height: 0.75)
+                        }
                     // 正面
                     Rectangle()
-                        .fill(LinearGradient(colors: [dark ? Color(white: 0.22) : Color(white: 0.985),
-                                                      dark ? Color(white: 0.16) : Color(white: 0.94)],
+                        .fill(LinearGradient(colors: [dark ? Color(white: 0.24) : Color(white: 0.99),
+                                                      dark ? Color(white: 0.15) : Color(white: 0.90)],
                                              startPoint: .top, endPoint: .bottom))
-                        .frame(height: max(height - 3, 4))
+                        .frame(height: max(height - top, 4))
                         .overlay(alignment: .bottom) {
-                            Rectangle().fill(Color.black.opacity(dark ? 0.4 : 0.06)).frame(height: 0.5)
+                            Rectangle().fill(Color.black.opacity(dark ? 0.5 : 0.12)).frame(height: 0.5)
                         }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 2, style: .continuous))
-                .shadow(color: .black.opacity(dark ? 0.45 : 0.10), radius: 6, y: 5)
+                .clipShape(RoundedRectangle(cornerRadius: 2.5, style: .continuous))
+                .shadow(color: .black.opacity(dark ? 0.5 : 0.16), radius: 7, y: 6)
             } else {
                 RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                    .fill(dark ? Color(white: 0.26) : Color(white: 0.88))
-                    .frame(height: max(min(height, 5), 2))
-                    .shadow(color: .black.opacity(dark ? 0.3 : 0.06), radius: 2, y: 1.5)
+                    .fill(LinearGradient(colors: [dark ? Color(white: 0.20) : Color(white: 0.80),
+                                                  dark ? Color(white: 0.28) : Color(white: 0.90)],
+                                         startPoint: .top, endPoint: .bottom))
+                    .frame(height: max(min(height, 6), 2))
+                    .shadow(color: .black.opacity(dark ? 0.35 : 0.10), radius: 2.5, y: 2)
             }
         }
-        .frame(width: width)
+        .frame(width: width, height: height, alignment: .bottom)
         .accessibilityHidden(true)
     }
 }
@@ -6414,9 +6528,20 @@ private struct BookshelfSpine: View {
     /// 抽书（照 cmbok 的样子）：书的背面留在原处，正面朝读者拉出——画面上书脊往左下挪
     /// （书底压到层板前沿上），书顶的书页和右侧的封面随之转出来；
     /// 书脊上方出现旋转按钮，旁边浮出深色胶囊竖排完整书名。收回时原路退回。
+    /// 有更新时书脊右上角的小圆点（跟着书一起倾斜 / 放平）。
+    @ViewBuilder private var updateDot: some View {
+        if book.lastCheckCount > 0 {
+            BookshelfUpdateDot(size: min(max(style.bookWidth * 0.26, 6), 9))
+                .padding(2.5)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
     private var upright: some View {
         let d = pulledDepth
         return uprightFront
+            .overlay(alignment: .topTrailing) { updateDot }
             .overlay(alignment: .bottomLeading) {
                 uprightDepthFaces.allowsHitTesting(false)
             }
@@ -6472,6 +6597,7 @@ private struct BookshelfSpine: View {
 
     private var flat: some View {
         flatFront
+            .overlay(alignment: .topTrailing) { updateDot }
             .overlay(alignment: .bottomLeading) {
                 if isSelected {
                     flatDepthFaces.allowsHitTesting(false)
@@ -6503,12 +6629,6 @@ private struct BookshelfSpine: View {
         }
         .shadow(color: .black.opacity(isSelected ? 0.28 : 0.14), radius: isSelected ? 3 : 1,
                 x: isSelected ? 1.5 : 0.6, y: isSelected ? 1.5 : 0.6)
-        .overlay(alignment: .topTrailing) {
-            if book.lastCheckCount > 0, pose == .upright {
-                Circle().fill(ReadingTheme.coral).frame(width: 6, height: 6).offset(x: 2, y: -2)
-                    .allowsHitTesting(false)
-            }
-        }
         // 封面图不管是不是封面书脊都提前加载：抽出时侧面 / 平躺时顶面要露出封面，
         // 之前等抽出那一刻才开始加载，第一次点开看到的是占位图。
         .task(id: book.coverUrl ?? "") {
