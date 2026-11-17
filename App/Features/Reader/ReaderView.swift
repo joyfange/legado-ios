@@ -34,6 +34,8 @@ struct ReaderView: View {
     @State private var quickReplacePick: ReaderTextPick?
     @State private var showsReaderSettings = false
     @State private var showsBookActions = false
+    /// 退出阅读时，书还不在书架上：先问是否加入书架。
+    @State private var showsAddToShelfPrompt = false
     /// 拖动底部进度条时的本章位置（0…1）；松手后跳转，拖动过程中只预览页码。
     @State private var scrubFraction: Double?
     @State private var showsClickActionSettings = false
@@ -258,6 +260,20 @@ struct ReaderView: View {
             if ProcessInfo.processInfo.arguments.contains("-uiDemoReaderStyle") {
                 DispatchQueue.main.async { showsStyleControls = true }
             }
+        }
+        .alert("加入书架", isPresented: $showsAddToShelfPrompt) {
+            Button("不加入", role: .cancel) { dismiss() }
+            Button("加入书架") {
+                let current = book
+                Task {
+                    await library.addOrUpdate(current)
+                    // 加入后再存一次当前进度（此时书已在书架上，进度直接写进书架）。
+                    saveProgress(immediate: true)
+                    dismiss()
+                }
+            }
+        } message: {
+            Text("将《\(book.name)》加入书架？")
         }
         .onDisappear {
             model.cancelPreload()
@@ -867,11 +883,21 @@ struct ReaderView: View {
     }
 
 
+    /// 返回：书不在书架上（从发现、搜索直接进来读的）先问要不要加入书架。
+    private func leaveReader() {
+        let automation = ProcessInfo.processInfo.arguments.contains { $0.hasPrefix("-ui") }
+        if !automation, !library.contains(book), book.origin != "local" {
+            showsAddToShelfPrompt = true
+        } else {
+            dismiss()
+        }
+    }
+
     /// 顶部工具栏：悬浮的玻璃按钮（返回 / 书签 / 更多）+ 中间玻璃胶囊（书名、章节名）。
     /// 没有整条背景，只有各个控件本身能点；控件之间的空白由外层吞掉点击，不会穿透翻页。
     private var readerTopChrome: some View {
         HStack(spacing: 10) {
-            readerGlassCircleButton("chevron.backward", label: "返回") { dismiss() }
+            readerGlassCircleButton("chevron.backward", label: "返回") { leaveReader() }
             VStack(spacing: 2) {
                 Text(book.name)
                     .font(.subheadline.weight(.semibold))

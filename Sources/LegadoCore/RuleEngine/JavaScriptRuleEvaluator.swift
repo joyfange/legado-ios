@@ -1062,6 +1062,27 @@ public struct JavaScriptRuleEvaluator: Sendable {
                 map.putAll = function (other) { for (var key in other) if (typeof other[key] !== 'function') map[key] = other[key]; };
                 return map;
               };
+              // 源变量（Android Legado 的 source.getVariable / setVariable / putVariable）：
+              // 不少书源（如番茄聚合源）把整套配置存在源变量里，缺了它规则一上来就抛 TypeError。
+              source.getVariable = function (key) {
+                if (arguments.length === 0 || key === undefined || key === null) return source.get('sourceVariable') || '';
+                return source.get('v_' + String(key)) || '';
+              };
+              source.setVariable = function (value) {
+                source.put('sourceVariable', value === undefined || value === null ? '' : value);
+              };
+              source.putVariable = function (key, value) {
+                source.put('v_' + String(key), value === undefined || value === null ? '' : value);
+                return value;
+              };
+              if (typeof java !== 'undefined' && java) {
+                // 这些是 Android 界面相关的接口，iOS 上没有对应界面：给个安全的空实现，别让规则因此中断。
+                if (!java.refreshExplore) java.refreshExplore = function () { return null; };
+                if (!java.reLoginView) java.reLoginView = function () { return null; };
+                if (!java.getThemeConfig) java.getThemeConfig = function () { return '{}'; };
+                if (!java.getActivityRef) java.getActivityRef = function () { return null; };
+                if (!java.searchBook) java.searchBook = function () { return null; };
+              }
               source.login = function () {
                 if (!source.loginUrl) return null;
                 (0, eval)(String(source.loginUrl));

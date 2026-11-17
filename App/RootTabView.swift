@@ -229,7 +229,8 @@ private struct BookshelfView: View {
             .first
     }
 
-    private var showsSideSwitcher: Bool { sideSwitcher && library.visibleGroups.count > 1 }
+    /// 右侧竖向切换条已取消：书架切换统一用顶部的切换条。
+    private var showsSideSwitcher: Bool { false }
 
     /// 书架内容宽度：左右各留 24pt 边距。
     private var contentWidth: CGFloat { max(UIScreen.main.bounds.width - 48, 120) }
@@ -404,10 +405,15 @@ private struct BookshelfView: View {
     private var bookshelfSummary: some View {
         VStack(alignment: .leading, spacing: 12) {
             shelfBarRow
-            if shelfBarExpanded {
-                shelfPanel
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-            }
+                // 展开的书架面板悬浮在书上方，不再把下面的书往下推。
+                .overlay(alignment: .topLeading) {
+                    if shelfBarExpanded {
+                        shelfPanel
+                            .offset(y: 40)
+                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
+                    }
+                }
+                .zIndex(2)
             HStack(alignment: .center) {
                 Text("\(displayedBooks.count) 本")
                     .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
@@ -416,42 +422,62 @@ private struct BookshelfView: View {
             }
         }
         .padding(.bottom, 18)
+        .zIndex(2)
     }
 
     private var shelfBarRow: some View {
         HStack(spacing: 6) {
             sortMenu
-            orderButton
             shelfChipScroller
             expandButton
         }
     }
 
+    /// 排序按钮：一个按钮里选排序方式和正序/倒序（原来左边的排序图标已去掉）。
     private var sortMenu: some View {
         Menu {
-            ForEach(Self.sortTitles.indices, id: \.self) { index in
+            Section("排序方式") {
+                ForEach(Self.sortTitles.indices, id: \.self) { index in
+                    Button {
+                        sortMode = index
+                    } label: {
+                        if sortMode == index { Label(Self.sortTitles[index], systemImage: "checkmark") }
+                        else { Text(Self.sortTitles[index]) }
+                    }
+                }
+            }
+            Section {
                 Button {
-                    sortMode = index
+                    sortAscending = false
                 } label: {
-                    if sortMode == index { Label(Self.sortTitles[index], systemImage: "checkmark") }
-                    else { Text(Self.sortTitles[index]) }
+                    if !sortAscending { Label("倒序", systemImage: "checkmark") } else { Text("倒序") }
+                }
+                Button {
+                    sortAscending = true
+                } label: {
+                    if sortAscending { Label("正序", systemImage: "checkmark") } else { Text("正序") }
                 }
             }
         } label: {
-            shelfBarIcon("line.3.horizontal.decrease")
+            sortMenuLabel
         }
-        .accessibilityLabel("排序方式：\(Self.sortTitles[min(max(sortMode, 0), 3)])")
+        .accessibilityLabel("排序：\(Self.sortTitles[min(max(sortMode, 0), 3)])，\(sortAscending ? "正序" : "倒序")")
     }
 
-    private var orderButton: some View {
-        Button {
-            UISelectionFeedbackGenerator().selectionChanged()
-            sortAscending.toggle()
-        } label: {
-            shelfBarIcon(sortAscending ? "arrow.up" : "arrow.down")
+    private var sortMenuLabel: some View {
+        HStack(spacing: 1) {
+            Image(systemName: "arrow.up")
+                .font(AppFontStyle.system(size: 10.5, weight: .bold).themed)
+                .foregroundStyle(sortAscending ? Color.primary : Color.secondary.opacity(0.55))
+            Image(systemName: "arrow.down")
+                .font(AppFontStyle.system(size: 10.5, weight: .bold).themed)
+                .foregroundStyle(sortAscending ? Color.secondary.opacity(0.55) : Color.primary)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(sortAscending ? "正序" : "倒序")
+        .frame(width: 38, height: 30)
+        .background(ReadingTheme.surface, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
+        .contentShape(Capsule())
     }
 
     private var shelfChipScroller: some View {
@@ -475,101 +501,121 @@ private struct BookshelfView: View {
         Button {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) { shelfBarExpanded.toggle() }
         } label: {
-            shelfBarIcon(shelfBarExpanded ? "chevron.up" : "chevron.down")
+            Image(systemName: "chevron.down")
+                .font(AppFontStyle.system(size: 11, weight: .semibold).themed)
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(shelfBarExpanded ? 180 : 0))
+                .frame(width: 30, height: 30)
+                .background(ReadingTheme.surface, in: Circle())
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+                .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(shelfBarExpanded ? "收起书架列表" : "展开书架列表")
     }
 
-    private func shelfBarIcon(_ name: String) -> some View {
-        Image(systemName: name)
-            .font(AppFontStyle.system(size: 13, weight: .medium).themed)
-            .foregroundStyle(.secondary)
-            .frame(width: 30, height: 32)
-            .contentShape(Rectangle())
-    }
 
-    private func shelfChip(_ group: BookGroup) -> some View {
+    private func shelfChip(_ group: BookGroup, compact: Bool = false) -> some View {
         let isSelected = selectedGroup.id == group.id
         return Button {
             UISelectionFeedbackGenerator().selectionChanged()
-            withAnimation(.easeOut(duration: 0.2)) { selectedGroupID = group.id }
-        } label: {
-            HStack(spacing: 4) {
-                Text(group.groupName)
-                    .font(AppFontStyle.system(size: 13, weight: isSelected ? .semibold : .regular).themed)
-                Text("\(library.count(in: group))")
-                    .font(.system(size: 10.5, weight: .medium).monospacedDigit())
-                    .opacity(0.7)
+            withAnimation(.easeOut(duration: 0.2)) {
+                selectedGroupID = group.id
+                if compact { shelfBarExpanded = false }
             }
-            .lineLimit(1)
-            .foregroundStyle(isSelected ? ReadingTheme.onAccent : Color.secondary)
-            .padding(.horizontal, 12)
-            .frame(height: 30)
-            .background(isSelected ? ReadingTheme.accentFill : Color.secondary.opacity(0.08), in: Capsule())
-            .contentShape(Capsule())
+        } label: {
+            shelfChipLabel(group, selected: isSelected, compact: compact)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(group.groupName)，\(library.count(in: group)) 本")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
-    /// 展开后的书架面板：搜索书架、新建书架、全部书架胶囊（自动换行）。
+    private func shelfChipLabel(_ group: BookGroup, selected: Bool, compact: Bool) -> some View {
+        let fill: Color = selected ? .clear : (compact ? Color.secondary.opacity(0.08) : ReadingTheme.surface)
+        return HStack(spacing: 3) {
+            Text(group.groupName)
+                .font(AppFontStyle.system(size: compact ? 12 : 13, weight: selected ? .semibold : .regular).themed)
+            Text("\(library.count(in: group))")
+                .font(.system(size: compact ? 9.5 : 10.5, weight: .medium).monospacedDigit())
+                .opacity(0.65)
+        }
+        .lineLimit(1)
+        .foregroundStyle(selected ? ReadingTheme.onAccent : Color.secondary)
+        .padding(.horizontal, compact ? 10 : 12)
+        .frame(height: compact ? 26 : 30)
+        .background(fill, in: Capsule())
+        .background(selected ? ReadingTheme.accentFill : Color.clear, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(selected || compact ? 0 : 0.06), lineWidth: 0.5))
+        .contentShape(Capsule())
+    }
+
+    /// 展开后的书架面板（悬浮）：搜索书架、新建、管理，全部书架胶囊自动换行。
     private var shelfPanel: some View {
         let keyword = shelfSearch.trimmingCharacters(in: .whitespacesAndNewlines)
         let groups = keyword.isEmpty ? library.visibleGroups
             : library.visibleGroups.filter { $0.groupName.localizedCaseInsensitiveContains(keyword) }
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 10) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .font(AppFontStyle.system(size: 13).themed)
-                        .foregroundStyle(.secondary)
-                    TextField("搜索书架", text: $shelfSearch)
-                        .font(AppFontStyle.system(size: 14).themed)
-                        .submitLabel(.search)
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 38)
-                .background(Color.secondary.opacity(0.08), in: Capsule())
-                Button {
-                    newShelfName = ""
-                    withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = true }
-                } label: {
-                    Image(systemName: "plus")
-                        .font(AppFontStyle.system(size: 15, weight: .semibold).themed)
-                        .foregroundStyle(ReadingTheme.onAccent)
-                        .frame(width: 34, height: 34)
-                        .background(ReadingTheme.accentFill, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("新建书架")
-            }
+        return VStack(alignment: .leading, spacing: 10) {
+            shelfPanelHeader
             if groups.isEmpty {
                 Text("没有匹配的书架")
                     .font(AppFontStyle.caption.themed)
                     .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8, alignment: .leading)],
-                          alignment: .leading, spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 6, alignment: .leading)],
+                          alignment: .leading, spacing: 6) {
                     ForEach(groups) { group in
-                        shelfChip(group)
+                        shelfChip(group, compact: true)
                     }
                 }
             }
-            Button {
-                showsGroupManager = true
-            } label: {
-                Label("管理书架", systemImage: "slider.horizontal.3")
-                    .font(AppFontStyle.caption.weight(.medium).themed)
+        }
+        .padding(10)
+        .frame(maxWidth: 320, alignment: .leading)
+        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+    }
+
+    private var shelfPanelHeader: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 5) {
+                Image(systemName: "magnifyingglass")
+                    .font(AppFontStyle.system(size: 12).themed)
                     .foregroundStyle(.secondary)
+                TextField("搜索书架", text: $shelfSearch)
+                    .font(AppFontStyle.system(size: 13).themed)
+                    .submitLabel(.search)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(Color.secondary.opacity(0.08), in: Capsule())
+            Button {
+                newShelfName = ""
+                withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = true }
+            } label: {
+                Image(systemName: "plus")
+                    .font(AppFontStyle.system(size: 13, weight: .semibold).themed)
+                    .foregroundStyle(ReadingTheme.onAccent)
+                    .frame(width: 30, height: 30)
+                    .background(ReadingTheme.accentFill, in: Circle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("新建书架")
+            Button {
+                shelfBarExpanded = false
+                showsGroupManager = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(AppFontStyle.system(size: 13, weight: .medium).themed)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 30, height: 30)
+                    .background(Color.secondary.opacity(0.08), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("管理书架")
         }
-        .padding(14)
-        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
     }
 
     /// 新建书架小弹窗（iOS 15 也能用，不依赖 alert 里的输入框）。
@@ -4288,40 +4334,28 @@ struct BookshelfCover: View {
         }
     }
 
-    /// 实体：右侧和底边露出一叠书页，左侧书脊凹槽 + 高光，封面整体有向右下的投影，像一本立着的精装书。
+    /// 实体（参照示例）：封面靠左约 6% 处压出一道书脊折痕（暗线 + 高光），
+    /// 左缘稍暗、整本带一层柔和投影，像一本精装书立在那里；不加书页、不加光泽，免得发怪。
     private func solidCover(radius: CGFloat) -> some View {
-        let page = max(width * 0.035, 2)
-        return ZStack(alignment: .topLeading) {
-            // 书页（在封面后面，往右下错开一点）
-            RoundedRectangle(cornerRadius: radius, style: .continuous)
-                .fill(LinearGradient(colors: [Color(white: 0.97), Color(white: 0.86)],
-                                     startPoint: .leading, endPoint: .trailing))
-                .overlay(
-                    VStack(spacing: 1.2) {
-                        ForEach(0..<Int(max(height / 3, 1)), id: \.self) { _ in
-                            Rectangle().fill(Color.black.opacity(0.05)).frame(height: 0.5)
-                        }
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-                )
-                .frame(width: width, height: height)
-                .offset(x: page, y: page * 0.6)
-                .shadow(color: .black.opacity(0.28), radius: 4, x: 2.5, y: 3.5)
-            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
-                             width: width, height: height, cornerRadius: radius, spineShade: false)
-                .overlay(alignment: .leading) {
-                    BookshelfSolidSpineShade(width: width)
-                        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        let groove = max(width * 0.06, 3)
+        return BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
+                                width: width, height: height, cornerRadius: radius, spineShade: false)
+            .overlay(alignment: .leading) {
+                HStack(spacing: 0) {
+                    // 书脊：左缘到折痕之间略暗
+                    LinearGradient(colors: [Color.black.opacity(0.22), Color.black.opacity(0.06)],
+                                   startPoint: .leading, endPoint: .trailing)
+                        .frame(width: groove)
+                    // 折痕：一道暗线紧跟一道高光
+                    Rectangle().fill(Color.black.opacity(0.28)).frame(width: 0.8)
+                    Rectangle().fill(Color.white.opacity(0.35)).frame(width: 1.2)
+                    LinearGradient(colors: [Color.black.opacity(0.10), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: max(width * 0.05, 2))
                 }
-                .overlay(
-                    // 封面表面的一点光泽
-                    LinearGradient(colors: [Color.white.opacity(0.16), .clear, Color.black.opacity(0.10)],
-                                   startPoint: .topLeading, endPoint: .bottomTrailing)
-                        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-                        .allowsHitTesting(false)
-                )
-        }
-        .frame(width: width, height: height, alignment: .topLeading)
+                .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(0.22), radius: 3, x: 1, y: 2)
     }
 }
 
@@ -7354,9 +7388,6 @@ struct BookshelfShelfSettingsSheet: View {
                 toggleRow(title: "移除同时删除本地文件",
                           detail: "从书架移除后，若该书不在其他书架，删除其本地文件（含导入的原文件），不可恢复",
                           isOn: $deleteLocal)
-                toggleRow(title: "书架右侧切换条",
-                          detail: "书架右边竖型控制条：在各个书架之间快速切换；关闭后不再显示",
-                          isOn: $sideSwitcher)
                 row(title: "书架页视图", detail: "书架布局：网格封面、行卡列表或实体仿真书架") {
                     HStack(spacing: 4) {
                         layoutChoice("square.grid.2x2.fill", selected: isGrid, label: "网格封面") {

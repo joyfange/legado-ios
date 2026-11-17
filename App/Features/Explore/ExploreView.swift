@@ -1,4 +1,5 @@
 import SwiftUI
+import CryptoKit
 
 /// 发现页内存缓存：分区列表和每个分区第一页的书。返回发现页、切换布局、书籍详情的同题材作品
 /// 都直接复用，不再重复请求书源；下拉刷新时跳过缓存。
@@ -11,6 +12,8 @@ final class ExploreCache {
     private var kindTasks: [String: Task<ExploreKindsReport, Never>] = [:]
     private var pageTasks: [String: Task<SourceSearchOutcome, Never>] = [:]
     private let lifetime: TimeInterval = 20 * 60
+    /// 下拉刷新过的书源：本次运行不再用旧的磁盘缓存。
+    private var skipDisk: Set<String> = []
 
     private func sourceKey(_ source: BookSource) -> String {
         source.bookSourceUrl + "\u{1F}" + (source.exploreUrl ?? "") + "\u{1F}" + String(source.lastUpdateTime)
@@ -21,8 +24,32 @@ final class ExploreCache {
     }
 
     func cachedFirstPage(source: BookSource, kind: ExploreKind) -> SourceSearchOutcome? {
-        guard let entry = pages[pageKey(source, kind)], Date().timeIntervalSince(entry.time) < lifetime else { return nil }
-        return entry.value
+        let key = pageKey(source, kind)
+        if let entry = pages[key], Date().timeIntervalSince(entry.time) < lifetime { return entry.value }
+        // 内存里没有就读磁盘缓存（上次打开时存下的第一页），先显示，后台再刷新。
+        if !skipDisk.contains(where: { key.hasPrefix($0) }),
+           let books: [SearchBook] = ExploreDiskCache.read(key, maxAge: 12 * 3600), !books.isEmpty {
+            let outcome = SourceSearchOutcome(sourceID: source.id, books: books, diagnostics: [])
+            pages[key] = Entry(value: outcome, time: Date().addingTimeInterval(-lifetime + 30))
+            revalidatePage(source: source, kind: kind, key: key)
+            return outcome
+        }
+        return nil
+    }
+
+    /// 后台刷新一个分区的第一页（不打断界面，回来后更新内存与磁盘缓存）。
+    private func revalidatePage(source: BookSource, kind: ExploreKind, key: String) {
+        guard pageTasks[key] == nil else { return }
+        let task = Task { await BookExploreService().explore(source: source, kind: kind, page: 1) }
+        pageTasks[key] = task
+        Task {
+            let outcome = await task.value
+            pageTasks[key] = nil
+            if !outcome.books.isEmpty {
+                pages[key] = Entry(value: outcome, time: Date())
+                ExploreDiskCache.write(key, outcome.books)
+            }
+        }
     }
 
     /// 同一个书源的分区列表同时只请求一次（发现页和详情页同时要时共用一个请求）。
@@ -30,11 +57,30 @@ final class ExploreCache {
         let key = sourceKey(source)
         if !force, let entry = kinds[key], Date().timeIntervalSince(entry.time) < lifetime { return entry.value }
         if !force, let running = kindTasks[key] { return await running.value }
+        // 磁盘里有上次的分区列表：立刻返回（进书源不用再等脚本跑完），后台重新计算一次。
+        if !force, let stored: [ExploreKind] = ExploreDiskCache.read("kinds" + key, maxAge: 3 * 86400), !stored.isEmpty {
+            let report = ExploreKindsReport(kinds: stored)
+            kinds[key] = Entry(value: report, time: Date().addingTimeInterval(-lifetime + 60))
+            let task = Task { await BookExploreService().kinds(for: source) }
+            kindTasks[key] = task
+            Task {
+                let fresh = await task.value
+                kindTasks[key] = nil
+                if !fresh.kinds.isEmpty {
+                    kinds[key] = Entry(value: fresh, time: Date())
+                    ExploreDiskCache.write("kinds" + key, fresh.kinds)
+                }
+            }
+            return report
+        }
         let task = Task { await BookExploreService().kinds(for: source) }
         kindTasks[key] = task
         let report = await task.value
         kindTasks[key] = nil
-        if !report.kinds.isEmpty { kinds[key] = Entry(value: report, time: Date()) }
+        if !report.kinds.isEmpty {
+            kinds[key] = Entry(value: report, time: Date())
+            ExploreDiskCache.write("kinds" + key, report.kinds)
+        }
         return report
     }
 
@@ -48,22 +94,64 @@ final class ExploreCache {
         pageTasks[key] = task
         let outcome = await task.value
         pageTasks[key] = nil
-        if !outcome.books.isEmpty { pages[key] = Entry(value: outcome, time: Date()) }
+        if !outcome.books.isEmpty {
+            pages[key] = Entry(value: outcome, time: Date())
+            ExploreDiskCache.write(key, outcome.books)
+        }
         if pages.count > 400 { pages.removeAll() }
         return outcome
     }
 
     func clear(source: BookSource) {
         let prefix = sourceKey(source)
+        skipDisk.insert(prefix)
+        ExploreDiskCache.remove("kinds" + prefix)
+        for key in pages.keys where key.hasPrefix(prefix) { ExploreDiskCache.remove(key) }
         kinds[prefix] = nil
         pages = pages.filter { !$0.key.hasPrefix(prefix) }
+    }
+}
+
+/// 发现页磁盘缓存：分区列表和各分区第一页存成小 JSON 文件，下次进书源秒开。
+enum ExploreDiskCache {
+    private static let directory: URL = {
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Legado/Explore", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    private static func file(_ key: String) -> URL {
+        let name = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return directory.appendingPathComponent(name + ".json")
+    }
+
+    static func read<Value: Decodable>(_ key: String, maxAge: TimeInterval) -> Value? {
+        let url = file(key)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modified = attributes[.modificationDate] as? Date,
+              Date().timeIntervalSince(modified) < maxAge,
+              let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(Value.self, from: data)
+    }
+
+    static func write<Value: Encodable>(_ key: String, _ value: Value) {
+        let url = file(key)
+        DispatchQueue.global(qos: .utility).async {
+            guard let data = try? JSONEncoder().encode(value) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    static func remove(_ key: String) {
+        try? FileManager.default.removeItem(at: file(key))
     }
 }
 
 @MainActor
 final class ExploreSourceViewModel: ObservableObject {
     enum State: Equatable { case idle, loading, ready, empty, failed }
-    enum SectionState { case loading, loaded([SearchBook]), failed(String) }
+    enum SectionState: Equatable { case loading, loaded([SearchBook]), failed(String) }
 
     let source: BookSource
     @Published private(set) var kinds: [ExploreKind] = []
@@ -315,7 +403,7 @@ struct ExploreView: View {
                     } else {
                         LazyVStack(spacing: 0) {
                             ForEach(sources) { source in
-                                NavigationLink { ExploreSourceView(source: source) } label: {
+                                NavigationLink { ExploreLazyView { ExploreSourceView(source: source) } } label: {
                                     HStack(spacing: 12) {
                                         ExploreSourceRow(source: source)
                                         Spacer(minLength: 0)
@@ -495,12 +583,22 @@ private struct ExploreSourceView: View {
         .navigationTitle(model.source.bookSourceName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
                 Button { showsKindSettings = true } label: {
                     Image(systemName: "gearshape")
                 }
                 .disabled(model.allKinds.isEmpty)
                 .accessibilityLabel("发现页设置")
+                // 登录入口放在书源页右上角；书源没有登录功能就不显示。
+                if model.source.loginUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    || model.source.loginUi?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
+                    NavigationLink {
+                        ExploreLazyView { SourceLoginView(source: model.source) }
+                    } label: {
+                        Image(systemName: "person.crop.circle")
+                    }
+                    .accessibilityLabel("登录 \(model.source.bookSourceName)")
+                }
             }
         }
         .task { await model.load() }
@@ -568,7 +666,7 @@ private struct ExploreBookList: View {
             LazyVStack(spacing: 0) {
                 ForEach(model.books) { book in
                     NavigationLink {
-                        BookDetailView(searchBook: book, source: model.source)
+                        ExploreLazyView { BookDetailView(searchBook: book, source: model.source) }
                     } label: {
                         ExploreBookRow(book: book)
                     }
@@ -689,10 +787,21 @@ private struct ExploreMagazineContent: View {
                 ForEach(rows(kinds)) { row in
                     switch row {
                     case .single(let kind, let index):
-                        section(kind)
+                        // 每个分区是独立的 Equatable 子视图：某个分区加载完成时只重画它自己，
+                        // 不再整页所有分区一起重算（之前上下滑动卡顿的主要原因）。
+                        ExploreMagazineSection(kind: kind, state: model.sections[kind.id],
+                                               vertical: settings.isVertical(kind.title),
+                                               verticalCount: settings.verticalCount,
+                                               horizontalCount: settings.horizontalCount,
+                                               source: model.source,
+                                               retry: { [weak model = self.model] in model?.retrySection(kind) })
+                            .equatable()
                             .task(id: kind.id) { await load(kind, at: index, in: kinds) }
                     case .ranks(let group, let index):
-                        rankPager(group)
+                        ExploreRankPager(kinds: group, states: group.map { model.sections[$0.id] },
+                                         verticalCount: settings.verticalCount, source: model.source,
+                                         retry: { [weak model = self.model] kind in model?.retrySection(kind) })
+                            .equatable()
                             .task(id: row.id) {
                                 for kind in group { model.startSection(kind) }
                                 preload(after: index, in: kinds)
@@ -717,35 +826,22 @@ private struct ExploreMagazineContent: View {
         for next in kinds[(index + 1)...upper] { model.startSection(next) }
     }
 
-    /// 榜单横向翻页：每列一个榜单，露出下一列的一部分，左右滑动切换。
-    private func rankPager(_ kinds: [ExploreKind]) -> some View {
-        let width = max(UIScreen.main.bounds.width - 60, 260)
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 14) {
-                ForEach(kinds) { kind in
-                    VStack(alignment: .leading, spacing: 12) {
-                        header(kind).padding(.horizontal, 0)
-                        switch model.sections[kind.id] {
-                        case .loaded(let books):
-                            rankedList(Array(books.prefix(settings.verticalCount)))
-                        case .failed(let message):
-                            retry(kind, message)
-                        case .loading, .none:
-                            ProgressView().frame(maxWidth: .infinity, minHeight: 120)
-                        }
-                    }
-                    .frame(width: width, alignment: .topLeading)
-                }
-            }
-            .readingScrollTargetLayout()
-            .padding(.horizontal, 16)
-        }
-        .readingViewAlignedScrolling()
-    }
+}
 
-    private func header(_ kind: ExploreKind) -> some View {
+/// 让 NavigationLink 的目标页在点进去时才创建（iOS 15/16 会提前构建所有行的目标页）。
+struct ExploreLazyView<Content: View>: View {
+    let build: () -> Content
+    init(_ build: @escaping () -> Content) { self.build = build }
+    var body: some View { build() }
+}
+
+private struct ExploreSectionHeader: View {
+    let kind: ExploreKind
+    let source: BookSource
+
+    var body: some View {
         NavigationLink {
-            ExploreKindBooksView(source: model.source, kind: kind)
+            ExploreLazyView { ExploreKindBooksView(source: source, kind: kind) }
         } label: {
             HStack(spacing: 4) {
                 Text(kind.title).font(AppFontStyle.title3.bold().themed).foregroundStyle(ReadingTheme.ink).lineLimit(1)
@@ -759,9 +855,14 @@ private struct ExploreMagazineContent: View {
         .buttonStyle(.plain)
         .accessibilityAddTraits(.isHeader)
     }
+}
 
-    private func retry(_ kind: ExploreKind, _ message: String) -> some View {
-        Button { model.retrySection(kind) } label: {
+private struct ExploreSectionRetry: View {
+    let message: String
+    let retry: () -> Void
+
+    var body: some View {
+        Button(action: retry) {
             Label("\(message)，点按重试", systemImage: "arrow.clockwise")
                 .font(AppFontStyle.footnote.themed)
                 .foregroundStyle(.secondary)
@@ -769,54 +870,94 @@ private struct ExploreMagazineContent: View {
         }
         .buttonStyle(.plain)
     }
+}
 
-    @ViewBuilder
-    private func section(_ kind: ExploreKind) -> some View {
+/// 杂志布局的一个普通分区（横滑封面或竖排榜单）。
+private struct ExploreMagazineSection: View, Equatable {
+    let kind: ExploreKind
+    let state: ExploreSourceViewModel.SectionState?
+    let vertical: Bool
+    let verticalCount: Int
+    let horizontalCount: Int
+    let source: BookSource
+    let retry: () -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kind == rhs.kind && lhs.state == rhs.state && lhs.vertical == rhs.vertical
+            && lhs.verticalCount == rhs.verticalCount && lhs.horizontalCount == rhs.horizontalCount
+            && lhs.source.bookSourceUrl == rhs.source.bookSourceUrl
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            NavigationLink {
-                ExploreKindBooksView(source: model.source, kind: kind)
-            } label: {
-                HStack(spacing: 4) {
-                    Text(kind.title).font(AppFontStyle.title3.bold().themed).foregroundStyle(ReadingTheme.ink)
-                    Image(systemName: "chevron.right")
-                        .font(AppFontStyle.subheadline.weight(.semibold).themed)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.horizontal, 16)
-            .accessibilityAddTraits(.isHeader)
-
-            switch model.sections[kind.id] {
+            ExploreSectionHeader(kind: kind, source: source)
+                .padding(.horizontal, 16)
+            switch state {
             case .loaded(let books):
-                if settings.isVertical(kind.title) {
-                    rankedList(Array(books.prefix(settings.verticalCount)))
+                if vertical {
+                    ExploreRankedList(books: Array(books.prefix(verticalCount)), source: source)
                         .padding(.horizontal, 16)
                 } else {
-                    let shown = settings.horizontalCount > 0 ? Array(books.prefix(settings.horizontalCount)) : books
-                    ExploreCoverStrip(books: shown, source: model.source)
+                    ExploreCoverStrip(books: horizontalCount > 0 ? Array(books.prefix(horizontalCount)) : books,
+                                      source: source)
                 }
             case .failed(let message):
-                Button { model.retrySection(kind) } label: {
-                    Label("\(message)，点按重试", systemImage: "arrow.clockwise")
-                        .font(AppFontStyle.footnote.themed)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, minHeight: 60)
-                }
-                .buttonStyle(.plain)
+                ExploreSectionRetry(message: message, retry: retry)
             case .loading, .none:
                 ProgressView().frame(maxWidth: .infinity, minHeight: 120)
             }
         }
     }
+}
 
-    private func rankedList(_ books: [SearchBook]) -> some View {
+/// 榜单横向翻页：每列一个榜单，露出下一列的一部分，左右滑动切换。
+private struct ExploreRankPager: View, Equatable {
+    let kinds: [ExploreKind]
+    let states: [ExploreSourceViewModel.SectionState?]
+    let verticalCount: Int
+    let source: BookSource
+    let retry: (ExploreKind) -> Void
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.kinds == rhs.kinds && lhs.states == rhs.states && lhs.verticalCount == rhs.verticalCount
+            && lhs.source.bookSourceUrl == rhs.source.bookSourceUrl
+    }
+
+    var body: some View {
+        let width = max(UIScreen.main.bounds.width - 60, 260)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(alignment: .top, spacing: 14) {
+                ForEach(Array(kinds.enumerated()), id: \.element.id) { offset, kind in
+                    VStack(alignment: .leading, spacing: 12) {
+                        ExploreSectionHeader(kind: kind, source: source)
+                        switch offset < states.count ? states[offset] : nil {
+                        case .loaded(let books):
+                            ExploreRankedList(books: Array(books.prefix(verticalCount)), source: source)
+                        case .failed(let message):
+                            ExploreSectionRetry(message: message) { retry(kind) }
+                        case .loading, .none:
+                            ProgressView().frame(maxWidth: .infinity, minHeight: 120)
+                        }
+                    }
+                    .frame(width: width, alignment: .topLeading)
+                }
+            }
+            .readingScrollTargetLayout()
+            .padding(.horizontal, 16)
+        }
+        .readingViewAlignedScrolling()
+    }
+}
+
+private struct ExploreRankedList: View {
+    let books: [SearchBook]
+    let source: BookSource
+
+    var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(books.enumerated()), id: \.element.id) { offset, book in
                 NavigationLink {
-                    BookDetailView(searchBook: book, source: model.source)
+                    ExploreLazyView { BookDetailView(searchBook: book, source: source) }
                 } label: {
                     HStack(spacing: 12) {
                         BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverURL, width: 46, height: 64)
@@ -853,10 +994,10 @@ struct ExploreCoverStrip: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 12) {
+            LazyHStack(alignment: .top, spacing: 12) {
                 ForEach(books) { book in
                     NavigationLink {
-                        BookDetailView(searchBook: book, source: source)
+                        ExploreLazyView { BookDetailView(searchBook: book, source: source) }
                     } label: {
                         VStack(alignment: .leading, spacing: 5) {
                             BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.coverURL, width: 94, height: 132)

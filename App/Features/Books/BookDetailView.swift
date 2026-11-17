@@ -8,6 +8,7 @@ struct BookDetailView: View {
     @State private var showsSourceSwitch = false
     @State private var showsRemoveConfirmation = false
     @State private var showsShelfPicker = false
+    @Environment(\.openURL) private var openURL
     @State private var showsTableOfContents = false
     @State private var showsReader = false
     @State private var showsCompactBar = false
@@ -185,15 +186,28 @@ struct BookDetailView: View {
                     }
                 }
             }
-            if model.source.loginUrl?.isEmpty == false {
-                NavigationLink {
-                    SourceLoginView(source: model.source)
-                } label: {
-                    Label("登录", systemImage: "person.badge.key")
-                }
+            // 登录入口已移到书源发现页右上角（书源有登录功能时才显示）。
+            if let url = URL(string: model.book.bookUrl), ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+                Button("打开网页", systemImage: "safari") { openURL(url) }
             }
             ReadingShareLink(item: model.book.bookUrl) {
                 Label("分享", systemImage: "square.and.arrow.up")
+            }
+            Button("复制书籍网址", systemImage: "link") {
+                UIPasteboard.general.string = model.book.bookUrl
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
+            Button("复制目录网址", systemImage: "list.bullet") {
+                UIPasteboard.general.string = model.book.tocUrl.isEmpty ? model.book.bookUrl : model.book.tocUrl
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
+            Button("清除缓存", systemImage: "trash") {
+                let bookURL = model.book.bookUrl
+                Task {
+                    try? await ChapterContentCache.live().remove(bookURL: bookURL)
+                    await library.refreshDownloaded()
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                }
             }
             Divider()
             Button("缓存接下来 10 章", systemImage: "arrow.down.circle") { model.cacheNextTen() }
