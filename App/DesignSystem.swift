@@ -246,28 +246,23 @@ struct ReadingPinnedTopBar<Actions: View>: ViewModifier {
                     let barHeight: CGFloat = 50
                     let collapsed = headerBottom < top + 8
                     ZStack(alignment: .top) {
-                        // 和系统导航栏一样用毛玻璃铺底：内容滑到下面时被模糊，不再把整页背景
-                        // 截一段贴上去（那样渐变 / 图片背景会和下面的内容颜色对不上，看起来像混搭）。
+                        // 背景按整屏尺寸绘制、只露出顶部一条：颜色与下面固定不动的页面背景逐像素一致，
+                        // 内容从下面滑上来时像淡出到背景里（之前按条的高度重新绘制，渐变被压扁，颜色对不上）。
                         let height = top + (collapsed ? barHeight : 0)
-                        ZStack {
-                            Rectangle().fill(.ultraThinMaterial)
-                            ReadingTheme.canvas.opacity(collapsed ? 0.45 : 0.35)
-                        }
-                        .frame(height: height + 14)
-                        .mask(
-                            LinearGradient(stops: [
-                                .init(color: .black, location: 0),
-                                .init(color: .black, location: height / (height + 14)),
-                                .init(color: .clear, location: 1)
-                            ], startPoint: .top, endPoint: .bottom)
-                        )
-                        .overlay(alignment: .top) {
-                            Rectangle()
-                                .fill(ReadingTheme.separator.opacity(collapsed ? 0.5 : 0))
-                                .frame(height: 0.5)
-                                .offset(y: height)
-                        }
-                        .allowsHitTesting(false)
+                        let full = proxy.size.height + top + proxy.safeAreaInsets.bottom
+                        ReadingCanvasBackground()
+                            .frame(width: proxy.size.width, height: full)
+                            .mask(alignment: .top) {
+                                LinearGradient(stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: height / (height + 18)),
+                                    .init(color: .clear, location: 1)
+                                ], startPoint: .top, endPoint: .bottom)
+                                .frame(height: height + 18)
+                            }
+                            .frame(height: height + 18, alignment: .top)
+                            .clipped()
+                            .allowsHitTesting(false)
                         HStack(spacing: 10) {
                             Text(title)
                                 .font(AppFontStyle.headline.weight(.semibold).themed)

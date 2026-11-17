@@ -68,7 +68,7 @@ struct ResolvedAppPalette {
         // scrim (72–100% opaque) here hides the very blur it is meant to protect.
         let tint = theme.customization?.surfaceOpacity ?? 0.85
         // 玻璃卡片要在同色系背景上看得出来：主题卡片色铺到约 40%，再配上描边。
-        frostedSurfaceOpacity = 0.12 + 0.36 * (tint.isFinite ? min(max(tint, 0), 1) : 0.85)
+        frostedSurfaceOpacity = 0.2 + 0.45 * (tint.isFinite ? min(max(tint, 0), 1) : 0.85)
         let glow = theme.customization?.glowIntensity ?? 0.5
         glowIntensity = glow.isFinite ? min(max(glow, 0), 1) : 0.5
         let opacity = theme.customization?.surfaceOpacity ?? 0.85
