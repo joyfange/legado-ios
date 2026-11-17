@@ -882,7 +882,7 @@ private struct ExploreMagazineSection: View, Equatable {
     let source: BookSource
     let retry: () -> Void
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.kind == rhs.kind && lhs.state == rhs.state && lhs.vertical == rhs.vertical
             && lhs.verticalCount == rhs.verticalCount && lhs.horizontalCount == rhs.horizontalCount
             && lhs.source.bookSourceUrl == rhs.source.bookSourceUrl
@@ -918,7 +918,7 @@ private struct ExploreRankPager: View, Equatable {
     let source: BookSource
     let retry: (ExploreKind) -> Void
 
-    static func == (lhs: Self, rhs: Self) -> Bool {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.kinds == rhs.kinds && lhs.states == rhs.states && lhs.verticalCount == rhs.verticalCount
             && lhs.source.bookSourceUrl == rhs.source.bookSourceUrl
     }
