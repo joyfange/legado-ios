@@ -1075,6 +1075,22 @@ public struct JavaScriptRuleEvaluator: Sendable {
                 source.put('v_' + String(key), value === undefined || value === null ? '' : value);
                 return value;
               };
+              // 发现页 / 登录页里 select、toggle、text 控件的取值（Android Legado 的 infoMap），
+              // 按书源持久化；发现页切换「模式」「频道」后由脚本读取。
+              if (typeof this.infoMap === 'undefined') {
+                var __infoValues = {};
+                try { __infoValues = JSON.parse(source.get('__infoMap') || '{}') || {}; } catch (eInfo) { __infoValues = {}; }
+                if (typeof __infoValues !== 'object' || Array.isArray(__infoValues)) __infoValues = {};
+                var __saveInfo = function () {
+                  var plain = {};
+                  for (var k in __infoValues) if (Object.prototype.hasOwnProperty.call(__infoValues, k) && typeof __infoValues[k] !== 'function') plain[k] = __infoValues[k];
+                  source.put('__infoMap', JSON.stringify(plain));
+                };
+                Object.defineProperty(__infoValues, 'get', { value: function (k) { var v = this[String(k)]; return v === undefined ? null : v; }, enumerable: false });
+                Object.defineProperty(__infoValues, 'put', { value: function (k, v) { this[String(k)] = v; __saveInfo(); return v; }, enumerable: false });
+                Object.defineProperty(__infoValues, 'remove', { value: function (k) { delete this[String(k)]; __saveInfo(); }, enumerable: false });
+                this.infoMap = __infoValues;
+              }
               if (typeof java !== 'undefined' && java) {
                 // 这些是 Android 界面相关的接口，iOS 上没有对应界面：给个安全的空实现，别让规则因此中断。
                 if (!java.refreshExplore) java.refreshExplore = function () { return null; };
@@ -1671,6 +1687,7 @@ public final class BookSourceRuntimeStore: @unchecked Sendable {
     private let lock = NSLock()
     private var values: [String: [String: String]] = [:]
     private let persistent = PersistentRuntimeCache.shared
+    private let writeQueue = DispatchQueue(label: "legado.source-runtime-store", qos: .utility)
 
     public func get(sourceID: String, key: String) -> String {
         lock.lock()
@@ -1678,15 +1695,31 @@ public final class BookSourceRuntimeStore: @unchecked Sendable {
         if let value = values[sourceID]?[key] { return value }
         let cacheKey = persistentKey(sourceID: sourceID, key: key)
         let value = persistent.get(cacheKey) ?? ""
-        if !value.isEmpty { values[sourceID, default: [:]][key] = value }
+        // 没有值也记在内存里：书源脚本每条规则开头都会反复读配置，未命中时不再每次查数据库。
+        values[sourceID, default: [:]][key] = value
         return value
     }
 
     public func put(sourceID: String, key: String, value: String) {
         lock.lock()
+        let unchanged = values[sourceID]?[key] == value
         values[sourceID, default: [:]][key] = value
         lock.unlock()
-        persistent.put(persistentKey(sourceID: sourceID, key: key), value: value)
+        // 值没变就不写库；写库放到后台串行队列，不阻塞脚本（番茄等书源一次规则会写十几次配置）。
+        guard !unchanged else { return }
+        let cacheKey = persistentKey(sourceID: sourceID, key: key)
+        let persistent = persistent
+        writeQueue.async { persistent.put(cacheKey, value: value) }
+    }
+
+    /// 等待尚未写入数据库的值落盘（测试与退出前使用）。
+    public func flush() { writeQueue.sync {} }
+
+    /// 清空某个书源的内存值（删除源变量后调用，避免读到旧值）。
+    public func forget(sourceID: String) {
+        lock.lock()
+        values[sourceID] = nil
+        lock.unlock()
     }
 
     public func loginHeaders(sourceID: String) -> [String: String] {

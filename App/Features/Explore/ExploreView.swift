@@ -164,6 +164,10 @@ final class ExploreSourceViewModel: ObservableObject {
     @Published private(set) var diagnostics: [RuleDiagnostic] = []
     @Published private(set) var state: State = .idle
     @Published private(set) var isLoadingMore = false
+    /// 书源发现脚本给出的下拉 / 开关控件（如番茄源的「模式」「频道」），显示在发现页顶部。
+    @Published private(set) var controls: [ExploreKind] = []
+    @Published private(set) var controlValues: [String: String] = [:]
+    @Published private(set) var applyingControl: String?
 
     private let service: BookExploreService
     private var page = 1
@@ -198,6 +202,8 @@ final class ExploreSourceViewModel: ObservableObject {
 
         let report = await ExploreCache.shared.kinds(for: source, force: force)
         allKinds = report.kinds
+        controls = report.kinds.filter(Self.isControl)
+        controlValues = Self.storedInfoMap(source)
         kinds = report.kinds.filter { $0.navigableURL != nil }
         diagnostics = report.diagnostics
         guard !kinds.isEmpty else {
@@ -211,6 +217,51 @@ final class ExploreSourceViewModel: ObservableObject {
             return
         }
         await selectFirstVisible()
+    }
+
+    static func isControl(_ kind: ExploreKind) -> Bool {
+        let type = kind.type.lowercased()
+        guard type == "select" || type == "toggle" else { return false }
+        return !(kind.chars ?? []).compactMap { $0 }.filter { !$0.isEmpty }.isEmpty
+    }
+
+    static func storedInfoMap(_ source: BookSource) -> [String: String] {
+        let raw = BookSourceRuntimeStore.shared.get(sourceID: source.bookSourceUrl, key: "__infoMap")
+        guard let data = raw.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return object.mapValues { String(describing: $0) }
+    }
+
+    func value(of control: ExploreKind) -> String {
+        // 正在切换时显示刚选的值；平时以脚本给出的 default 为准（它反映书源当前配置，
+        // 登录页里改了模式也能对上），没有 default 才用存下的 infoMap。
+        if applyingControl == control.title, let value = controlValues[control.title], !value.isEmpty { return value }
+        if let value = control.defaultValue, !value.isEmpty { return value }
+        if let value = controlValues[control.title], !value.isEmpty { return value }
+        return (control.chars ?? []).compactMap { $0 }.first ?? ""
+    }
+
+    /// 选中下拉项：写入 infoMap，执行书源给的 action（通常是保存配置），再重新生成发现分区。
+    func choose(_ control: ExploreKind, value: String) async {
+        guard applyingControl == nil, value != self.value(of: control) else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        applyingControl = control.title
+        defer { applyingControl = nil }
+        var info = Self.storedInfoMap(source)
+        info[control.title] = value
+        controlValues = info
+        if let data = try? JSONSerialization.data(withJSONObject: info),
+           let text = String(data: data, encoding: .utf8) {
+            BookSourceRuntimeStore.shared.put(sourceID: source.bookSourceUrl, key: "__infoMap", value: text)
+        }
+        if let action = control.action?.trimmingCharacters(in: .whitespacesAndNewlines), !action.isEmpty {
+            var script = action
+            if script.lowercased().hasPrefix("@js:") { script = String(script.dropFirst(4)) }
+            _ = try? await JavaScriptRuleEvaluator(maximumScriptLength: 8 * 1_024 * 1_024)
+                .evaluateAsync(script: script, result: .null,
+                               executionContext: .init(baseURL: source.bookSourceUrl, source: source))
+        }
+        await reload(force: true)
     }
 
     /// 发现页设置里隐藏的分区不显示；选中的分区被隐藏后改选第一个可见分区。
@@ -566,6 +617,9 @@ private struct ExploreSourceView: View {
     @StateObject private var model: ExploreSourceViewModel
     @ObservedObject private var settings = ExploreDisplaySettings.shared
     @State private var showsKindSettings = false
+    /// 进过登录页：登录页里切换模式 / 线路后，回来时按新配置重新生成发现分区。
+    @State private var openedLogin = false
+    @State private var loginSnapshot = ""
 
     init(source: BookSource) {
         _model = StateObject(wrappedValue: ExploreSourceViewModel(source: source))
@@ -594,6 +648,10 @@ private struct ExploreSourceView: View {
                     || model.source.loginUi?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false {
                     NavigationLink {
                         ExploreLazyView { SourceLoginView(source: model.source) }
+                            .onAppear {
+                                openedLogin = true
+                                loginSnapshot = sourceConfigSnapshot
+                            }
                     } label: {
                         Image(systemName: "person.crop.circle")
                     }
@@ -602,6 +660,11 @@ private struct ExploreSourceView: View {
             }
         }
         .task { await model.load() }
+        .onAppear {
+            guard openedLogin else { return }
+            openedLogin = false
+            if sourceConfigSnapshot != loginSnapshot { Task { await model.reload(force: true) } }
+        }
         .onChange(of: settings.layout) { layout in
             if layout == .list { Task { await model.selectFirstVisible() } }
         }
@@ -616,6 +679,13 @@ private struct ExploreSourceView: View {
         }
     }
 
+    /// 书源配置（源变量 + infoMap）的快照，用来判断登录页里是否改了配置。
+    private var sourceConfigSnapshot: String {
+        let id = model.source.bookSourceUrl
+        return BookSourceRuntimeStore.shared.get(sourceID: id, key: "sourceVariable")
+            + "\u{1F}" + BookSourceRuntimeStore.shared.get(sourceID: id, key: "__infoMap")
+    }
+
     private var listContent: some View {
         ScrollView {
             LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
@@ -623,13 +693,18 @@ private struct ExploreSourceView: View {
                     ExploreBookList(model: model)
                         .padding(.horizontal, 16)
                 } header: {
-                    if model.visibleKinds.count > 1 {
-                        ExploreKindChips(kinds: model.visibleKinds, selected: model.selectedKind) { kind in
-                            Task { await model.select(kind: kind) }
+                    VStack(alignment: .leading, spacing: 0) {
+                        if !model.controls.isEmpty {
+                            ExploreControlBar(model: model).padding(.top, 6)
                         }
-                        .padding(.vertical, 8)
-                        .background(ReadingTheme.canvas.opacity(0.96))
+                        if model.visibleKinds.count > 1 {
+                            ExploreKindChips(kinds: model.visibleKinds, selected: model.selectedKind) { kind in
+                                Task { await model.select(kind: kind) }
+                            }
+                            .padding(.vertical, 8)
+                        }
                     }
+                    .background(ReadingTheme.canvas.opacity(0.96))
                 }
             }
             .padding(.bottom, 12)
@@ -680,6 +755,50 @@ private struct ExploreBookList: View {
 }
 
 /// 顶部一排胶囊分类，选中的实心高亮，横向滑动，吸顶。
+/// 书源的下拉控件：「模式：短篇模式 ⌄」这样的胶囊，点开选项菜单，选中后整页按新配置刷新。
+private struct ExploreControlBar: View {
+    @ObservedObject var model: ExploreSourceViewModel
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(model.controls.enumerated()), id: \.element.id) { index, control in
+                    let current = model.value(of: control)
+                    Menu {
+                        ForEach((control.chars ?? []).compactMap { $0 }.filter { !$0.isEmpty }, id: \.self) { option in
+                            Button {
+                                Task { await model.choose(control, value: option) }
+                            } label: {
+                                if option == current { Label(option, systemImage: "checkmark") } else { Text(option) }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text("\(control.title)：\(current)")
+                                .font(AppFontStyle.footnote.weight(.medium).themed)
+                                .lineLimit(1)
+                            if model.applyingControl == control.title {
+                                ProgressView().controlSize(.small).scaleEffect(0.7)
+                            } else {
+                                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(height: 30)
+                        .foregroundStyle(index == 0 ? ReadingTheme.onAccent : ReadingTheme.ink)
+                        .background(index == 0 ? ReadingTheme.accentFill : ReadingTheme.groupedCanvas, in: Capsule())
+                        .overlay(Capsule().strokeBorder(ReadingTheme.separator.opacity(index == 0 ? 0 : 1), lineWidth: 0.5))
+                        .contentShape(Capsule())
+                    }
+                    .disabled(model.applyingControl != nil)
+                    .accessibilityLabel("\(control.title)，当前\(current)")
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+    }
+}
+
 private struct ExploreKindChips: View {
     let kinds: [ExploreKind]
     let selected: ExploreKind?
@@ -784,6 +903,9 @@ private struct ExploreMagazineContent: View {
         let kinds = model.visibleKinds
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 26) {
+                if !model.controls.isEmpty {
+                    ExploreControlBar(model: model).padding(.bottom, -10)
+                }
                 ForEach(rows(kinds)) { row in
                     switch row {
                     case .single(let kind, let index):

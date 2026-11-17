@@ -260,6 +260,7 @@ public actor SQLiteLegadoCacheRepository: LegadoCacheRepository {
     public func delete(_ key: String) async throws { try await database.deleteCache(key) }
     public func deleteSourceVariables(_ sourceKey: String) async throws {
         try await database.deleteSourceVariables(sourceKey)
+        BookSourceRuntimeStore.shared.forget(sourceID: sourceKey)
     }
     public func clearExpired(now: Int64) async throws { try await database.clearExpiredCaches(now: now) }
 }

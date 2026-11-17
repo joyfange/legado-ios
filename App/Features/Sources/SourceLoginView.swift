@@ -12,7 +12,7 @@ struct SourceLoginView: View {
         let rows = SourceLoginUIRow.parse(source.loginUi)
         let login = (source.loginUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let isWebAddress = !login.contains("\n") && (login.hasPrefix("http") || login.hasPrefix("about:") || login.contains("://"))
-        if !rows.isEmpty || !isWebAddress {
+        if !rows.isEmpty || !isWebAddress || SourceLoginUIRow.dynamicScript(source.loginUi) != nil {
             SourceLoginFormView(source: source, rows: rows)
         } else {
             webLogin
@@ -366,7 +366,22 @@ struct SourceLoginUIRow: Identifiable, Equatable {
     var defaultValue: String
     var viewName: String?
     var fullWidth: Bool
+    /// 安卓 FlexboxLayout 的 layout_flexBasisPercent：0.4 一行两个，0.24 一行四个，1 独占一行。
+    var basis: Double = 1
     var id: String { type + "|" + name }
+
+    /// 分组标题：没有动作（或动作是 `void 0`）的按钮。
+    var isHeader: Bool {
+        guard type == "button" else { return false }
+        guard let action = action?.trimmingCharacters(in: .whitespacesAndNewlines) else { return true }
+        return action == "void 0" || action == "void 0;" || action == "void(0)" || action == "void(0);"
+    }
+
+    /// 补齐网格的占位格（书源用「※」占位）。
+    var isPlaceholder: Bool {
+        let text = title.trimmingCharacters(in: .whitespaces)
+        return text == "※" || text.isEmpty || (action?.contains("这是占位符") ?? false)
+    }
 
     /// 安卓把 viewName（没有时用 name）当 JS 表达式求值，例如
     /// `'🌐 当前线路：'+(source.get('sqWeb')||'…')`。单纯的字符串字面量直接去引号。
@@ -393,14 +408,36 @@ struct SourceLoginUIRow: Identifiable, Equatable {
         return !text.dropFirst().dropLast().contains(first)
     }
 
+    /// `@js:` / `<js>` 写法的 loginUi：脚本运行后才得到界面 JSON（番茄等书源的分支菜单式登录页）。
+    static func dynamicScript(_ raw: String?) -> String? {
+        guard var script = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !script.isEmpty else { return nil }
+        if script.lowercased().hasPrefix("@js:") { return String(script.dropFirst(4)) }
+        if script.lowercased().hasPrefix("<js>") {
+            script = String(script.dropFirst(4))
+            if let end = script.range(of: "</js>", options: [.caseInsensitive, .backwards]) {
+                script = String(script[..<end.lowerBound])
+            }
+            return script
+        }
+        return nil
+    }
+
     static func parse(_ raw: String?) -> [SourceLoginUIRow] {
         guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), raw.hasPrefix("["),
               let data = raw.data(using: .utf8),
               let items = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        var seen: [String: Int] = [:]
         return items.compactMap { item in
-            guard let name = item["name"].map({ String(describing: $0) }), !name.isEmpty else { return nil }
+            let named = item["name"].map({ String(describing: $0) }).flatMap { $0.isEmpty ? nil : $0 }
+            let titled = item["title"].map({ String(describing: $0) }).flatMap { $0.isEmpty ? nil : $0 }
+            guard var name = named ?? titled else { return nil }
             let chars = (item["chars"] as? [Any])?.map { String(describing: $0) } ?? []
             let basis = ((item["style"] as? [String: Any])?["layout_flexBasisPercent"] as? NSNumber)?.doubleValue ?? 1
+            // 同名占位格、同名标题不能共用一个 id，否则 ForEach 会把它们合并。
+            let type = (item["type"] as? String ?? "text").lowercased()
+            let count = seen[type + "|" + name, default: 0]
+            seen[type + "|" + name] = count + 1
+            if count > 0, type == "button" { name += String(repeating: "\u{200B}", count: count) }
             return SourceLoginUIRow(
                 name: name,
                 type: (item["type"] as? String ?? "text").lowercased(),
@@ -408,7 +445,8 @@ struct SourceLoginUIRow: Identifiable, Equatable {
                 chars: chars,
                 defaultValue: item["default"].map { String(describing: $0) } ?? "",
                 viewName: item["viewName"] as? String,
-                fullWidth: basis >= 0.99
+                fullWidth: basis >= 0.99,
+                basis: basis > 0 ? min(basis, 1) : 1
             )
         }
     }
@@ -416,13 +454,234 @@ struct SourceLoginUIRow: Identifiable, Equatable {
 
 struct SourceLoginFormView: View {
     let source: BookSource
-    let rows: [SourceLoginUIRow]
+    @State private var rows: [SourceLoginUIRow]
     @State private var values: [String: String] = [:]
     @State private var status: String?
     @State private var isRunning = false
     @State private var titles: [String: String] = [:]
+    @State private var isBuilding: Bool
+    @State private var showsLog = false
+    @State private var confirmsHeaderDeletion = false
+    private let dynamicScript: String?
+
+    init(source: BookSource, rows: [SourceLoginUIRow]) {
+        self.source = source
+        dynamicScript = SourceLoginUIRow.dynamicScript(source.loginUi)
+        _rows = State(initialValue: rows)
+        _isBuilding = State(initialValue: rows.isEmpty && SourceLoginUIRow.dynamicScript(source.loginUi) != nil)
+    }
+
+    /// 书源按网格设计（一行放两个、四个按钮）时用卡片网格，和安卓「阅读」的登录页一致。
+    private var usesGrid: Bool { dynamicScript != nil || rows.contains { $0.basis < 0.99 } }
 
     var body: some View {
+        Group {
+            if usesGrid { gridBody } else { formBody }
+        }
+        .disabled(isRunning)
+        .overlay { if isRunning || isBuilding { ProgressView().controlSize(.large) } }
+        .navigationTitle("登录 · \(source.bookSourceName)")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button { Task { await saveAndLogin() } } label: { Image(systemName: "checkmark") }
+                    .accessibilityLabel("保存并登录")
+                Menu {
+                    Button("查看登录头", systemImage: "eye") { showLoginHeader() }
+                    Button("删除登录头", systemImage: "trash", role: .destructive) { confirmsHeaderDeletion = true }
+                    Divider()
+                    Button("日志", systemImage: "doc.text") { showsLog = true }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .accessibilityLabel("更多")
+            }
+        }
+        .confirmationDialog("删除登录头？", isPresented: $confirmsHeaderDeletion, titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                BookSourceRuntimeStore.shared.put(sourceID: source.bookSourceUrl, key: "loginHeader", value: "")
+                status = "登录头已删除"
+            }
+        } message: {
+            Text("删除后需要重新登录，书源的请求才会带上登录信息。")
+        }
+        .sheet(isPresented: $showsLog) {
+            ReadingNavigationStack {
+                DiagnosticLogView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button("关闭") { showsLog = false } }
+                    }
+            }
+        }
+        .onAppear(perform: loadValues)
+        .task {
+            await rebuildRows()
+            await evaluateTitles()
+        }
+    }
+
+    private func showLoginHeader() {
+        let header = BookSourceRuntimeStore.shared.get(sourceID: source.bookSourceUrl, key: "loginHeader")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        status = header.isEmpty ? "还没有登录头" : "登录头：\(header)"
+    }
+
+    /// 脚本生成的登录页：每次执行按钮后重新运行 loginUi，切换「主菜单 → 子页」。
+    private func rebuildRows() async {
+        guard let dynamicScript else { return }
+        defer { isBuilding = false }
+        var info: [String: JSONValue] = [:]
+        for row in rows where row.type != "button" { info[row.name] = .string(values[row.name] ?? row.defaultValue) }
+        do {
+            let result = try await JavaScriptRuleEvaluator(maximumScriptLength: 8 * 1_024 * 1_024)
+                .evaluateAsync(script: dynamicScript, result: .object(info),
+                               executionContext: .init(baseURL: source.bookSourceUrl, source: source))
+            var text = result.value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !text.hasPrefix("["), case .array = result.value, let data = try? JSONEncoder().encode(result.value),
+               let encoded = String(data: data, encoding: .utf8) {
+                text = encoded
+            }
+            let parsed = SourceLoginUIRow.parse(text)
+            if parsed.isEmpty {
+                if rows.isEmpty { status = "登录界面生成失败：书源脚本没有返回界面配置" }
+            } else {
+                withAnimation(.easeInOut(duration: 0.18)) { rows = parsed }
+                var next = values
+                for row in parsed where row.type != "button" && next[row.name] == nil {
+                    next[row.name] = row.defaultValue
+                }
+                values = next
+            }
+        } catch {
+            status = "登录界面生成失败：\(error.localizedDescription)"
+        }
+    }
+
+    private var gridBody: some View {
+        ScrollView {
+            VStack(spacing: 10) {
+                if let status {
+                    Text(status)
+                        .font(AppFontStyle.footnote.themed)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                ForEach(Array(gridLines.enumerated()), id: \.offset) { _, line in
+                    HStack(spacing: 10) {
+                        ForEach(line) { row in gridCell(row) }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+        }
+        .readingCanvas()
+    }
+
+    /// 按 flexBasisPercent 把格子排成行：一行放满（合计不超过 100%）就换行。
+    private var gridLines: [[SourceLoginUIRow]] {
+        var lines: [[SourceLoginUIRow]] = []
+        var current: [SourceLoginUIRow] = []
+        var used = 0.0
+        for row in rows {
+            let basis = row.isHeader ? 1 : row.basis
+            if !current.isEmpty, used + basis > 1.0001 || row.isHeader || basis >= 0.99 {
+                lines.append(current)
+                current = []
+                used = 0
+            }
+            current.append(row)
+            used += basis
+            if row.isHeader || basis >= 0.99 {
+                lines.append(current)
+                current = []
+                used = 0
+            }
+        }
+        if !current.isEmpty { lines.append(current) }
+        // 一行全是占位格就不显示。
+        return lines.filter { !$0.allSatisfy(\.isPlaceholder) }
+    }
+
+    @ViewBuilder private func gridCell(_ row: SourceLoginUIRow) -> some View {
+        if row.isPlaceholder && row.type == "button" {
+            Color.clear.frame(maxWidth: .infinity, minHeight: 1)
+        } else if row.isHeader {
+            Text(title(row))
+                .font(AppFontStyle.footnote.weight(.semibold).themed)
+                .foregroundStyle(ReadingTheme.secondaryInk)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+        } else {
+            switch row.type {
+            case "button":
+                Button {
+                    if let action = row.action { Task { await run(action) } }
+                } label: {
+                    Text(title(row))
+                        .font(AppFontStyle.subheadline.weight(.medium).themed)
+                        .foregroundStyle(ReadingTheme.ink)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 11)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            case "toggle", "select":
+                Menu {
+                    ForEach(row.chars.isEmpty ? ["🔳", "✅"] : row.chars, id: \.self) { option in
+                        Button(option) {
+                            values[row.name] = option
+                            persist()
+                            if let action = row.action { Task { await run(action, quiet: true) } }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(title(row)).foregroundStyle(ReadingTheme.secondaryInk)
+                        Text(values[row.name] ?? row.defaultValue).foregroundStyle(ReadingTheme.ink)
+                        Image(systemName: "chevron.up.chevron.down").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .font(AppFontStyle.subheadline.themed)
+                    .lineLimit(1)
+                    .padding(.horizontal, 12)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            default:
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(title(row))
+                        .font(AppFontStyle.caption.themed)
+                        .foregroundStyle(ReadingTheme.secondaryInk)
+                    Group {
+                        if row.type == "password" {
+                            SecureField(row.defaultValue.isEmpty ? title(row) : row.defaultValue, text: binding(row))
+                        } else {
+                            TextField(row.defaultValue.isEmpty ? title(row) : row.defaultValue, text: binding(row))
+                                .disableAutocorrection(true)
+                                .textInputAutocapitalization(.never)
+                        }
+                    }
+                    .font(AppFontStyle.subheadline.themed)
+                    .onSubmit(persist)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 9)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+    }
+
+    private var formBody: some View {
         Form {
             if let status {
                 Section {
@@ -439,17 +698,6 @@ struct SourceLoginFormView: View {
                 }.readingRowBackground()
             }
         }.readingThemedListBackground()
-        .disabled(isRunning)
-        .overlay { if isRunning { ProgressView().controlSize(.large) } }
-        .navigationTitle("登录 · \(source.bookSourceName)")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("保存") { Task { await saveAndLogin() } }
-            }
-        }
-        .onAppear(perform: loadValues)
-        .task { await evaluateTitles() }
     }
 
     private func title(_ row: SourceLoginUIRow) -> String { titles[row.id] ?? row.title }
@@ -479,7 +727,7 @@ struct SourceLoginFormView: View {
         var header = ""
         var current: [SourceLoginUIRow] = []
         for row in rows {
-            if row.type == "button", row.action == nil {
+            if row.isHeader {
                 if !current.isEmpty || !header.isEmpty { result.append((header, current)) }
                 header = title(row)
                 current = []
@@ -659,6 +907,7 @@ struct SourceLoginFormView: View {
         } catch {
             status = "执行失败：\(error.localizedDescription)"
         }
+        await rebuildRows()
         await evaluateTitles()
     }
 

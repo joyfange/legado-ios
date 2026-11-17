@@ -114,6 +114,15 @@ final class BookDetailViewModel: ObservableObject {
             }
         }
         if let searchBook {
+            // 上次打开过这本书：先把存下的简介和目录摆出来，页面马上可用，再在后台向书源刷新。
+            if let cached = BookDetailDiskCache.read(bookURL: book.bookUrl, origin: source.bookSourceUrl) {
+                apply(cached)
+            }
+            let stored = await updateCoordinator.storedChapters(bookURL: book.bookUrl)
+            if !stored.isEmpty, chapters.isEmpty {
+                chapters = stored
+                state = .ready
+            }
             let detail = await service.loadDetail(searchBook: searchBook, source: source)
             let details = detail.book
             book.name = details.name
@@ -130,6 +139,9 @@ final class BookDetailViewModel: ObservableObject {
             book.originOrder = details.originOrder
             book.variable = details.variable ?? book.variable
             diagnostics += detail.diagnostics
+            if !detail.diagnostics.contains(where: { $0.severity == .error }) {
+                BookDetailDiskCache.write(book)
+            }
         }
         var toc = await updateCoordinator.refresh(book: book, source: source)
         if toc.chapters.isEmpty && chapters.isEmpty {
@@ -153,6 +165,20 @@ final class BookDetailViewModel: ObservableObject {
         } else {
             state = .failed
         }
+    }
+
+    private func apply(_ cached: Book) {
+        if !cached.name.isEmpty { book.name = cached.name }
+        if !cached.author.isEmpty { book.author = cached.author }
+        if !cached.tocUrl.isEmpty { book.tocUrl = cached.tocUrl }
+        book.type = cached.type
+        book.kind = cached.kind ?? book.kind
+        book.coverUrl = cached.coverUrl ?? book.coverUrl
+        book.intro = cached.intro ?? book.intro
+        book.charset = cached.charset ?? book.charset
+        book.wordCount = cached.wordCount ?? book.wordCount
+        book.latestChapterTitle = cached.latestChapterTitle ?? book.latestChapterTitle
+        book.variable = cached.variable ?? book.variable
     }
 
     func cacheNextTen() { startCaching(limit: 10) }
@@ -279,6 +305,43 @@ final class BookDetailViewModel: ObservableObject {
             guard !Task.isCancelled else { return }
             self?.isCaching = false
             self?.cacheTask = nil
+        }
+    }
+}
+
+
+/// 书籍详情（简介、目录地址等）的磁盘缓存：从发现页、搜索结果再次点进同一本书时秒开。
+enum BookDetailDiskCache {
+    private static let directory: URL = {
+        let url = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Legado/BookDetail", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
+
+    private static func file(_ bookURL: String, _ origin: String) -> URL {
+        let key = origin + "\u{1F}" + bookURL
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in key.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        return directory.appendingPathComponent(String(hash, radix: 16) + "-" + String(key.utf8.count) + ".json")
+    }
+
+    static func read(bookURL: String, origin: String, maxAge: TimeInterval = 7 * 86_400) -> Book? {
+        let url = file(bookURL, origin)
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modified = attributes[.modificationDate] as? Date,
+              Date().timeIntervalSince(modified) < maxAge,
+              let data = try? Data(contentsOf: url),
+              let book = try? JSONDecoder().decode(Book.self, from: data),
+              book.bookUrl == bookURL else { return nil }
+        return book
+    }
+
+    static func write(_ book: Book) {
+        let url = file(book.bookUrl, book.origin)
+        DispatchQueue.global(qos: .utility).async {
+            guard let data = try? JSONEncoder().encode(book) else { return }
+            try? data.write(to: url, options: .atomic)
         }
     }
 }

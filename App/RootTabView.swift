@@ -174,6 +174,7 @@ private struct BookshelfView: View {
     @EnvironmentObject private var sources: SourceLibraryModel
     @ObservedObject private var folderStore = BookshelfFolderStore.shared
     @ObservedObject private var selection = BookshelfSelection.shared
+    @ObservedObject private var sheetRouter = BookshelfSheetRouter.shared
     @State private var showsLocalImporter = false
     @State private var pendingLocalFiles: [LocalBookImportFile] = []
     @State private var selectedGroupID = BookGroup.idReading
@@ -382,6 +383,14 @@ private struct BookshelfView: View {
             BookshelfManagerSheet()
                 .environmentObject(library)
                 .readingPresentationDetents([.medium, .large])
+        }
+        .sheet(item: $sheetRouter.sheet) { sheet in
+            switch sheet {
+            case .moveToShelf(let book):
+                BookGroupSelectView(book: book).environmentObject(library)
+            case .editInfo(let book):
+                BookInfoEditView(book: book).environmentObject(library).environmentObject(sources)
+            }
         }
         .alert("本地书导入失败", isPresented: Binding(
             get: { library.errorMessage != nil },
@@ -997,8 +1006,6 @@ private struct BookshelfBookLink: View {
     let mode: BookshelfLinkMode
     let groupID: Int64
     @ObservedObject private var selection = BookshelfSelection.shared
-    @State private var showsGroupSelector = false
-    @State private var showsInfoEditor = false
 
     private var source: BookSource? { sources.sources.first { $0.bookSourceUrl == book.origin } }
 
@@ -1039,9 +1046,9 @@ private struct BookshelfBookLink: View {
             } label: {
                 Label("作品详情", systemImage: "books.vertical")
             }
-            Button("编辑书籍信息", systemImage: "pencil") { showsInfoEditor = true }
+            Button("编辑书籍信息", systemImage: "pencil") { presentAfterMenu(.editInfo(book)) }
             Button("选择", systemImage: "checkmark.circle") { selection.begin(with: book.bookUrl) }
-            Button("移至书架", systemImage: "rectangle.3.group") { showsGroupSelector = true }
+            Button("移至书架", systemImage: "rectangle.3.group") { presentAfterMenu(.moveToShelf(book)) }
             let folders = folderStore.folders(inGroup: groupID)
             if !folders.isEmpty {
                 Menu {
@@ -1084,15 +1091,47 @@ private struct BookshelfBookLink: View {
             previewFramedLabel
         }
         .buttonStyle(.plain)
-        .onDrag { NSItemProvider(object: book.bookUrl as NSString) }
-        .modifier(BookshelfDropModifier(targetURL: book.bookUrl, folderID: nil, groupID: groupID))
-        .sheet(isPresented: $showsGroupSelector) {
-            BookGroupSelectView(book: book).environmentObject(library)
+        .onDrag {
+            NSItemProvider(object: book.bookUrl as NSString)
+        } preview: {
+            BookshelfDragPreview(book: book, width: dragPreviewWidth)
         }
-        .sheet(isPresented: $showsInfoEditor) {
-            BookInfoEditView(book: book).environmentObject(library).environmentObject(sources)
+        .modifier(BookshelfDropModifier(targetURL: book.bookUrl, folderID: nil, groupID: groupID))
+    }
+
+    private var dragPreviewWidth: CGFloat {
+        if case .grid(let width) = mode { return width }
+        return 72
+    }
+
+    /// 长按菜单里打开的面板：等菜单收起动画结束再弹出，并交给书架页统一弹出。
+    /// 之前直接挂在网格格子上，菜单收起时格子被懒加载容器重建，面板就弹不出来（看起来是空白）。
+    private func presentAfterMenu(_ sheet: BookshelfSheetRouter.Sheet) {
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            BookshelfSheetRouter.shared.sheet = sheet
         }
     }
+}
+
+/// 书架上长按菜单打开的面板，由书架页（不在懒加载格子里）统一弹出。
+@MainActor
+final class BookshelfSheetRouter: ObservableObject {
+    static let shared = BookshelfSheetRouter()
+
+    enum Sheet: Identifiable {
+        case moveToShelf(Book)
+        case editInfo(Book)
+
+        var id: String {
+            switch self {
+            case .moveToShelf(let book): "move:" + book.bookUrl
+            case .editInfo(let book): "edit:" + book.bookUrl
+            }
+        }
+    }
+
+    @Published var sheet: Sheet?
 }
 
 /// 网格尺寸：封面高宽比与书名区到封面底边的距离（让出书板的高度）。
@@ -4334,28 +4373,79 @@ struct BookshelfCover: View {
         }
     }
 
-    /// 实体（参照示例）：封面靠左约 6% 处压出一道书脊折痕（暗线 + 高光），
-    /// 左缘稍暗、整本带一层柔和投影，像一本精装书立在那里；不加书页、不加光泽，免得发怪。
+    /// 实体：像一本立在书架上的精装书，而不是一张图片。
+    /// · 书脊一侧（左）是几乎直角的硬边，翻口一侧（右）是圆角；
+    /// · 左侧压出书脊折痕（暗线 + 高光），书脊带只轻微压暗，不再做成透视，避免看起来是斜放的；
+    /// · 右缘一道细高光 + 暗边做出纸板厚度，顶边一线高光，整面一层从左上到右下的极淡光照；
+    /// · 投影正下方居中，书是端正立着的。
     private func solidCover(radius: CGFloat) -> some View {
-        let groove = max(width * 0.06, 3)
+        let groove = max(width * 0.07, 3.5)
+        let shape = BookBoardShape(spineRadius: max(radius * 0.25, 1.2), edgeRadius: radius)
         return BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
-                                width: width, height: height, cornerRadius: radius, spineShade: false)
+                                width: width, height: height, cornerRadius: 0, spineShade: false)
+            .overlay {
+                // 整面光照：左上略亮，右下略暗，让封面有纸板的体积感。
+                LinearGradient(colors: [Color.white.opacity(0.10), .clear, Color.black.opacity(0.10)],
+                               startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .allowsHitTesting(false)
+            }
             .overlay(alignment: .leading) {
                 HStack(spacing: 0) {
-                    // 书脊：左缘到折痕之间略暗
-                    LinearGradient(colors: [Color.black.opacity(0.22), Color.black.opacity(0.06)],
+                    // 书脊带：左缘最暗，往折痕方向变浅
+                    LinearGradient(colors: [Color.black.opacity(0.20), Color.black.opacity(0.05)],
                                    startPoint: .leading, endPoint: .trailing)
                         .frame(width: groove)
-                    // 折痕：一道暗线紧跟一道高光
-                    Rectangle().fill(Color.black.opacity(0.28)).frame(width: 0.8)
-                    Rectangle().fill(Color.white.opacity(0.35)).frame(width: 1.2)
-                    LinearGradient(colors: [Color.black.opacity(0.10), .clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: max(width * 0.05, 2))
+                    // 折痕：暗线 + 高光 + 一小段阴影过渡
+                    Rectangle().fill(Color.black.opacity(0.22)).frame(width: 0.7)
+                    Rectangle().fill(Color.white.opacity(0.30)).frame(width: 1)
+                    LinearGradient(colors: [Color.black.opacity(0.07), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: max(width * 0.04, 2))
                 }
-                .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
                 .allowsHitTesting(false)
             }
-            .shadow(color: .black.opacity(0.22), radius: 3, x: 1, y: 2)
+            .overlay(alignment: .trailing) {
+                // 翻口：纸板边缘的一线反光和外缘暗边
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.clear, Color.white.opacity(0.16)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: max(width * 0.03, 2))
+                    Rectangle().fill(Color.black.opacity(0.16)).frame(width: 0.6)
+                }
+                .allowsHitTesting(false)
+            }
+            .overlay(alignment: .top) {
+                Rectangle().fill(Color.white.opacity(0.22)).frame(height: 0.6).allowsHitTesting(false)
+            }
+            .clipShape(shape)
+            .overlay(shape.stroke(Color.black.opacity(0.12), lineWidth: 0.5).allowsHitTesting(false))
+            .shadow(color: .black.opacity(0.10), radius: 0.8, x: 0, y: 0.5)
+            .shadow(color: .black.opacity(0.18), radius: 4, x: 0, y: 3)
+    }
+}
+
+/// 精装书外形：书脊侧（左）两个角几乎是直角，翻口侧（右）两个角是圆角。
+struct BookBoardShape: Shape {
+    var spineRadius: CGFloat
+    var edgeRadius: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        let left = min(spineRadius, rect.height / 2, rect.width / 2)
+        let right = min(edgeRadius, rect.height / 2, rect.width / 2)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + left, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX - right, y: rect.minY))
+        path.addArc(center: CGPoint(x: rect.maxX - right, y: rect.minY + right), radius: right,
+                    startAngle: .degrees(-90), endAngle: .degrees(0), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY - right))
+        path.addArc(center: CGPoint(x: rect.maxX - right, y: rect.maxY - right), radius: right,
+                    startAngle: .degrees(0), endAngle: .degrees(90), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX + left, y: rect.maxY))
+        path.addArc(center: CGPoint(x: rect.minX + left, y: rect.maxY - left), radius: left,
+                    startAngle: .degrees(90), endAngle: .degrees(180), clockwise: false)
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.minY + left))
+        path.addArc(center: CGPoint(x: rect.minX + left, y: rect.minY + left), radius: left,
+                    startAngle: .degrees(180), endAngle: .degrees(270), clockwise: false)
+        path.closeSubpath()
+        return path
     }
 }
 
@@ -4410,32 +4500,77 @@ struct BookshelfDropModifier: ViewModifier {
     var cornerRadius: CGFloat = 6
     @State private var targeted = false
 
+    /// 拖到目标上时：目标书轻轻缩小、变淡并虚化，身后浮出一块圆角底板，像文件夹正在成形；
+    /// 不再画描边框，也不显示系统的绿色「+」。
     func body(content: Content) -> some View {
         content
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(ReadingTheme.accent, lineWidth: 2)
+            .scaleEffect(targeted ? 0.9 : 1)
+            .opacity(targeted ? 0.55 : 1)
+            .blur(radius: targeted ? 1.2 : 0)
+            .background {
+                RoundedRectangle(cornerRadius: cornerRadius + 8, style: .continuous)
+                    .fill(ReadingTheme.separator.opacity(0.45))
+                    .padding(-6)
+                    .scaleEffect(targeted ? 1 : 0.85)
                     .opacity(targeted ? 1 : 0)
                     .allowsHitTesting(false)
             }
-            .scaleEffect(targeted ? 1.04 : 1)
-            .animation(.easeOut(duration: 0.15), value: targeted)
-            .onDrop(of: [UTType.plainText], isTargeted: $targeted) { providers in
-                guard let provider = providers.first else { return false }
-                let target = targetURL
-                let folder = folderID
-                let group = groupID
-                _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-                    guard let value = object as? NSString else { return }
-                    let url = String(value)
-                    Task { @MainActor in
-                        withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                            BookshelfFolderStore.shared.handleDrop(url, ontoBook: target, folder: folder, groupID: group)
-                        }
-                    }
+            .animation(.spring(response: 0.3, dampingFraction: 0.78), value: targeted)
+            .onDrop(of: [UTType.plainText], delegate: BookshelfDropDelegate(
+                targetURL: targetURL, folderID: folderID, groupID: groupID, targeted: $targeted))
+    }
+}
+
+private struct BookshelfDropDelegate: DropDelegate {
+    let targetURL: String?
+    let folderID: String?
+    let groupID: Int64
+    @Binding var targeted: Bool
+
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [UTType.plainText]) }
+
+    func dropEntered(info: DropInfo) {
+        targeted = true
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+    }
+
+    func dropExited(info: DropInfo) { targeted = false }
+
+    /// 「移动」而不是「拷贝」：系统就不会在拖动的封面上加绿色加号。
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        targeted = false
+        guard let provider = info.itemProviders(for: [UTType.plainText]).first else { return false }
+        let target = targetURL
+        let folder = folderID
+        let group = groupID
+        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let value = object as? NSString else { return }
+            let url = String(value)
+            Task { @MainActor in
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                    BookshelfFolderStore.shared.handleDrop(url, ontoBook: target, folder: folder, groupID: group)
                 }
-                return true
             }
+        }
+        return true
+    }
+}
+
+/// 拖动时手指下的预览：只有封面本身（圆角 + 柔和投影），不带书名、不带底色方框。
+struct BookshelfDragPreview: View {
+    let book: Book
+    var width: CGFloat = 84
+
+    var body: some View {
+        let height = BookshelfGridMetrics.coverHeight(width: width)
+        let radius = BookshelfCover.cornerRadius(width: width)
+        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
+                         width: width, height: height, cornerRadius: radius, spineShade: false)
+            .frame(width: width, height: height)
+            .contentShape(.dragPreview, RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }
 
