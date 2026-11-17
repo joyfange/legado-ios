@@ -816,6 +816,7 @@ struct BookShelfPickerSheet: View {
     @Environment(\.dismiss) private var dismiss
     let book: Book
     let inLibrary: Bool
+    var title: String = "加入书架"
     let onConfirm: (Set<Int64>, Bool) -> Void
     let onRemove: () -> Void
 
@@ -839,7 +840,7 @@ struct BookShelfPickerSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text("加入书架")
+            Text(title)
                 .font(AppFontStyle.title3.bold().themed)
                 .padding(.top, 24)
                 .padding(.bottom, 14)

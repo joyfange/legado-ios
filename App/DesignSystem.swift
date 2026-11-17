@@ -208,6 +208,81 @@ struct ReadingPageHeader<Actions: View>: View {
         .padding(.horizontal, 24)
         .padding(.top, 20)
         .padding(.bottom, 28)
+        // 把大标题行的下沿报给页面：滚上去以后由顶部悬浮栏接替标题。
+        .background(alignment: .top) {
+            GeometryReader { proxy in
+                Color.clear.preference(key: ReadingHeaderBottomKey.self,
+                                       value: proxy.frame(in: .global).minY + 20 + 44)
+            }
+        }
+    }
+}
+
+struct ReadingHeaderBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
+}
+
+/// 主页面的顶部：内容滚动时不再直接压到状态栏（时间、电量）下面。
+/// 状态栏区域始终铺一层页面底色并向下渐隐；大标题滚出去以后，顶部浮出一条紧凑栏（小标题 + 原来的按钮），
+/// 内容从栏下面渐隐滑过，和 Cmbok、系统「图书」的上滑效果一致。
+struct ReadingPinnedTopBar<Actions: View>: ViewModifier {
+    let title: String
+    @ViewBuilder var actions: () -> Actions
+    @State private var headerBottom: CGFloat = .greatestFiniteMagnitude
+
+    func body(content: Content) -> some View {
+        content
+            .onPreferenceChange(ReadingHeaderBottomKey.self) { value in
+                // 只关心「标题是否滚到顶部」，按 4pt 取整减少刷新。
+                let rounded = (value / 4).rounded() * 4
+                Task { @MainActor in
+                    if headerBottom != rounded { headerBottom = rounded }
+                }
+            }
+            .overlay(alignment: .top) {
+                GeometryReader { proxy in
+                    let top = proxy.safeAreaInsets.top
+                    let barHeight: CGFloat = 50
+                    let collapsed = headerBottom < top + 8
+                    ZStack(alignment: .top) {
+                        ReadingCanvasBackground()
+                            .frame(height: top + (collapsed ? barHeight : 0) + 22)
+                            .mask(
+                                LinearGradient(stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: (top + (collapsed ? barHeight : 0)) / (top + (collapsed ? barHeight : 0) + 22)),
+                                    .init(color: .clear, location: 1)
+                                ], startPoint: .top, endPoint: .bottom)
+                            )
+                            .allowsHitTesting(false)
+                        HStack(spacing: 10) {
+                            Text(title)
+                                .font(AppFontStyle.headline.weight(.semibold).themed)
+                                .foregroundStyle(ReadingTheme.ink)
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                            HStack(spacing: 10) { actions() }
+                                .scaleEffect(0.86, anchor: .trailing)
+                        }
+                        .padding(.horizontal, 24)
+                        .frame(height: barHeight)
+                        .padding(.top, top)
+                        .opacity(collapsed ? 1 : 0)
+                        .offset(y: collapsed ? 0 : -8)
+                        .allowsHitTesting(collapsed)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .animation(.easeOut(duration: 0.2), value: collapsed)
+                    .ignoresSafeArea(edges: .top)
+                }
+            }
+    }
+}
+
+extension View {
+    func readingPinnedTopBar<Actions: View>(title: String, @ViewBuilder actions: @escaping () -> Actions) -> some View {
+        modifier(ReadingPinnedTopBar(title: title, actions: actions))
     }
 }
 

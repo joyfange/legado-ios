@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import AVKit
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
@@ -488,7 +489,25 @@ struct ReaderView: View {
     }
 
     @ViewBuilder private var readerContent: some View {
-        if pageAnimation != 3,
+        if let mediaURL = model.currentMediaURL {
+            // 短剧 / 漫剧 / 听书：正文是一个播放地址，直接播放，下面是选集。
+            ReaderMediaChapterView(
+                url: mediaURL,
+                headers: model.mediaHeaders,
+                bookName: book.name,
+                title: model.title,
+                isAudio: model.isAudioBook,
+                chapters: model.chapters,
+                currentIndex: model.currentIndex,
+                canGoPrevious: model.canGoPrevious,
+                canGoNext: model.canGoNext,
+                onPrevious: { moveChapter(-1) },
+                onNext: { moveChapter(1) },
+                onSelect: { index in selectMediaEpisode(index) },
+                onMenu: { showsReaderMenu.toggle() }
+            )
+            .transition(.opacity)
+        } else if pageAnimation != 3,
            (model.isLoading && model.content.isEmpty) || (model.content.isEmpty && !model.hasLoadedCurrentChapter) {
             VStack(spacing: 14) {
                 ProgressView()
@@ -1061,6 +1080,25 @@ struct ReaderView: View {
                                 afterBookActions { illustrationChapter = model.currentChapter }
                             }
                         }
+                        // 书源自带的评论 / 功能入口（番茄等书源的 callBackJs 与评论函数），和安卓「阅读」一致。
+                        if model.hasSourceCallback {
+                            bookAction("text.bubble", "书评") {
+                                afterBookActions { openSourceScript(sourceEventScript("clickBookName")) }
+                            }
+                            bookAction("square.grid.2x2", "作品功能") {
+                                afterBookActions { openSourceScript(sourceEventScript("clickCustomButton")) }
+                            }
+                        }
+                        if model.sourceDefines("getChapComments") {
+                            bookAction("bubble.left.and.bubble.right", "本章章评") {
+                                afterBookActions { openSourceScript(chapterCommentScript("getChapComments")) }
+                            }
+                        }
+                        if model.sourceDefines("getAuthorSay") {
+                            bookAction("pencil.and.outline", "作家说") {
+                                afterBookActions { openSourceScript(chapterCommentScript("getAuthorSay")) }
+                            }
+                        }
                     }
                     Text("重新获取、编辑正文只作用于当前章节。")
                         .font(.caption2)
@@ -1260,6 +1298,14 @@ struct ReaderView: View {
             previousDayTheme = resolvedStyle.id
             theme = "night"
         }
+    }
+
+    private func selectMediaEpisode(_ index: Int) {
+        guard model.chapters.indices.contains(index), index != model.currentIndex else { return }
+        saveProgress(immediate: true)
+        readerJumpPosition = nil
+        model.select(index: index)
+        readerPosition = 0
     }
 
     private func moveChapter(_ direction: Int) {
@@ -1790,6 +1836,33 @@ struct ReaderView: View {
             footerPaddingRight: footerPaddingRight,
             showsFooter: footerVisible
         )
+    }
+
+    /// 执行书源回调脚本（书评、章评、作家说、作品功能），拿到网址后半屏打开。
+    private func openSourceScript(_ script: String) {
+        guard reviewPage == nil else { return }
+        let model = model
+        reviewPage = ReaderReviewPage(
+            url: nil,
+            bridge: { await model.runSourceBridge($0) },
+            loader: { await model.resolveReviewClick(script) }
+        )
+    }
+
+    private func sourceEventScript(_ event: String) -> String {
+        "var event = '\(event)';\n" + model.sourceCallbackScript
+    }
+
+    /// 番茄类书源的章评 / 作家说函数：参数是作品 ID 和本章 ID（章节地址里的 q 参数）。
+    private func chapterCommentScript(_ function: String) -> String {
+        """
+        (function () {
+          var page = String(baseUrl || '');
+          var bookId = typeof currentBookId === 'function' ? currentBookId(page, book) : '';
+          var itemId = typeof queryValue === 'function' ? queryValue(page, 'q') : '';
+          return \(function).call(this, bookId, itemId);
+        }).call(this);
+        """
     }
 
     /// Binds a stored "RRGGBB" string to a ColorPicker.
@@ -2701,5 +2774,252 @@ private struct ReaderParagraphSelectView: UIViewRepresentable {
             let value = (textView.text as NSString).substring(with: range)
             if selection.wrappedValue != value { selection.wrappedValue = value }
         }
+    }
+}
+
+// MARK: - 短剧 / 听书播放
+
+extension ReaderViewModel {
+    /// 本章正文只有一个音视频地址（番茄短剧、漫剧、听书模式）时返回它，阅读页改为播放器。
+    var currentMediaURL: URL? {
+        let raw = scrollChapters.first(where: { $0.id == currentIndex })?.content ?? content
+        return Self.mediaURL(in: raw, bookType: book.type)
+    }
+
+    var isAudioBook: Bool { book.type & 32 != 0 }
+
+    /// 书源的事件回调脚本（ruleContent.callBackJs），去掉 @js: / <js> 包装。
+    var sourceCallbackScript: String {
+        var script = (source?.ruleContent?.callBackJs ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if script.lowercased().hasPrefix("@js:") { script = String(script.dropFirst(4)) }
+        if script.lowercased().hasPrefix("<js>") {
+            script = String(script.dropFirst(4))
+            if let end = script.range(of: "</js>", options: [.caseInsensitive, .backwards]) {
+                script = String(script[..<end.lowerBound])
+            }
+        }
+        return script
+    }
+
+    var hasSourceCallback: Bool { !sourceCallbackScript.isEmpty }
+
+    func sourceDefines(_ function: String) -> Bool {
+        guard let source else { return false }
+        let needle = "function " + function + "("
+        return (source.jsLib ?? "").contains(needle) || (source.loginUrl ?? "").contains(needle)
+    }
+
+    /// 书源请求头里的 Referer / User-Agent 一并带给播放器，部分视频地址要校验。
+    var mediaHeaders: [String: String] {
+        guard let source, let headers = try? BookSourceHeaderResolver().resolve(source) else { return [:] }
+        return headers.filter { ["referer", "user-agent", "cookie"].contains($0.key.lowercased()) }
+    }
+
+    nonisolated static func mediaURL(in raw: String, bookType: Int) -> URL? {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.hasPrefix("<"), let start = text.range(of: "http") {
+            text = String(text[start.lowerBound...])
+            if let end = text.firstIndex(where: { "\"'<> ".contains($0) }) { text = String(text[..<end]) }
+        }
+        text = text.replacingOccurrences(of: "&amp;", with: "&")
+        guard !text.isEmpty, !text.contains("\n"), !text.contains(" "),
+              text.lowercased().hasPrefix("http") else { return nil }
+        let lower = text.lowercased()
+        let mediaExtensions = [".mp4", ".m3u8", ".mov", ".m4v", ".flv", ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg"]
+        let looksLikeMedia = mediaExtensions.contains { lower.contains($0) } || lower.contains("video") || lower.contains("audio")
+        guard bookType & (4 | 32) != 0 || looksLikeMedia else { return nil }
+        return URL(string: text)
+    }
+}
+
+@MainActor
+final class ReaderMediaPlayerHolder: ObservableObject {
+    let player = AVPlayer()
+    @Published private(set) var isPlaying = false
+    @Published private(set) var failure: String?
+    private var currentURL: URL?
+    private var endObserver: NSObjectProtocol?
+    private var statusObservation: NSKeyValueObservation?
+    private var rateObservation: NSKeyValueObservation?
+    var onEnd: (() -> Void)?
+
+    init() {
+        rateObservation = player.observe(\.rate, options: [.new]) { [weak self] player, _ in
+            let playing = player.rate > 0
+            Task { @MainActor in self?.isPlaying = playing }
+        }
+    }
+
+    func play(_ url: URL, headers: [String: String]) {
+        guard url != currentURL else { return }
+        currentURL = url
+        failure = nil
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        var options: [String: Any] = [:]
+        if !headers.isEmpty { options["AVURLAssetHTTPHeaderFieldsKey"] = headers }
+        let item = AVPlayerItem(asset: AVURLAsset(url: url, options: options))
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.onEnd?() }
+        }
+        statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            let failed = item.status == .failed
+            let message = item.error?.localizedDescription
+            Task { @MainActor in if failed { self?.failure = message ?? "播放失败" } }
+        }
+        player.replaceCurrentItem(with: item)
+        player.play()
+    }
+
+    func toggle() {
+        if player.rate > 0 { player.pause() } else { player.play() }
+    }
+
+    func stop() {
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        currentURL = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+    }
+}
+
+struct ReaderMediaChapterView: View {
+    let url: URL
+    let headers: [String: String]
+    let bookName: String
+    let title: String
+    let isAudio: Bool
+    let chapters: [BookChapter]
+    let currentIndex: Int
+    let canGoPrevious: Bool
+    let canGoNext: Bool
+    let onPrevious: () -> Void
+    let onNext: () -> Void
+    let onSelect: (Int) -> Void
+    let onMenu: () -> Void
+    @StateObject private var holder = ReaderMediaPlayerHolder()
+    @AppStorage("readerMediaAutoNext") private var autoNext = true
+
+    private var episodes: [(offset: Int, element: BookChapter)] {
+        Array(chapters.enumerated()).filter { !$0.element.isVolume }
+    }
+
+    var body: some View {
+        GeometryReader { proxy in
+            VStack(spacing: 0) {
+                ZStack {
+                    Color.black
+                    if isAudio {
+                        VStack(spacing: 16) {
+                            Image(systemName: holder.isPlaying ? "waveform" : "headphones")
+                                .font(.system(size: 54, weight: .light))
+                                .foregroundStyle(.white.opacity(0.9))
+                            Text(title).font(.headline).foregroundStyle(.white).lineLimit(2)
+                            Button { holder.toggle() } label: {
+                                Image(systemName: holder.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                                    .font(.system(size: 56))
+                                    .foregroundStyle(.white)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding()
+                    } else {
+                        VideoPlayer(player: holder.player)
+                    }
+                    if let failure = holder.failure {
+                        Text("播放失败：\(failure)")
+                            .font(.footnote)
+                            .foregroundStyle(.white)
+                            .padding(10)
+                            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
+                            .padding()
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                    }
+                }
+                .frame(height: isAudio ? proxy.size.height * 0.38 : proxy.size.height * 0.62)
+                .clipped()
+
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(bookName).font(.headline).lineLimit(1)
+                            Text(title).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Button(action: onMenu) {
+                            Image(systemName: "ellipsis.circle").font(.title3)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("阅读菜单")
+                    }
+                    HStack(spacing: 10) {
+                        mediaButton("上一集", systemImage: "backward.end.fill", enabled: canGoPrevious, action: onPrevious)
+                        mediaButton(holder.isPlaying ? "暂停" : "播放", systemImage: holder.isPlaying ? "pause.fill" : "play.fill", enabled: true) { holder.toggle() }
+                        mediaButton("下一集", systemImage: "forward.end.fill", enabled: canGoNext, action: onNext)
+                    }
+                    Toggle("自动播放下一集", isOn: $autoNext).font(.subheadline)
+                    Text("选集 · 共 \(episodes.count) 集").font(.subheadline.weight(.semibold))
+                    ScrollViewReader { reader in
+                        ScrollView(showsIndicators: false) {
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 5), spacing: 8) {
+                                ForEach(episodes, id: \.offset) { item in
+                                    let current = item.offset == currentIndex
+                                    Button { onSelect(item.offset) } label: {
+                                        Text(episodeLabel(item.element.title, fallback: item.offset + 1))
+                                            .font(.footnote.weight(current ? .semibold : .regular))
+                                            .lineLimit(1)
+                                            .minimumScaleFactor(0.7)
+                                            .frame(maxWidth: .infinity, minHeight: 38)
+                                            .foregroundStyle(current ? Color.white : Color.primary)
+                                            .background(current ? Color.accentColor : Color.secondary.opacity(0.12),
+                                                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(item.offset)
+                                }
+                            }
+                            .padding(.bottom, 24)
+                        }
+                        .onAppear { reader.scrollTo(currentIndex, anchor: .center) }
+                        .onChange(of: currentIndex) { value in
+                            withAnimation { reader.scrollTo(value, anchor: .center) }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 14)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(Color(uiColor: .systemBackground))
+            }
+        }
+        .onAppear {
+            holder.onEnd = { if autoNext && canGoNext { onNext() } }
+            holder.play(url, headers: headers)
+        }
+        .onChange(of: url) { value in
+            holder.onEnd = { if autoNext && canGoNext { onNext() } }
+            holder.play(value, headers: headers)
+        }
+        .onDisappear { holder.stop() }
+    }
+
+    private func episodeLabel(_ title: String, fallback: Int) -> String {
+        let digits = title.filter(\.isNumber)
+        if !digits.isEmpty, title.count <= 8 { return digits }
+        return title.isEmpty ? "\(fallback)" : title
+    }
+
+    private func mediaButton(_ title: String, systemImage: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.medium))
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .background(Color.secondary.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.4)
     }
 }

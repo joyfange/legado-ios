@@ -355,6 +355,21 @@ final class BookLibraryModel: ObservableObject {
         await persist(updated)
     }
 
+    /// 「移至书架」里切换正在读 / 想读：想读的书清掉开始阅读的标记（回到第一章），正在读的书记上阅读时间。
+    func setReadingStatus(_ book: Book, reading: Bool) async {
+        guard let index = books.firstIndex(where: { $0.bookUrl == book.bookUrl }) else { return }
+        let isWant = Self.isWantToRead(books[index])
+        if reading {
+            if isWant { await markReading(book) }
+        } else if !isWant {
+            var updated = books
+            updated[index].durChapterIndex = 0
+            updated[index].durChapterPos = 0
+            updated[index].durChapterTime = 0
+            await persist(updated)
+        }
+    }
+
     func count(in group: BookGroup) -> Int { books(in: group).count }
 
     var visibleGroups: [BookGroup] {

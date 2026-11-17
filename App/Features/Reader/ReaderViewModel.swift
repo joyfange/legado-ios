@@ -74,7 +74,7 @@ final class ReaderViewModel: ObservableObject {
         readableOrdinals = ordinals
         readableChapterCount = count
     }
-    private var source: BookSource?
+    private(set) var source: BookSource?
     private let localService: LocalBookService
     private let sanitizer = ContentSanitizer()
     private let contentCoordinator: ChapterContentCoordinator

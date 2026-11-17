@@ -102,6 +102,27 @@ final class ExploreCache {
         return outcome
     }
 
+    private var prewarmedSources: Set<String> = []
+    private var prewarmTask: Task<Void, Never>?
+
+    /// 打开 App 后在后台预先算好各书源的分区列表和前两个分区的第一页（存进内存与磁盘缓存），
+    /// 之后切到这些书源时直接显示，不用再等书源脚本和服务器（番茄等书源首次要十几秒）。
+    func prewarm(_ sources: [BookSource]) {
+        let pending = sources.filter { !prewarmedSources.contains(sourceKey($0)) }
+        guard !pending.isEmpty, prewarmTask == nil else { return }
+        prewarmTask = Task(priority: .utility) { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            for source in pending.prefix(16) {
+                guard let self, !Task.isCancelled else { break }
+                self.prewarmedSources.insert(self.sourceKey(source))
+                let report = await self.kinds(for: source)
+                let first = report.kinds.filter { $0.navigableURL != nil }.prefix(2)
+                for kind in first { _ = await self.firstPage(source: source, kind: kind) }
+            }
+            self?.prewarmTask = nil
+        }
+    }
+
     func clear(source: BookSource) {
         let prefix = sourceKey(source)
         skipDisk.insert(prefix)
@@ -495,6 +516,10 @@ struct ExploreView: View {
             }
         }
         .readingCanvas()
+        .readingPinnedTopBar(title: "发现") {
+            NavigationLink { SearchView() } label: { ReadingToolbarIcon(systemName: "magnifyingglass") }
+                .accessibilityLabel("搜索")
+        }
         .navigationBarHidden(true)
     }
 }

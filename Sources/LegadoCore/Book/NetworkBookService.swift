@@ -378,7 +378,11 @@ public struct NetworkBookService: Sendable {
             }
         }
         if content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !chapter.isVolume {
-            diagnostics.append(diagnostic(code: "content.empty", message: "正文规则未解析到内容", rule: contentRule))
+            // 书源自己报的原因（如「短剧播放地址获取失败：上游返回非 JSON」）一并显示，方便判断是书源服务器的问题。
+            let reason = (contentVariables[JavaScriptRuleEvaluator.toastKey] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            diagnostics.append(diagnostic(code: "content.empty",
+                                          message: reason.isEmpty ? "正文规则未解析到内容" : "正文规则未解析到内容：\(reason)",
+                                          rule: contentRule))
         }
         return .init(
             title: title,

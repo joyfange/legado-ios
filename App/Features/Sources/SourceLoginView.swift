@@ -462,6 +462,10 @@ struct SourceLoginFormView: View {
     @State private var isBuilding: Bool
     @State private var showsLog = false
     @State private var confirmsHeaderDeletion = false
+    /// 书源 toast / longToast：像安卓「阅读」一样浮在页面中间，几秒后自动消失，不再挤在页面顶部。
+    @State private var toast: String?
+    @State private var toastToken = UUID()
+    @State private var lastRunToasted = false
     private let dynamicScript: String?
 
     init(source: BookSource, rows: [SourceLoginUIRow]) {
@@ -480,6 +484,16 @@ struct SourceLoginFormView: View {
         }
         .disabled(isRunning)
         .overlay { if isRunning || isBuilding { ProgressView().controlSize(.large) } }
+        .overlay {
+            if let toast {
+                SourceLoginToast(text: toast)
+                    .onTapGesture { withAnimation(.easeOut(duration: 0.18)) { self.toast = nil } }
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.86), value: toast)
+        .onAppear { SourceWebLoginPresenter.install() }
+        .onDisappear { SourceWebLoginPresenter.uninstall() }
         .navigationTitle("登录 · \(source.bookSourceName)")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -500,7 +514,7 @@ struct SourceLoginFormView: View {
         .confirmationDialog("删除登录头？", isPresented: $confirmsHeaderDeletion, titleVisibility: .visible) {
             Button("删除", role: .destructive) {
                 BookSourceRuntimeStore.shared.put(sourceID: source.bookSourceUrl, key: "loginHeader", value: "")
-                status = "登录头已删除"
+                showToast("登录头已删除")
             }
         } message: {
             Text("删除后需要重新登录，书源的请求才会带上登录信息。")
@@ -523,7 +537,38 @@ struct SourceLoginFormView: View {
     private func showLoginHeader() {
         let header = BookSourceRuntimeStore.shared.get(sourceID: source.bookSourceUrl, key: "loginHeader")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        status = header.isEmpty ? "还没有登录头" : "登录头：\(header)"
+        showToast(header.isEmpty ? "还没有登录头" : "登录头：\(header)")
+    }
+
+    private func showToast(_ text: String) {
+        let token = UUID()
+        toastToken = token
+        toast = text
+        let seconds = min(max(2.2, Double(text.count) * 0.06), 6)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            if toastToken == token { toast = nil }
+        }
+    }
+
+    /// 书源登录脚本里打开的网页登录地址（如番茄的 fanqienovel.com），做成页面底部的「网页登录」按钮。
+    private var webLoginURL: String? {
+        let script = source.loginUrl ?? ""
+        let pattern = #"startBrowserAwait\(\s*['"](https?://[^'"]+)['"]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: script, range: NSRange(script.startIndex..., in: script)),
+              let range = Range(match.range(at: 1), in: script) else { return nil }
+        return String(script[range])
+    }
+
+    private var webLoginTitle: String {
+        let name = source.bookSourceName.prefix { $0.isLetter || $0.isNumber }
+        return (name.isEmpty ? "网页" : String(name)) + "登录"
+    }
+
+    private func openWebLogin(_ url: String) async {
+        let escaped = url.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'")
+        await run("java.startBrowserAwait('\(escaped)', '\(webLoginTitle)'); java.toast('网页登录状态已同步');")
     }
 
     /// 脚本生成的登录页：每次执行按钮后重新运行 loginUi，切换「主菜单 → 子页」。
@@ -573,6 +618,19 @@ struct SourceLoginFormView: View {
                     HStack(spacing: 10) {
                         ForEach(line) { row in gridCell(row) }
                     }
+                }
+                if let url = webLoginURL {
+                    Button {
+                        Task { await openWebLogin(url) }
+                    } label: {
+                        Label(webLoginTitle, systemImage: "globe")
+                            .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                            .foregroundStyle(ReadingTheme.onAccent)
+                            .frame(maxWidth: .infinity, minHeight: 46)
+                            .background(ReadingTheme.accentFill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 6)
                 }
             }
             .padding(.horizontal, 16)
@@ -887,6 +945,7 @@ struct SourceLoginFormView: View {
 
     /// 安卓的按钮脚本以 `result` 拿到表单里填的值（loginInfo）。
     private func run(_ action: String, quiet: Bool = false) async {
+        lastRunToasted = false
         persist()
         if !quiet { isRunning = true }
         defer { isRunning = false }
@@ -897,15 +956,17 @@ struct SourceLoginFormView: View {
             let result = try await JavaScriptRuleEvaluator(maximumScriptLength: 8 * 1_024 * 1_024)
                 .evaluateAsync(script: script, result: .object(info), executionContext: .init(baseURL: source.bookSourceUrl, source: source))
             if let toast = result.variables[JavaScriptRuleEvaluator.toastKey]?.trimmingCharacters(in: .whitespacesAndNewlines), !toast.isEmpty {
-                status = toast
+                showToast(toast)
+                lastRunToasted = true
             } else if !quiet {
                 let value = result.value.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 let readable = !value.isEmpty && value != "null" && value != "undefined" && value != "true"
                     && value != "false" && !value.hasPrefix("{") && !value.hasPrefix("[") && !value.hasPrefix("<")
-                status = readable ? String(value.prefix(200)) : "已执行"
+                if readable { showToast(String(value.prefix(200))); lastRunToasted = true }
             }
         } catch {
-            status = "执行失败：\(error.localizedDescription)"
+            showToast("执行失败：\(error.localizedDescription)")
+            lastRunToasted = true
         }
         await rebuildRows()
         await evaluateTitles()
@@ -914,7 +975,7 @@ struct SourceLoginFormView: View {
     private func saveAndLogin() async {
         persist()
         await run("typeof login === 'function' ? login() : ''")
-        if status == "已执行" { status = "已保存" }
+        if !lastRunToasted { showToast("已保存") }
     }
 }
 
@@ -932,5 +993,143 @@ private extension UIColor {
         getRed(&r, green: &g, blue: &b, alpha: &a)
         func c(_ v: CGFloat) -> Int { Int((min(max(v, 0), 1) * 255).rounded()) }
         return String(format: "#%02X%02X%02X", c(r), c(g), c(b))
+    }
+}
+
+/// 登录页的提示框：书源 toast 的内容（可多行），浮在页面中间。
+private struct SourceLoginToast: View {
+    let text: String
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            Text(text.trimmingCharacters(in: .whitespacesAndNewlines))
+                .font(AppFontStyle.subheadline.themed)
+                .foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 14)
+        }
+        .frame(maxWidth: 300)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxHeight: 420)
+        .background(Color.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .shadow(color: .black.opacity(0.2), radius: 16, y: 6)
+        .padding(32)
+        .accessibilityAddTraits(.isStaticText)
+    }
+}
+
+/// 把书源脚本的 `java.startBrowserAwait` 接到真正的网页：弹出网页，用户登录后点「完成」或下滑关闭，
+/// 把网页里的 Cookie 同步进 App，脚本再继续执行（比如读取 sessionid 完成登录）。
+enum SourceWebLoginPresenter {
+    @MainActor static func install() {
+        JavaScriptWebLoginBridge.presenter = { url, title, html, done in
+            Task { @MainActor in
+                guard let target = URL(string: url), let top = topController() else { done(); return }
+                let controller = SourceAwaitBrowserController(url: target, html: html) { done() }
+                controller.title = title.isEmpty ? "登录" : title
+                let navigation = UINavigationController(rootViewController: controller)
+                navigation.presentationController?.delegate = controller
+                top.present(navigation, animated: true)
+            }
+        }
+    }
+
+    @MainActor static func uninstall() {
+        JavaScriptWebLoginBridge.presenter = nil
+    }
+
+    @MainActor private static func topController() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+        var controller = scene?.windows.first(where: \.isKeyWindow)?.rootViewController
+            ?? scene?.windows.first?.rootViewController
+        while let presented = controller?.presentedViewController, !presented.isBeingDismissed {
+            controller = presented
+        }
+        return controller
+    }
+}
+
+private final class SourceAwaitBrowserController: UIViewController, WKNavigationDelegate, UIAdaptivePresentationControllerDelegate {
+    private let url: URL
+    private let html: String?
+    private let onClose: @MainActor @Sendable () -> Void
+    private var webView: WKWebView?
+    private var closed = false
+    private let progress = UIProgressView(progressViewStyle: .bar)
+    private var observation: NSKeyValueObservation?
+
+    init(url: URL, html: String?, onClose: @escaping @MainActor @Sendable () -> Void) {
+        self.url = url
+        self.html = html
+        self.onClose = onClose
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .systemBackground
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+        let webView = WKWebView(frame: view.bounds, configuration: configuration)
+        webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webView.navigationDelegate = self
+        webView.allowsBackForwardNavigationGestures = true
+        view.addSubview(webView)
+        self.webView = webView
+        progress.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(progress)
+        NSLayoutConstraint.activate([
+            progress.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            progress.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            progress.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor)
+        ])
+        observation = webView.observe(\.estimatedProgress, options: [.new]) { [weak self] web, _ in
+            let value = Float(web.estimatedProgress)
+            Task { @MainActor in
+                self?.progress.setProgress(value, animated: true)
+                self?.progress.isHidden = value >= 1
+            }
+        }
+        navigationItem.leftBarButtonItem = UIBarButtonItem(barButtonSystemItem: .close, target: self, action: #selector(finish))
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "完成", style: .done, target: self, action: #selector(finish))
+        if let html {
+            webView.loadHTMLString(html, baseURL: url)
+        } else {
+            webView.load(URLRequest(url: url))
+        }
+    }
+
+    @objc private func finish() {
+        guard !closed else { return }
+        closed = true
+        syncCookies { [weak self] in
+            guard let self else { return }
+            self.dismiss(animated: true)
+            self.onClose()
+        }
+    }
+
+    func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+        guard !closed else { return }
+        closed = true
+        syncCookies { [weak self] in self?.onClose() }
+    }
+
+    private func syncCookies(_ completion: @escaping @MainActor @Sendable () -> Void) {
+        WKWebsiteDataStore.default().httpCookieStore.getAllCookies { cookies in
+            for cookie in cookies {
+                HTTPCookieStorage.shared.setCookie(cookie)
+                let domain = cookie.domain.hasPrefix(".") ? String(cookie.domain.dropFirst()) : cookie.domain
+                guard !domain.isEmpty else { continue }
+                LegadoCookieStore.shared.setCookie("\(cookie.name)=\(cookie.value)", for: "https://\(domain)")
+            }
+            Task { @MainActor in completion() }
+        }
     }
 }

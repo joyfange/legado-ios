@@ -44,6 +44,13 @@ public struct JavaScriptRuleResult: Sendable {
 
 /// JavaScript's synchronous network bridges can block. Keep those calls off
 /// Swift's cooperative executor and off shared actors such as the cookie policy.
+/// 登录页打开的网页登录器：书源脚本调用 `java.startBrowserAwait(url, title)` 时，由界面弹出网页，
+/// 用户登录完关闭网页后调用 `done`（此时网页的 Cookie 已同步进 App），脚本继续执行。
+public enum JavaScriptWebLoginBridge {
+    public typealias Presenter = @Sendable (_ url: String, _ title: String, _ html: String?, _ done: @escaping @Sendable () -> Void) -> Void
+    nonisolated(unsafe) public static var presenter: Presenter?
+}
+
 enum RuleExecutionWorker {
     static func run<Value: Sendable>(_ operation: @escaping @Sendable () throws -> Value) async throws -> Value {
         try Task.checkCancellation()
@@ -793,6 +800,26 @@ public struct JavaScriptRuleEvaluator: Sendable {
         for name in ["startBrowser", "startBrowserAwait", "showBrowser", "showReadingBrowser", "startBrowserDp", "openUrl"] {
             java?.setObject(startBrowser, forKeyedSubscript: name as NSString)
         }
+        // 书源登录页里的 startBrowserAwait（如番茄「账号登录」）：真的打开网页，等用户登录完关掉网页再往下执行，
+        // 之后脚本读 cookie 拿登录凭据。只有登录页挂上了网页登录器时才这样做，其他场景仍只记下地址。
+        let startBrowserAwait: @convention(block) (Any?, Any?, Any?, Any?) -> String = { value, title, _, html in
+            let url = Self.stringify(value)
+            let second = Self.stringify(title)
+            let page = Self.stringify(html)
+            guard !Thread.isMainThread,
+                  let presenter = JavaScriptWebLoginBridge.presenter,
+                  url.lowercased().hasPrefix("http") else {
+                return startBrowser(value, title)
+            }
+            let semaphore = DispatchSemaphore(value: 0)
+            presenter(url, second == "undefined" || second == "null" ? "" : second,
+                      page.trimmingCharacters(in: .whitespacesAndNewlines).hasPrefix("<") ? page : nil) {
+                semaphore.signal()
+            }
+            _ = semaphore.wait(timeout: .now() + 900)
+            return ""
+        }
+        java?.setObject(startBrowserAwait, forKeyedSubscript: "startBrowserAwait" as NSString)
         // toast / longToast：记录最后一条，书源登录页等界面会显示给用户。
         let toast: @convention(block) (Any?) -> Any? = { value in
             let text = Self.stringify(value)

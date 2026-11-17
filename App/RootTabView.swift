@@ -108,6 +108,13 @@ struct RootTabView: View {
                 .tag(Tab.my)
         }
         .readingTabBarBackground()
+        .task(id: sourceLibrary.sources.count) {
+            // 后台预热发现页：各书源的分区和第一页提前算好，切书源时秒开。
+            let candidates = sourceLibrary.sources
+                .filter { $0.enabled && $0.enabledExplore && !($0.exploreUrl?.isEmpty ?? true) }
+                .sorted { $0.customOrder < $1.customOrder }
+            ExploreCache.shared.prewarm(candidates)
+        }
         .onChange(of: selection) { Self.lastSelection = $0 }
         .overlay { BookshelfFolderOverlay() }
         .background(CoverRegistrySync())
@@ -299,6 +306,13 @@ private struct BookshelfView: View {
             }
         }
         .readingCanvas()
+        .readingPinnedTopBar(title: selection.isActive ? "已选 \(selection.urls.count) 本" : selectedGroup.groupName) {
+            if selection.isActive {
+                selectionHeaderButtons
+            } else {
+                normalHeaderButtons
+            }
+        }
         .overlay(alignment: .trailing) {
             if showsSideSwitcher {
                 sideSwitcherBar
@@ -387,7 +401,18 @@ private struct BookshelfView: View {
         .sheet(item: $sheetRouter.sheet) { sheet in
             switch sheet {
             case .moveToShelf(let book):
-                BookGroupSelectView(book: book).environmentObject(library)
+                // 和详情页「加入书架」同一个面板：正在读 / 想读 + 自定义书架，可就地新建书架。
+                BookShelfPickerSheet(book: book, inLibrary: false, title: "移至书架") { groupIDs, reading in
+                    Task {
+                        guard let stored = library.books.first(where: { $0.bookUrl == book.bookUrl }) else { return }
+                        await library.setBook(stored, groupIDs: groupIDs)
+                        if let latest = library.books.first(where: { $0.bookUrl == book.bookUrl }) {
+                            await library.setReadingStatus(latest, reading: reading)
+                        }
+                    }
+                } onRemove: {}
+                .environmentObject(library)
+                .readingPresentationDetents([.medium, .large])
             case .editInfo(let book):
                 BookInfoEditView(book: book).environmentObject(library).environmentObject(sources)
             }
@@ -1012,14 +1037,9 @@ private struct BookshelfBookLink: View {
     @ViewBuilder private var label: some View {
         switch mode {
         case .grid(let width):
-            BookshelfGridItem(book: book, width: width, coverMenu: selection.isActive ? nil : AnyView(menuItems))
-                .overlay(alignment: .topTrailing) {
-                    if selection.isActive {
-                        BookshelfSelectionBadge(selected: selection.urls.contains(book.bookUrl))
-                            .frame(width: width, height: BookshelfGridMetrics.coverHeight(width: width), alignment: .bottomTrailing)
-                            .allowsHitTesting(false)
-                    }
-                }
+            // 选择圈直接画在封面上（每本书都有），不再靠外层叠一层按高度对齐的框。
+            BookshelfGridItem(book: book, width: width, coverMenu: selection.isActive ? nil : AnyView(menuItems),
+                              selected: selection.isActive ? selection.urls.contains(book.bookUrl) : nil)
         case .list, .compact:
             BookshelfRow(book: book, compact: mode.isCompact,
                          selected: selection.isActive ? selection.urls.contains(book.bookUrl) : nil)
@@ -1176,6 +1196,8 @@ private struct BookshelfGridItem: View {
     let width: CGFloat
     /// 长按菜单只挂在封面上：预览就是封面本身，菜单收起时书名和作者不会被系统隐藏再淡入（不再延迟出现）。
     var coverMenu: AnyView? = nil
+    /// 多选时的选中状态；nil 表示不在多选。
+    var selected: Bool? = nil
     @AppStorage(BookshelfShelfSettings.gridShowTitleKey) private var showsGridTitle = true
     @AppStorage(BookshelfShelfSettings.gridShowAuthorKey) private var showsGridAuthor = true
     @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
@@ -1206,6 +1228,14 @@ private struct BookshelfGridItem: View {
                     }
                 }
                 .modifier(BookshelfCoverMenuModifier(menu: coverMenu))
+                .overlay(alignment: .bottomTrailing) {
+                    if let selected {
+                        BookshelfSelectionBadge(selected: selected)
+                            .allowsHitTesting(false)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                }
+                .zIndex(1)
             if showsGridTitle || showsGridAuthor {
                 BookshelfGridLabel(title: showsGridTitle ? book.name : nil,
                                    subtitle: showsGridAuthor ? (book.author.isEmpty ? "未知作者" : book.author) : nil,
@@ -9343,16 +9373,18 @@ private struct BookshelfSelectionBadge: View {
 
     var body: some View {
         ZStack {
-            Circle().fill(selected ? ReadingTheme.accentFill : Color.black.opacity(0.25))
-            Circle().stroke(Color.white, lineWidth: 1.5)
+            // 未选中也要在浅色、深色封面上都看得清：深色半透明底 + 白圈 + 外圈细描边。
+            Circle().fill(selected ? ReadingTheme.accentFill : Color.black.opacity(0.42))
+            Circle().strokeBorder(Color.white, lineWidth: 2)
+            Circle().stroke(Color.black.opacity(0.18), lineWidth: 0.5)
             if selected {
                 Image(systemName: "checkmark")
                     .font(AppFontStyle.system(size: 11, weight: .bold).themed)
                     .foregroundStyle(ReadingTheme.onAccent)
             }
         }
-        .frame(width: 22, height: 22)
-        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+        .frame(width: 24, height: 24)
+        .shadow(color: .black.opacity(0.3), radius: 2.5, y: 1)
         .padding(6)
     }
 }
