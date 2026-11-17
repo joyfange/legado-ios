@@ -46,7 +46,8 @@ struct ResolvedAppPalette {
         cardBorder = colors.cardBorder ?? true
         usesOpaqueSurfaces = colors.hasCustomTextOrSelection
         if glass == true {
-            interfaceEffect = theme.customization?.effect == .transparent ? .transparent : .frosted
+            // 主题没指定时按玻璃；主题明确选了透明 / 不透明就照主题来（不透明＝实色卡片）。
+            interfaceEffect = theme.customization?.effect ?? .frosted
         } else {
             interfaceEffect = theme.customization?.effect
         }
