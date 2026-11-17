@@ -246,16 +246,28 @@ struct ReadingPinnedTopBar<Actions: View>: ViewModifier {
                     let barHeight: CGFloat = 50
                     let collapsed = headerBottom < top + 8
                     ZStack(alignment: .top) {
-                        ReadingCanvasBackground()
-                            .frame(height: top + (collapsed ? barHeight : 0) + 22)
-                            .mask(
-                                LinearGradient(stops: [
-                                    .init(color: .black, location: 0),
-                                    .init(color: .black, location: (top + (collapsed ? barHeight : 0)) / (top + (collapsed ? barHeight : 0) + 22)),
-                                    .init(color: .clear, location: 1)
-                                ], startPoint: .top, endPoint: .bottom)
-                            )
-                            .allowsHitTesting(false)
+                        // 和系统导航栏一样用毛玻璃铺底：内容滑到下面时被模糊，不再把整页背景
+                        // 截一段贴上去（那样渐变 / 图片背景会和下面的内容颜色对不上，看起来像混搭）。
+                        let height = top + (collapsed ? barHeight : 0)
+                        ZStack {
+                            Rectangle().fill(.ultraThinMaterial)
+                            ReadingTheme.canvas.opacity(collapsed ? 0.45 : 0.35)
+                        }
+                        .frame(height: height + 14)
+                        .mask(
+                            LinearGradient(stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black, location: height / (height + 14)),
+                                .init(color: .clear, location: 1)
+                            ], startPoint: .top, endPoint: .bottom)
+                        )
+                        .overlay(alignment: .top) {
+                            Rectangle()
+                                .fill(ReadingTheme.separator.opacity(collapsed ? 0.5 : 0))
+                                .frame(height: 0.5)
+                                .offset(y: height)
+                        }
+                        .allowsHitTesting(false)
                         HStack(spacing: 10) {
                             Text(title)
                                 .font(AppFontStyle.headline.weight(.semibold).themed)

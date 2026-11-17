@@ -508,7 +508,7 @@ private struct BookshelfView: View {
                 .foregroundStyle(sortAscending ? Color.secondary.opacity(0.55) : Color.primary)
         }
         .frame(width: 38, height: 30)
-        .appGlass(in: Capsule(), tint: ReadingTheme.surface, tintOpacity: 0.35)
+        .appGlass(in: Capsule(), tint: ReadingTheme.surface, tintOpacity: 0.6)
         .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
         .contentShape(Capsule())
@@ -540,7 +540,7 @@ private struct BookshelfView: View {
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(shelfBarExpanded ? 180 : 0))
                 .frame(width: 30, height: 30)
-                .appGlass(in: Circle(), tint: ReadingTheme.surface, tintOpacity: 0.35)
+                .appGlass(in: Circle(), tint: ReadingTheme.surface, tintOpacity: 0.6)
                 .overlay(Circle().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
                 .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
                 .contentShape(Circle())
@@ -607,7 +607,7 @@ private struct BookshelfView: View {
         }
         .padding(10)
         .frame(maxWidth: 320, alignment: .leading)
-        .appGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
+        .appGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
         .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
     }
@@ -685,7 +685,7 @@ private struct BookshelfView: View {
             }
             .padding(20)
             .frame(maxWidth: 300)
-            .appGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
+            .appGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
             .shadow(color: .black.opacity(0.18), radius: 20, y: 8)
         }
     }
@@ -1324,7 +1324,7 @@ private struct BookshelfFolderRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, compact ? 9 : 10)
         .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
-        .appGlass(in: RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
+        .appGlass(in: RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
         .contentShape(RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("文件夹「\(folder.name)」，\(books.count) 本书")
@@ -1944,7 +1944,7 @@ private struct BookshelfRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, compact ? 9 : 10)
         .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
-        .appGlass(in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.35)
+        .appGlass(in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
         .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityValue(book.lastCheckCount > 0 ? "有 \(book.lastCheckCount) 章更新" : "")

@@ -362,7 +362,7 @@ struct ThemeListRowBackground: View {
                         // 不再用 70% 以上的实色盖住模糊（那样看起来只是灰色块）。
                         ZStack {
                             Rectangle().fill(.ultraThinMaterial)
-                            palette.surface.opacity(0.10 + 0.25 * palette.surfaceOpacity)
+                            palette.surface.opacity(0.30 + 0.30 * palette.surfaceOpacity)
                             LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.05 : 0.16), .clear],
                                            startPoint: .top, endPoint: .bottom)
                         }

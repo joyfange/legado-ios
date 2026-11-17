@@ -67,7 +67,8 @@ struct ResolvedAppPalette {
         // Native material already provides adaptive contrast. A photographic
         // scrim (72–100% opaque) here hides the very blur it is meant to protect.
         let tint = theme.customization?.surfaceOpacity ?? 0.85
-        frostedSurfaceOpacity = 0.18 * (tint.isFinite ? min(max(tint, 0), 1) : 0.85)
+        // 玻璃卡片要在同色系背景上看得出来：主题卡片色铺到约 40%，再配上描边。
+        frostedSurfaceOpacity = 0.12 + 0.36 * (tint.isFinite ? min(max(tint, 0), 1) : 0.85)
         let glow = theme.customization?.glowIntensity ?? 0.5
         glowIntensity = glow.isFinite ? min(max(glow, 0), 1) : 0.5
         let opacity = theme.customization?.surfaceOpacity ?? 0.85
@@ -318,11 +319,12 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                     if glassEnabled, !reduceTransparency,
                        (isCard ? (palette.interfaceEffect ?? .frosted) : .frosted) == .frosted {
                         // 玻璃边缘：上亮下暗的渐变描边，比单色细线更像真实玻璃。
+                        // 先画一圈主题边框色（保证浅色主题上也看得到轮廓），再叠上亮下暗的玻璃高光。
+                        shape.strokeBorder(palette.border.opacity(scheme == .dark ? 0.9 : 0.75), lineWidth: 0.75)
                         shape.strokeBorder(LinearGradient(
-                            colors: [Color.white.opacity(scheme == .dark ? 0.28 : 0.75),
-                                     palette.border.opacity(0.5),
-                                     Color.white.opacity(scheme == .dark ? 0.08 : 0.3)],
-                            startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 0.8)
+                            colors: [Color.white.opacity(scheme == .dark ? 0.25 : 0.7),
+                                     Color.white.opacity(0)],
+                            startPoint: .top, endPoint: .center), lineWidth: 1)
                     } else {
                         shape.strokeBorder(palette.border, lineWidth: 0.5)
                     }
