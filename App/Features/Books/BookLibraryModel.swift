@@ -41,6 +41,8 @@ final class BookLibraryModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var updateMessage: String?
     @Published private(set) var isCheckingUpdates = false
+    /// 章节已全部缓存（下载完）的书，供「已下载」书架使用。
+    @Published private(set) var downloadedURLs: Set<String> = []
 
     private let repository: any BookRepository
     private let localDirectory: URL
@@ -59,6 +61,8 @@ final class BookLibraryModel: ObservableObject {
     private var groupSaveGeneration = 0
     private var persistedGroups: [BookGroup] = []
     private var deletingGroupIDs: Set<Int64> = []
+    /// 只有正式书架（live）补默认智能书架；测试和演示用的模型保持原来的分组。
+    private var seedsSmartShelves = false
 
     init(
         repository: any BookRepository,
@@ -84,17 +88,19 @@ final class BookLibraryModel: ObservableObject {
             .appendingPathComponent("Legado", isDirectory: true)
         let legacyBooks = base.appendingPathComponent("books.json")
         guard let database = try? LegadoDatabase(url: base.appendingPathComponent("legado.sqlite3")) else {
-            return BookLibraryModel(
+            let model = BookLibraryModel(
                 repository: FileBookRepository(fileURL: legacyBooks),
                 localDirectory: base.appendingPathComponent("LocalBooks", isDirectory: true),
                 groupRepository: FileBookGroupRepository(fileURL: base.appendingPathComponent("book-groups.json"))
             )
+            model.seedsSmartShelves = true
+            return model
         }
         let chapters = SQLiteBookChapterRepository(
             database: database,
             legacyDirectory: base.appendingPathComponent("Chapters", isDirectory: true)
         )
-        return BookLibraryModel(
+        let model = BookLibraryModel(
             repository: SQLiteBookRepository(database: database, legacyFileURL: legacyBooks),
             localDirectory: base.appendingPathComponent("LocalBooks", isDirectory: true),
             updateCoordinator: BookUpdateCoordinator(repository: chapters),
@@ -104,6 +110,8 @@ final class BookLibraryModel: ObservableObject {
                 legacyFileURL: base.appendingPathComponent("book-groups.json")
             )
         )
+        model.seedsSmartShelves = true
+        return model
     }
 
     static func demo(books: [Book]) -> BookLibraryModel {
@@ -122,6 +130,8 @@ final class BookLibraryModel: ObservableObject {
             if groups.isEmpty {
                 await persistGroups([.init(groupId: BookGroup.idAll, groupName: "全部", order: 0)])
             }
+            await seedSmartShelves()
+            await refreshDownloaded()
             for book in books where book.origin == "local" && book.coverUrl?.isEmpty != false {
                 guard !Task.isCancelled, let url = URL(string: book.bookUrl),
                       url.isFileURL, url.pathExtension.lowercased() == "epub" else { continue }
@@ -283,6 +293,70 @@ final class BookLibraryModel: ObservableObject {
         if await persist(updated) { await cleanupRemovedBooks(removed) }
     }
 
+    /// 默认书架：正在读 / 想读 / 已读完 / 全部 / 已下载 / 本地。只在第一次补齐一次，
+    /// 之后用户隐藏、改名、排序都保留（智能书架不能删除，只能隐藏）。
+    private func seedSmartShelves() async {
+        let key = "bookshelf.smartShelvesSeeded.v1"
+        guard seedsSmartShelves, !progressDefaults.bool(forKey: key) else { return }
+        let defaults: [(Int64, String)] = [
+            (BookGroup.idReading, "正在读"), (BookGroup.idWantToRead, "想读"), (BookGroup.idFinished, "已读完"),
+            (BookGroup.idAll, "全部"), (BookGroup.idDownloaded, "已下载"), (BookGroup.idLocal, "本地")
+        ]
+        var updated = groups
+        for (order, item) in defaults.enumerated() {
+            if let index = updated.firstIndex(where: { $0.groupId == item.0 }) {
+                updated[index].order = order
+                updated[index].show = true
+            } else {
+                updated.append(.init(groupId: item.0, groupName: item.1, order: order))
+            }
+        }
+        // 自定义书架排在默认书架后面，保持原来的先后。
+        let custom = updated.filter { !defaults.map(\.0).contains($0.groupId) }.sorted { $0.order < $1.order }
+        for (offset, group) in custom.enumerated() {
+            if let index = updated.firstIndex(where: { $0.groupId == group.groupId }) {
+                updated[index].order = defaults.count + offset
+            }
+        }
+        if await persistGroups(updated) { progressDefaults.set(true, forKey: key) }
+    }
+
+    /// 读完：有目录、读到了最后一章。
+    static func isFinished(_ book: Book) -> Bool {
+        let started = book.durChapterIndex > 0 || book.durChapterPos > 0 || book.durChapterTime > 0
+        return started && book.totalChapterNum > 0 && book.durChapterIndex >= book.totalChapterNum - 1
+    }
+
+    static func isReading(_ book: Book) -> Bool {
+        let started = book.durChapterIndex > 0 || book.durChapterPos > 0 || book.durChapterTime > 0
+        return started && !isFinished(book)
+    }
+
+    static func isWantToRead(_ book: Book) -> Bool {
+        !(book.durChapterIndex > 0 || book.durChapterPos > 0 || book.durChapterTime > 0)
+    }
+
+    /// 重新统计已下载的书（网络书的章节缓存数达到目录章数）。
+    func refreshDownloaded() async {
+        let candidates = books.filter { $0.origin != "local" && $0.totalChapterNum > 0 }
+        let urls = candidates.map(\.bookUrl)
+        let counts = (try? await ChapterContentCache.live().cachedChapterCounts(bookURLs: urls)) ?? [:]
+        let done = Set(candidates.filter { counts[$0.bookUrl, default: 0] >= $0.totalChapterNum }.map(\.bookUrl))
+        if done != downloadedURLs { downloadedURLs = done }
+    }
+
+    /// 把书标记为「正在读」：没开始读的书记一个阅读时间，就会从「想读」移到「正在读」。
+    func markReading(_ book: Book) async {
+        guard let index = books.firstIndex(where: { $0.bookUrl == book.bookUrl }) else { return }
+        var updated = books
+        if Self.isWantToRead(updated[index]) {
+            updated[index].durChapterTime = Int64(Date().timeIntervalSince1970 * 1_000)
+        }
+        await persist(updated)
+    }
+
+    func count(in group: BookGroup) -> Int { books(in: group).count }
+
     var visibleGroups: [BookGroup] {
         groups.filter(\.show).sorted {
             $0.order == $1.order ? $0.groupId < $1.groupId : $0.order < $1.order
@@ -295,6 +369,10 @@ final class BookLibraryModel: ObservableObject {
         case BookGroup.idLocal: return books.filter { $0.origin == "local" }
         case BookGroup.idNetNone: return books.filter { $0.origin != "local" && $0.group == 0 }
         case BookGroup.idLocalNone: return books.filter { $0.origin == "local" && $0.group == 0 }
+        case BookGroup.idReading: return books.filter(Self.isReading)
+        case BookGroup.idWantToRead: return books.filter(Self.isWantToRead)
+        case BookGroup.idFinished: return books.filter(Self.isFinished)
+        case BookGroup.idDownloaded: return books.filter { downloadedURLs.contains($0.bookUrl) }
         default:
             return group.groupId > 0
                 ? books.filter { ($0.group & group.groupId) != 0 }

@@ -176,8 +176,14 @@ private struct BookshelfView: View {
     @ObservedObject private var selection = BookshelfSelection.shared
     @State private var showsLocalImporter = false
     @State private var pendingLocalFiles: [LocalBookImportFile] = []
-    @State private var selectedGroupID = BookGroup.idAll
+    @State private var selectedGroupID = BookGroup.idReading
     @State private var showsGroupManager = false
+    @State private var shelfBarExpanded = false
+    @State private var shelfSearch = ""
+    @State private var showsNewShelf = false
+    @State private var newShelfName = ""
+    @AppStorage("bookshelfSortMode") private var sortMode = 0
+    @AppStorage("bookshelfSortAscending") private var sortAscending = false
     @State private var showsOrnamentManager = false
     @State private var showsShelfSettings = false
     @AppStorage("bookshelfLayout") private var bookshelfLayout = "grid3"
@@ -194,7 +200,28 @@ private struct BookshelfView: View {
             ?? BookGroup(groupId: BookGroup.idAll, groupName: "全部")
     }
 
-    private var displayedBooks: [Book] { library.books(in: selectedGroup) }
+    private var displayedBooks: [Book] { sorted(library.books(in: selectedGroup)) }
+
+    /// 书架排序：最近阅读 / 最近更新 / 书名 / 加入顺序；可正序倒序。
+    private func sorted(_ books: [Book]) -> [Book] {
+        let indexed = Array(books.enumerated())
+        let result: [(offset: Int, element: Book)]
+        switch sortMode {
+        case 1:
+            result = indexed.sorted { max($0.element.latestChapterTime, $0.element.lastCheckTime) > max($1.element.latestChapterTime, $1.element.lastCheckTime) }
+        case 2:
+            result = indexed.sorted { $0.element.name.localizedStandardCompare($1.element.name) == .orderedAscending }
+        case 3:
+            result = indexed
+        default:
+            result = indexed.sorted { $0.element.durChapterTime == $1.element.durChapterTime
+                ? $0.offset < $1.offset : $0.element.durChapterTime > $1.element.durChapterTime }
+        }
+        let ordered = result.map(\.element)
+        return sortAscending ? ordered.reversed() : ordered
+    }
+
+    private static let sortTitles = ["最近阅读", "最近更新", "书名", "加入顺序"]
 
     private var recentBook: Book? {
         displayedBooks.filter(BookReadingPresentation.hasStarted)
@@ -217,15 +244,25 @@ private struct BookshelfView: View {
                         normalHeaderButtons
                     }
                 }
-                if library.visibleGroups.count > 1 {
-                    bookshelfGroups.padding(.bottom, 24)
-                }
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !library.hasLoaded {
                         // 书架还没读完：保持空白，不闪「空书架」占位。
                         Color.clear.frame(height: 1)
-                    } else if displayedBooks.isEmpty {
+                    } else if library.books.isEmpty {
                         EmptyBookshelfHero { showsLocalImporter = true }
+                    } else if displayedBooks.isEmpty {
+                        // 当前书架是空的（比如「已读完」还没有书）：书架切换条照样显示，才能切到别的书架。
+                        bookshelfSummary
+                        VStack(spacing: 8) {
+                            Image(systemName: "books.vertical")
+                                .font(AppFontStyle.system(size: 30).themed)
+                                .foregroundStyle(.tertiary)
+                            Text("「\(selectedGroup.groupName)」里还没有书")
+                                .font(AppFontStyle.subheadline.themed)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 60)
                     } else {
                         if let book = recentBook {
                             VStack(alignment: .leading, spacing: 12) {
@@ -273,6 +310,11 @@ private struct BookshelfView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        .overlay {
+            if showsNewShelf {
+                newShelfDialog.transition(.opacity)
+            }
+        }
         .readingTabBarHidden(selection.isActive)
         .onChange(of: selectedGroupID) { _ in selection.urls = [] }
         .onDisappear { if selection.isActive { selection.end() } }
@@ -283,7 +325,12 @@ private struct BookshelfView: View {
                 folderStore.prune(existing: Set(books.map(\.bookUrl)))
             }
         }
-        .onAppear { Task { await migrateLegacyFolders() } }
+        .onAppear {
+            Task {
+                await migrateLegacyFolders()
+                await library.refreshDownloaded()
+            }
+        }
         .onChange(of: library.hasLoaded) { loaded in
             if loaded { Task { await migrateLegacyFolders() } }
         }
@@ -353,19 +400,231 @@ private struct BookshelfView: View {
         }
     }
 
+    /// 书架切换条（替代原来的「全部书籍」标题）：排序、正倒序、书架胶囊（带本数）、展开面板。
     private var bookshelfSummary: some View {
-        HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(selectedGroupID == BookGroup.idAll ? "全部书籍" : selectedGroup.groupName)
-                    .font(AppFontStyle.title3.bold().themed)
-                    .accessibilityAddTraits(.isHeader)
-                Text("\(displayedBooks.count)本")
-                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            shelfBarRow
+            if shelfBarExpanded {
+                shelfPanel
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
-            Spacer()
-            layoutSwitcher
+            HStack(alignment: .center) {
+                Text("\(displayedBooks.count) 本")
+                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
+                Spacer()
+                layoutSwitcher
+            }
         }
-        .padding(.bottom, 20)
+        .padding(.bottom, 18)
+    }
+
+    private var shelfBarRow: some View {
+        HStack(spacing: 6) {
+            sortMenu
+            orderButton
+            shelfChipScroller
+            expandButton
+        }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(Self.sortTitles.indices, id: \.self) { index in
+                Button {
+                    sortMode = index
+                } label: {
+                    if sortMode == index { Label(Self.sortTitles[index], systemImage: "checkmark") }
+                    else { Text(Self.sortTitles[index]) }
+                }
+            }
+        } label: {
+            shelfBarIcon("line.3.horizontal.decrease")
+        }
+        .accessibilityLabel("排序方式：\(Self.sortTitles[min(max(sortMode, 0), 3)])")
+    }
+
+    private var orderButton: some View {
+        Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            sortAscending.toggle()
+        } label: {
+            shelfBarIcon(sortAscending ? "arrow.up" : "arrow.down")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(sortAscending ? "正序" : "倒序")
+    }
+
+    private var shelfChipScroller: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(library.visibleGroups) { group in
+                        shelfChip(group).id(group.id)
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            .onAppear { proxy.scrollTo(selectedGroup.id, anchor: .center) }
+            .onChange(of: selectedGroupID) { id in
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+
+    private var expandButton: some View {
+        Button {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) { shelfBarExpanded.toggle() }
+        } label: {
+            shelfBarIcon(shelfBarExpanded ? "chevron.up" : "chevron.down")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(shelfBarExpanded ? "收起书架列表" : "展开书架列表")
+    }
+
+    private func shelfBarIcon(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(AppFontStyle.system(size: 13, weight: .medium).themed)
+            .foregroundStyle(.secondary)
+            .frame(width: 30, height: 32)
+            .contentShape(Rectangle())
+    }
+
+    private func shelfChip(_ group: BookGroup) -> some View {
+        let isSelected = selectedGroup.id == group.id
+        return Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            withAnimation(.easeOut(duration: 0.2)) { selectedGroupID = group.id }
+        } label: {
+            HStack(spacing: 4) {
+                Text(group.groupName)
+                    .font(AppFontStyle.system(size: 13, weight: isSelected ? .semibold : .regular).themed)
+                Text("\(library.count(in: group))")
+                    .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                    .opacity(0.7)
+            }
+            .lineLimit(1)
+            .foregroundStyle(isSelected ? ReadingTheme.onAccent : Color.secondary)
+            .padding(.horizontal, 12)
+            .frame(height: 30)
+            .background(isSelected ? ReadingTheme.accentFill : Color.secondary.opacity(0.08), in: Capsule())
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(group.groupName)，\(library.count(in: group)) 本")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// 展开后的书架面板：搜索书架、新建书架、全部书架胶囊（自动换行）。
+    private var shelfPanel: some View {
+        let keyword = shelfSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        let groups = keyword.isEmpty ? library.visibleGroups
+            : library.visibleGroups.filter { $0.groupName.localizedCaseInsensitiveContains(keyword) }
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "magnifyingglass")
+                        .font(AppFontStyle.system(size: 13).themed)
+                        .foregroundStyle(.secondary)
+                    TextField("搜索书架", text: $shelfSearch)
+                        .font(AppFontStyle.system(size: 14).themed)
+                        .submitLabel(.search)
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 38)
+                .background(Color.secondary.opacity(0.08), in: Capsule())
+                Button {
+                    newShelfName = ""
+                    withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = true }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(AppFontStyle.system(size: 15, weight: .semibold).themed)
+                        .foregroundStyle(ReadingTheme.onAccent)
+                        .frame(width: 34, height: 34)
+                        .background(ReadingTheme.accentFill, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("新建书架")
+            }
+            if groups.isEmpty {
+                Text("没有匹配的书架")
+                    .font(AppFontStyle.caption.themed)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 86), spacing: 8, alignment: .leading)],
+                          alignment: .leading, spacing: 8) {
+                    ForEach(groups) { group in
+                        shelfChip(group)
+                    }
+                }
+            }
+            Button {
+                showsGroupManager = true
+            } label: {
+                Label("管理书架", systemImage: "slider.horizontal.3")
+                    .font(AppFontStyle.caption.weight(.medium).themed)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 10, y: 4)
+    }
+
+    /// 新建书架小弹窗（iOS 15 也能用，不依赖 alert 里的输入框）。
+    private var newShelfDialog: some View {
+        ZStack {
+            Color.black.opacity(0.32)
+                .ignoresSafeArea()
+                .onTapGesture { withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = false } }
+            VStack(alignment: .leading, spacing: 16) {
+                Text("新建书架")
+                    .font(AppFontStyle.system(size: 17, weight: .semibold).themed)
+                TextField("输入书架名称", text: $newShelfName)
+                    .font(AppFontStyle.system(size: 15).themed)
+                    .padding(.horizontal, 14)
+                    .frame(height: 44)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button("取消") {
+                        withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = false }
+                    }
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 56, minHeight: 36)
+                    Button { createShelf() } label: {
+                        Text("创建").font(AppFontStyle.system(size: 15, weight: .semibold).themed)
+                    }
+                        .foregroundStyle(ReadingTheme.accent)
+                        .frame(minWidth: 56, minHeight: 36)
+                        .disabled(newShelfName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+                .font(AppFontStyle.system(size: 15).themed)
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+            .frame(maxWidth: 300)
+            .background(ReadingTheme.surface, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .shadow(color: .black.opacity(0.18), radius: 20, y: 8)
+        }
+    }
+
+    private func createShelf() {
+        let name = newShelfName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = false }
+        Task {
+            if let existing = library.groups.first(where: { $0.groupName == name }) {
+                if !existing.show { await library.setGroupVisible(existing, visible: true) }
+                selectedGroupID = existing.groupId
+                return
+            }
+            await library.createGroup(name: name)
+            if let created = library.groups.first(where: { $0.groupName == name }) {
+                selectedGroupID = created.groupId
+            }
+        }
     }
 
     /// 书架页视图快捷切换（与「书架设置 → 书架页视图」同一个设置）。
@@ -801,22 +1060,26 @@ enum BookshelfGridMetrics {
 
 /// 网格封面下方的书名与作者。
 private struct BookshelfGridLabel: View {
-    let title: String
-    let subtitle: String
+    let title: String?
+    let subtitle: String?
     let width: CGFloat
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title)
-                .font(AppFontStyle.system(size: width < 90 ? 12 : 13, weight: .medium).themed)
-                .foregroundStyle(.primary)
-                .lineLimit(2)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(subtitle)
-                .font(AppFontStyle.system(size: width < 90 ? 10 : 11).themed)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            if let title {
+                Text(title)
+                    .font(AppFontStyle.system(size: width < 90 ? 12 : 13, weight: .medium).themed)
+                    .foregroundStyle(.primary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let subtitle {
+                Text(subtitle)
+                    .font(AppFontStyle.system(size: width < 90 ? 10 : 11).themed)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
         }
         .frame(width: width, alignment: .leading)
     }
@@ -828,29 +1091,17 @@ private struct BookshelfGridItem: View {
     let width: CGFloat
     /// 长按菜单只挂在封面上：预览就是封面本身，菜单收起时书名和作者不会被系统隐藏再淡入（不再延迟出现）。
     var coverMenu: AnyView? = nil
-    @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
+    @AppStorage(BookshelfShelfSettings.gridShowTitleKey) private var showsGridTitle = true
+    @AppStorage(BookshelfShelfSettings.gridShowAuthorKey) private var showsGridAuthor = true
     @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
+    @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
 
     var body: some View {
         let height = BookshelfGridMetrics.coverHeight(width: width)
-        let progress = BookReadingPresentation.progress(book)
         VStack(alignment: .leading, spacing: 0) {
+            // 封面底部不再画阅读进度条（它的半透明底轨就是每本书底下那条透明长条）。
             BookshelfCover(book: book, width: width, height: height)
-                .overlay(alignment: .bottom) {
-                    if progress > 0 {
-                        GeometryReader { proxy in
-                            ZStack(alignment: .leading) {
-                                Rectangle().fill(Color.white.opacity(0.35))
-                                Rectangle().fill(ReadingTheme.accent)
-                                    .frame(width: proxy.size.width * min(max(progress, 0), 1))
-                            }
-                        }
-                        .frame(height: 2.5)
-                        .clipShape(RoundedRectangle(cornerRadius: 1, style: .continuous))
-                        .allowsHitTesting(false)
-                    }
-                }
                 .overlay(alignment: .topTrailing) {
                     if book.lastCheckCount > 0 {
                         BookshelfUpdateBadge(count: book.lastCheckCount, compact: width < 76)
@@ -860,7 +1111,7 @@ private struct BookshelfGridItem: View {
                 .frame(width: width, height: height)
                 // 书底贴着台面的接触阴影：让书「压」在层板上。
                 .background(alignment: .bottom) {
-                    if !hideShelfBase {
+                    if !hideShelfBase, coverStyle == "solid" {
                         Ellipse()
                             .fill(Color.black.opacity(0.32))
                             .frame(width: width * 0.96, height: 7)
@@ -870,9 +1121,9 @@ private struct BookshelfGridItem: View {
                     }
                 }
                 .modifier(BookshelfCoverMenuModifier(menu: coverMenu))
-            if !hideTitles {
-                BookshelfGridLabel(title: book.name,
-                                   subtitle: book.author.isEmpty ? "未知作者" : book.author,
+            if showsGridTitle || showsGridAuthor {
+                BookshelfGridLabel(title: showsGridTitle ? book.name : nil,
+                                   subtitle: showsGridAuthor ? (book.author.isEmpty ? "未知作者" : book.author) : nil,
                                    width: width)
                     .padding(.top, BookshelfGridMetrics.labelGap(hideShelfBase: hideShelfBase, boardStyle: boardStyle))
             }
@@ -887,7 +1138,7 @@ private struct BookshelfFolderGridTile: View {
     let folder: BookshelfFolder
     let books: [Book]
     let width: CGFloat
-    @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
+    @AppStorage(BookshelfShelfSettings.gridShowTitleKey) private var showsGridTitle = true
     @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
 
@@ -904,7 +1155,7 @@ private struct BookshelfFolderGridTile: View {
                         .padding(5)
                 }
                 .frame(width: width, height: height)
-            if !hideTitles {
+            if showsGridTitle {
                 BookshelfGridLabel(title: folder.name, subtitle: "\(books.count) 本", width: width)
                     .padding(.top, BookshelfGridMetrics.labelGap(hideShelfBase: hideShelfBase, boardStyle: boardStyle))
             }
@@ -3161,6 +3412,9 @@ enum BookshelfShelfPose: Int, CaseIterable {
 /// 书架设置里的选项（保存在 UserDefaults）。
 enum BookshelfShelfSettings {
     static let hideTitlesKey = "shelfHideTitles"
+    /// 网格封面下方是否显示书名、作者（与仿真书架的「隐藏书名」分开）。
+    static let gridShowTitleKey = "bookshelfGridShowTitle"
+    static let gridShowAuthorKey = "bookshelfGridShowAuthor"
     static let bookWidthKey = "shelfBookWidth"
     static let bookHeightKey = "shelfBookHeight"
     static let coverSpineKey = "shelfCoverSpine"
@@ -4000,14 +4254,14 @@ struct BookshelfSolidSpineShade: View {
     var body: some View {
         HStack(spacing: 0) {
             LinearGradient(stops: [
-                .init(color: .black.opacity(0.30), location: 0),
-                .init(color: .white.opacity(0.22), location: 0.35),
-                .init(color: .black.opacity(0.25), location: 0.7),
-                .init(color: .white.opacity(0.10), location: 1)
+                .init(color: .black.opacity(0.45), location: 0),
+                .init(color: .white.opacity(0.30), location: 0.35),
+                .init(color: .black.opacity(0.38), location: 0.72),
+                .init(color: .white.opacity(0.14), location: 1)
             ], startPoint: .leading, endPoint: .trailing)
-            .frame(width: max(width * 0.075, 3))
-            LinearGradient(colors: [.black.opacity(0.12), .clear], startPoint: .leading, endPoint: .trailing)
-                .frame(width: max(width * 0.06, 2))
+            .frame(width: max(width * 0.09, 3.5))
+            LinearGradient(colors: [.black.opacity(0.20), .clear], startPoint: .leading, endPoint: .trailing)
+                .frame(width: max(width * 0.08, 2.5))
         }
         .allowsHitTesting(false)
     }
@@ -4020,16 +4274,54 @@ struct BookshelfCover: View {
     let height: CGFloat
     @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
 
+    /// 网格与列表统一的封面圆角：随封面宽度变化（约 8.5%），5…10pt。
+    static func cornerRadius(width: CGFloat) -> CGFloat { min(max((width * 0.085).rounded(), 5), 10) }
+
     var body: some View {
-        let solid = coverStyle == "solid"
-        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: width, height: height)
-            .overlay(alignment: .leading) {
-                if solid {
+        let radius = Self.cornerRadius(width: width)
+        if coverStyle == "solid" {
+            solidCover(radius: radius)
+        } else {
+            // 平面：没有书脊阴影、没有投影，就是一张圆角封面。
+            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
+                             width: width, height: height, cornerRadius: radius, spineShade: false)
+        }
+    }
+
+    /// 实体：右侧和底边露出一叠书页，左侧书脊凹槽 + 高光，封面整体有向右下的投影，像一本立着的精装书。
+    private func solidCover(radius: CGFloat) -> some View {
+        let page = max(width * 0.035, 2)
+        return ZStack(alignment: .topLeading) {
+            // 书页（在封面后面，往右下错开一点）
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(LinearGradient(colors: [Color(white: 0.97), Color(white: 0.86)],
+                                     startPoint: .leading, endPoint: .trailing))
+                .overlay(
+                    VStack(spacing: 1.2) {
+                        ForEach(0..<Int(max(height / 3, 1)), id: \.self) { _ in
+                            Rectangle().fill(Color.black.opacity(0.05)).frame(height: 0.5)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                )
+                .frame(width: width, height: height)
+                .offset(x: page, y: page * 0.6)
+                .shadow(color: .black.opacity(0.28), radius: 4, x: 2.5, y: 3.5)
+            BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
+                             width: width, height: height, cornerRadius: radius, spineShade: false)
+                .overlay(alignment: .leading) {
                     BookshelfSolidSpineShade(width: width)
-                        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
                 }
-            }
-            .shadow(color: .black.opacity(solid ? 0.22 : 0.08), radius: solid ? 3 : 1.5, x: solid ? 2 : 0, y: solid ? 3 : 1)
+                .overlay(
+                    // 封面表面的一点光泽
+                    LinearGradient(colors: [Color.white.opacity(0.16), .clear, Color.black.opacity(0.10)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+                        .allowsHitTesting(false)
+                )
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
     }
 }
 
@@ -7043,6 +7335,8 @@ struct BookshelfShelfSettingsSheet: View {
     @AppStorage(BookshelfShelfSettings.pulledTitleKey) private var showsPulledTitle = true
     @AppStorage(BookshelfShelfSettings.variedSizeKey) private var variedSizes = true
     @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
+    @AppStorage(BookshelfShelfSettings.gridShowTitleKey) private var showsGridTitle = true
+    @AppStorage(BookshelfShelfSettings.gridShowAuthorKey) private var showsGridAuthor = true
     @State private var showsDress = false
     @State private var dressTab = 0
 
@@ -7091,13 +7385,13 @@ struct BookshelfShelfSettingsSheet: View {
                         .padding(3)
                         .background(Color.secondary.opacity(0.1), in: Capsule())
                     }
-                    toggleRow(title: "隐藏书名/作者", detail: "网格与仿真视图隐藏封面下方的书名作者（纯净封面与书脊）", isOn: $hideTitles)
+                    toggleRow(title: "显示书名", detail: "网格封面下方显示书名", isOn: $showsGridTitle)
+                    toggleRow(title: "显示作者", detail: "网格封面下方显示作者；书名和作者都关掉就是纯封面墙", isOn: $showsGridAuthor)
                     toggleRow(title: "隐藏书架底座", detail: "网格视图不画搁板（含立体板）；板位留白一并收掉", isOn: $hideShelfBase)
                     coverStyleRow
                     boardStyleRow
                 } else if isList {
                     coverStyleRow
-                    boardStyleRow
                 } else {
                     toggleRow(title: "隐藏书名/作者", detail: "网格与仿真视图隐藏书名作者与遮罩蒙版（纯净书脊）", isOn: $hideTitles)
                     VStack(alignment: .leading, spacing: 10) {
@@ -7144,7 +7438,7 @@ struct BookshelfShelfSettingsSheet: View {
     }
 
     private var coverStyleRow: some View {
-        row(title: "封面样式", detail: "仅书架页封面：实体在封面左侧呈现书脊凹陷质感") {
+        row(title: "封面样式", detail: "平面：纯封面，无阴影；实体：书脊凹槽、右侧露出书页并带投影") {
             HStack(spacing: 8) {
                 BookshelfCoverStyleSample(solid: coverStyle == "solid")
                 HStack(spacing: 4) {

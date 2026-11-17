@@ -7,6 +7,7 @@ struct BookDetailView: View {
     @StateObject private var model: BookDetailViewModel
     @State private var showsSourceSwitch = false
     @State private var showsRemoveConfirmation = false
+    @State private var showsShelfPicker = false
     @State private var showsTableOfContents = false
     @State private var showsReader = false
     @State private var showsCompactBar = false
@@ -73,6 +74,21 @@ struct BookDetailView: View {
         }
         .sheet(isPresented: $showsTableOfContents) {
             BookTableOfContentsView(book: model.book, chapters: model.chapters, source: model.source)
+        }
+        .sheet(isPresented: $showsShelfPicker) {
+            BookShelfPickerSheet(book: model.book, inLibrary: library.contains(model.book)) { groupIDs, reading in
+                Task {
+                    await saveCurrentBook()
+                    if let stored = library.books.first(where: { $0.bookUrl == model.book.bookUrl }) {
+                        await library.setBook(stored, groupIDs: groupIDs)
+                        if reading { await library.markReading(stored) }
+                    }
+                }
+            } onRemove: {
+                showsRemoveConfirmation = true
+            }
+            .environmentObject(library)
+            .readingPresentationDetents([.medium, .large])
         }
         .confirmationDialog("从书架移除《\(model.book.name)》？", isPresented: $showsRemoveConfirmation) {
             Button("移出书架", role: .destructive) {
@@ -384,11 +400,7 @@ struct BookDetailView: View {
         .disabled(model.chapters.isEmpty)
         .opacity(model.chapters.isEmpty ? 0.45 : 1)
         Button {
-            if library.contains(model.book) {
-                showsRemoveConfirmation = true
-            } else {
-                Task { await saveCurrentBook() }
-            }
+            showsShelfPicker = true
         } label: {
             HStack(spacing: 4) {
                 Image(systemName: library.contains(model.book) ? "checkmark" : "plus")
@@ -778,6 +790,173 @@ private struct BookTableOfContentsView: View {
                 .accessibilityLabel(hasProgress ? "定位到当前阅读章节" : "目录章节数")
             }
             }
+        }
+    }
+}
+
+
+/// 加入书架面板：正在读 / 想读（二选一，阅读状态书架），再加上自定义书架（可多选）；
+/// 可以就地新建书架，点「确定」一起保存。
+struct BookShelfPickerSheet: View {
+    @EnvironmentObject private var library: BookLibraryModel
+    @Environment(\.dismiss) private var dismiss
+    let book: Book
+    let inLibrary: Bool
+    let onConfirm: (Set<Int64>, Bool) -> Void
+    let onRemove: () -> Void
+
+    @State private var reading = false
+    @State private var custom: Set<Int64> = []
+    @State private var creating = false
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    private var customGroups: [BookGroup] {
+        library.groups.filter { $0.groupId > 0 }
+            .sorted { $0.order == $1.order ? $0.groupId < $1.groupId : $0.order < $1.order }
+    }
+
+    private func count(_ id: Int64) -> Int {
+        guard let group = library.groups.first(where: { $0.groupId == id }) else {
+            return library.books(in: BookGroup(groupId: id, groupName: "")).count
+        }
+        return library.books(in: group).count
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("加入书架")
+                .font(AppFontStyle.title3.bold().themed)
+                .padding(.top, 24)
+                .padding(.bottom, 14)
+            if creating {
+                HStack(spacing: 10) {
+                    TextField("输入书架名称", text: $draft)
+                        .font(AppFontStyle.system(size: 15).themed)
+                        .focused($focused)
+                        .submitLabel(.done)
+                        .onSubmit(create)
+                        .padding(.horizontal, 12)
+                        .frame(height: 42)
+                        .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.secondary.opacity(0.45), lineWidth: 1))
+                    Button("创建", action: create)
+                        .font(AppFontStyle.system(size: 15, weight: .medium).themed)
+                        .foregroundStyle(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.secondary : Color.primary)
+                        .frame(minWidth: 48, minHeight: 42)
+                        .buttonStyle(.plain)
+                }
+                .padding(.bottom, 8)
+            }
+            ScrollView {
+                VStack(spacing: 0) {
+                    row(title: "正在读", count: count(BookGroup.idReading), selected: reading) { reading = true }
+                    row(title: "想读", count: count(BookGroup.idWantToRead), selected: !reading) { reading = false }
+                    ForEach(customGroups) { group in
+                        row(title: group.groupName, count: library.books(in: group).count,
+                            selected: custom.contains(group.groupId)) {
+                            if custom.contains(group.groupId) { custom.remove(group.groupId) } else { custom.insert(group.groupId) }
+                        }
+                    }
+                    if !creating {
+                        Button {
+                            draft = ""
+                            withAnimation(.easeOut(duration: 0.2)) { creating = true }
+                            focused = true
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: "plus")
+                                    .font(AppFontStyle.system(size: 14, weight: .medium).themed)
+                                    .frame(width: 22)
+                                Text("新建书架")
+                                    .font(AppFontStyle.system(size: 15).themed)
+                                Spacer()
+                            }
+                            .foregroundStyle(.secondary)
+                            .frame(minHeight: 46)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            if inLibrary {
+                Button {
+                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { onRemove() }
+                } label: {
+                    Text("移出书架")
+                        .font(AppFontStyle.system(size: 14).themed)
+                        .foregroundStyle(ReadingTheme.coral)
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                }
+                .buttonStyle(.plain)
+            }
+            Button {
+                onConfirm(custom, reading)
+                dismiss()
+            } label: {
+                Text("确定")
+                    .font(AppFontStyle.system(size: 16, weight: .semibold).themed)
+                    .foregroundStyle(ReadingTheme.onAccent)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .background(ReadingTheme.accentFill, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 8)
+            .padding(.bottom, 16)
+        }
+        .padding(.horizontal, 20)
+        .onAppear {
+            let stored = library.books.first(where: { $0.bookUrl == book.bookUrl }) ?? book
+            reading = !BookLibraryModel.isWantToRead(stored)
+            custom = Set(customGroups.map(\.groupId).filter { stored.group & $0 != 0 })
+        }
+        .readingSheetCanvas()
+        .readingPresentationDragIndicator()
+    }
+
+    private func row(title: String, count: Int, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            UISelectionFeedbackGenerator().selectionChanged()
+            action()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                    .font(AppFontStyle.system(size: 19).themed)
+                    .foregroundStyle(selected ? ReadingTheme.accent : Color.secondary.opacity(0.6))
+                Image(systemName: selected ? "star.fill" : "star")
+                    .font(AppFontStyle.system(size: 13).themed)
+                    .foregroundStyle(selected ? ReadingTheme.accent : Color.secondary)
+                Text(title)
+                    .font(AppFontStyle.system(size: 15).themed)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer()
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .frame(minHeight: 46)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func create() {
+        let name = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        Task {
+            if library.groups.first(where: { $0.groupName == name }) == nil {
+                await library.createGroup(name: name)
+            }
+            if let group = library.groups.first(where: { $0.groupName == name }) {
+                if group.groupId > 0 { custom.insert(group.groupId) }
+                if !group.show { await library.setGroupVisible(group, visible: true) }
+            }
+            draft = ""
+            withAnimation(.easeOut(duration: 0.2)) { creating = false }
         }
     }
 }

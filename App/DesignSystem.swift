@@ -271,6 +271,9 @@ struct BookCoverArtwork: View {
     var remoteURL: String?
     var width: CGFloat = 68
     var height: CGFloat = 96
+    var cornerRadius: CGFloat = 4
+    /// 左侧那道深色书脊阴影；书架「平面」封面关掉它，才是真正的平面。
+    var spineShade = true
 
     private var coverStyle: Int {
         switch title {
@@ -303,12 +306,14 @@ struct BookCoverArtwork: View {
             }
         }
         .frame(width: width, height: height)
-        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
         .overlay(alignment: .leading) {
-            Rectangle().fill(.black.opacity(0.15)).frame(width: max(2, width * 0.035))
+            if spineShade {
+                Rectangle().fill(.black.opacity(0.15)).frame(width: max(2, width * 0.035))
+            }
         }
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 4, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(.black.opacity(0.08), lineWidth: 0.5)
         }
         .accessibilityHidden(true)

@@ -178,6 +178,11 @@ public struct BookGroup: Codable, Hashable, Identifiable, Sendable {
     public static let idLocalNone: Int64 = -5
     public static let idVideo: Int64 = -6
     public static let idError: Int64 = -11
+    /// 智能书架：按阅读状态自动归类，不需要手动放书。
+    public static let idReading: Int64 = -21
+    public static let idWantToRead: Int64 = -22
+    public static let idFinished: Int64 = -23
+    public static let idDownloaded: Int64 = -24
 
     public var groupId: Int64
     public var groupName: String

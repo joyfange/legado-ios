@@ -144,6 +144,19 @@ public actor ChapterContentCache {
         }
     }
 
+    /// 每本书已缓存的章节数（只看文件名，不读内容）。
+    public func cachedChapterCounts(bookURLs: [String]) throws -> [String: Int] {
+        guard FileManager.default.fileExists(atPath: directory.path), !bookURLs.isEmpty else { return [:] }
+        var byDigest: [String: String] = [:]
+        for url in bookURLs { byDigest[digest(url)] = url }
+        var counts: [String: Int] = [:]
+        for name in try FileManager.default.contentsOfDirectory(atPath: directory.path) where name.hasSuffix(".json") {
+            guard let dash = name.firstIndex(of: "-") else { continue }
+            if let url = byDigest[String(name[..<dash])] { counts[url, default: 0] += 1 }
+        }
+        return counts
+    }
+
     private func cacheFiles() throws -> [(url: URL, size: Int, modified: Date)] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(
