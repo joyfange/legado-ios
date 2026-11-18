@@ -183,6 +183,7 @@ enum ReadingTheme {
     static var separator: Color { AppThemeRuntime.color { $0.separator } }
     static var onAccent: Color { AppThemeRuntime.color { $0.onAccent } }
     static var secondaryInk: Color { AppThemeRuntime.color { $0.secondary } }
+    static var tertiaryInk: Color { AppThemeRuntime.color { $0.tertiary } }
 }
 
 struct ReadingPageHeader<Actions: View>: View {
@@ -368,6 +369,20 @@ struct BookCoverArtwork: View {
     var cornerRadius: CGFloat = 4
     /// 左侧那道深色书脊阴影；书架「平面」封面关掉它，才是真正的平面。
     var spineShade = true
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.themePageScope) private var pageScope
+
+    /// 外观主题的默认封面（当前明暗）；「标签页启用默认封面」关闭时只在书架页使用。
+    private var themeDefaultCover: String? {
+        guard let custom = AppThemeRuntime.current.customization else { return nil }
+        guard custom.defaultCoverInTabs || pageScope == .shelf || pageScope == .global else { return nil }
+        return custom.defaultCover(dark: colorScheme == .dark)
+    }
+
+    /// 「封面圆角」：0 圆角的调用方（实体书封面自己画形状）保持不变。
+    private var effectiveRadius: CGFloat {
+        cornerRadius <= 0 ? 0 : AppThemeRuntime.coverCornerRadius(width: width, legacy: cornerRadius)
+    }
 
     private var coverStyle: Int {
         switch title {
@@ -388,8 +403,7 @@ struct BookCoverArtwork: View {
 
     var body: some View {
         Group {
-            if AppThemeRuntime.current.customization?.forceDefaultCover == true,
-               AppThemeRuntime.current.customization?.defaultCoverImage != nil {
+            if AppThemeRuntime.current.customization?.forceDefaultCover == true, themeDefaultCover != nil {
                 // 外观主题「强制使用默认封面」：所有书都用主题的默认封面。
                 placeholder
             } else if let remoteURL, remoteURL.hasPrefix("data:image/"),
@@ -409,9 +423,9 @@ struct BookCoverArtwork: View {
                 Rectangle().fill(.black.opacity(0.15)).frame(width: max(2, width * 0.035))
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: effectiveRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: effectiveRadius, style: .continuous)
                 .strokeBorder(.black.opacity(0.08), lineWidth: 0.5)
         }
         .accessibilityHidden(true)
@@ -425,7 +439,7 @@ struct BookCoverArtwork: View {
 
     @ViewBuilder
     private var themePlaceholder: some View {
-        if let custom = AppThemeRuntime.current.customization?.defaultCoverImage,
+        if let custom = themeDefaultCover,
            let image = ThemeAssetStore.shared.image(for: custom) {
             // 主题「默认封面」：只在书籍没有可用封面时显示。
             ZStack(alignment: .bottomLeading) {

@@ -75,26 +75,38 @@ struct LibraryDock: View {
     }
 }
 
-/// 标签图标：自定义图片（资产 ID）、旧版保存的 SF Symbol，或默认图标。
+/// 标签图标：按状态（未选中 / 选中 / 深色…）的自定义图片、旧版自定义图标，或默认图标。
 struct ThemeTabIconImage: View {
     let tab: LibraryTab
     let theme: AppTheme
     var size: CGFloat = 22
+    var state: ThemeTabIconState = .normal
+
+    /// 当前状态应使用的图片标识或 SF Symbol 名。
+    static func customValue(tab: LibraryTab, theme: AppTheme, state: ThemeTabIconState) -> String? {
+        if let id = theme.customization?.tabIcon(tab.key, state: state), ThemeAssetStore.isValidID(id) { return id }
+        return theme.customization?.tabIcons?[tab.key]
+    }
 
     /// 系统底栏只认 Image / Text，这里直接给出 Image。
-    static func image(tab: LibraryTab, theme: AppTheme, size: CGFloat) -> Image {
-        let value = theme.customization?.tabIcons?[tab.key]
+    static func image(tab: LibraryTab, theme: AppTheme, size: CGFloat, state: ThemeTabIconState = .normal) -> Image {
+        let value = customValue(tab: tab, theme: theme, state: state)
         if let value, ThemeAssetStore.isValidID(value), let image = ThemeTabIconCache.image(for: value, size: size) {
             return Image(uiImage: image)
         }
-        if let value, !ThemeAssetStore.isValidID(value), ThemeAssetStore.shared.symbolImage(for: value) != nil {
-            return Image(systemName: value)
+        let symbol = value.flatMap { !ThemeAssetStore.isValidID($0) && ThemeAssetStore.shared.symbolImage(for: $0) != nil ? $0 : nil }
+            ?? tab.symbol
+        // 「图标大小」不是默认的 28 pt 时，按大小绘制系统图标（仍随选中颜色着色）。
+        if let custom = theme.customization, abs(custom.tabIconSize - 28) > 0.5,
+           let symbolImage = UIImage(systemName: symbol,
+                                     withConfiguration: UIImage.SymbolConfiguration(pointSize: size * 0.68, weight: .regular)) {
+            return Image(uiImage: symbolImage.withRenderingMode(.alwaysTemplate))
         }
-        return Image(systemName: tab.symbol)
+        return Image(systemName: symbol)
     }
 
     var body: some View {
-        let value = theme.customization?.tabIcons?[tab.key]
+        let value = Self.customValue(tab: tab, theme: theme, state: state)
         if let value, ThemeAssetStore.isValidID(value), let image = ThemeTabIconCache.image(for: value, size: size) {
             Image(uiImage: image).resizable().scaledToFit().frame(width: size, height: size)
         } else if let value, !ThemeAssetStore.isValidID(value), ThemeAssetStore.shared.symbolImage(for: value) != nil {
@@ -203,6 +215,7 @@ enum AppThemeRuntime {
         var secondary: String
         var separator: String
         var selection: String
+        var tertiary: String
     }
 
     nonisolated(unsafe) private static var theme: AppTheme = .monochrome
@@ -261,7 +274,8 @@ enum AppThemeRuntime {
             primary: ink.primary,
             secondary: ink.secondary,
             separator: colors.border ?? AppThemeColor.mix(colors.surface, ink.primary, fraction: 0.12),
-            selection: ink.selection
+            selection: ink.selection,
+            tertiary: colors.resolvedTertiary(style: theme.backgroundStyle)
         )
         cached[dark] = value
         return value
@@ -278,6 +292,13 @@ enum AppThemeRuntime {
         }
     }
 
+    /// 「默认封面 → 封面圆角」：主题自定义过时按设置，按封面宽度等比（以 60pt 宽为基准）；否则沿用原圆角。
+    static func coverCornerRadius(width: CGFloat, legacy: CGFloat) -> CGFloat {
+        guard let custom = current.customization else { return legacy }
+        let value = CGFloat(min(max(custom.coverCornerRadius, 0), 30))
+        return min(value * min(max(width / 60, 0.5), 1.6), width / 2)
+    }
+
     /// 是否需要在页面底层绘制主题画布（渐变或背景图片）。
     static var drawsCanvas: Bool {
         let value = current
@@ -288,10 +309,12 @@ enum AppThemeRuntime {
 /// 页面底色：纯色主题直接用底色；渐变或背景图片的主题画出完整画布。
 struct ReadingCanvasBackground: View {
     @Environment(\.appTheme) private var theme
+    @Environment(\.themePageScope) private var scope
     var grouped = false
     var body: some View {
         ZStack {
-            if theme.backgroundStyle == .gradient || theme.customization?.hasPageBackground == true {
+            if theme.backgroundStyle == .gradient || theme.customization?.hasPageBackground(scope: scope) == true
+                || theme.customization?.pageBackground(scope) != nil {
                 AppThemeCanvas()
             } else if grouped {
                 ReadingTheme.groupedCanvas
@@ -309,13 +332,14 @@ struct ReadingCanvasBackground: View {
 struct ThemeAmbientGlow: View {
     @ThemePalette private var palette
     @Environment(\.appTheme) private var theme
+    @Environment(\.themePageScope) private var scope
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
 
     var body: some View {
         if palette.interfaceEffect == .frosted, glassEnabled, !reduceTransparency,
-           theme.customization?.hasPageBackground != true, palette.glowIntensity > 0 {
+           theme.customization?.hasPageBackground(scope: scope) != true, palette.glowIntensity > 0 {
             GeometryReader { geometry in
                 let size = max(geometry.size.width, geometry.size.height)
                 let strength = (scheme == .dark ? 0.30 : 0.22) * palette.glowIntensity

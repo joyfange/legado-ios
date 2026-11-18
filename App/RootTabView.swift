@@ -8,6 +8,7 @@ struct RootTabView: View {
     /// 切换或编辑主题后根视图会整体刷新，记住当前标签，刷新后停留在原处。
     @MainActor private static var lastSelection: Tab?
     @Environment(\.appTheme) private var appTheme
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selection: Tab
     @State private var showsDemoReader = false
     @State private var didOpenDemoReader = false
@@ -76,15 +77,18 @@ struct RootTabView: View {
                     showsDemoReader = ProcessInfo.processInfo.arguments.contains("-uiDemoReader")
                 }
             }
-                .tabItem { themedTabItem(.shelf) }
+                .environment(\.themePageScope, .shelf)
+                .tabItem { themedTabItem(.shelf, selected: selection == .bookshelf) }
                 .tag(Tab.bookshelf)
 
             ReadingNavigationStack { ExploreView() }
-                .tabItem { themedTabItem(.discover) }
+                .environment(\.themePageScope, .discover)
+                .tabItem { themedTabItem(.discover, selected: selection == .explore) }
                 .tag(Tab.explore)
 
             ReadingNavigationStack { ReadingStatisticsView() }
-                .tabItem { themedTabItem(.statistics) }
+                .environment(\.themePageScope, .statistics)
+                .tabItem { themedTabItem(.statistics, selected: selection == .statistics) }
                 .tag(Tab.statistics)
 
             ReadingNavigationStack {
@@ -104,10 +108,11 @@ struct RootTabView: View {
                     SettingsView()
                 }
             }
-                .tabItem { themedTabItem(.profile) }
+                .environment(\.themePageScope, .settings)
+                .tabItem { themedTabItem(.profile, selected: selection == .my) }
                 .tag(Tab.my)
         }
-        .readingTabBarBackground()
+        .readingTabBarBackground(classic: appTheme.customization?.classicTabBar ?? true)
         .task(id: sourceLibrary.sources.count) {
             // 后台预热发现页：各书源的分区和第一页提前算好，切书源时秒开。
             let candidates = sourceLibrary.sources
@@ -146,13 +151,16 @@ struct RootTabView: View {
 
     /// 底栏标签：跟随主题的「Tab栏」显示方式（图标和文字 / 仅图标 / 仅文字）与自定义图标。
     @ViewBuilder
-    private func themedTabItem(_ tab: LibraryTab) -> some View {
+    private func themedTabItem(_ tab: LibraryTab, selected: Bool) -> some View {
+        // 「Tab 栏」：图标大小与未选中 / 选中 / 深色未选中 / 深色选中四种状态的自定义图片。
+        let size = CGFloat(appTheme.customization?.tabIconSize ?? 25)
+        let state = ThemeTabIconState.state(selected: selected, dark: colorScheme == .dark)
         switch appTheme.customization?.tabStyle ?? .iconsAndText {
         case .iconsAndText:
-            ThemeTabIconImage.image(tab: tab, theme: appTheme, size: 25)
+            ThemeTabIconImage.image(tab: tab, theme: appTheme, size: size, state: state)
             Text(tab.title)
         case .icons:
-            ThemeTabIconImage.image(tab: tab, theme: appTheme, size: 25)
+            ThemeTabIconImage.image(tab: tab, theme: appTheme, size: size, state: state)
         case .text:
             Text(tab.title)
         }
@@ -208,7 +216,17 @@ private struct BookshelfView: View {
             ?? BookGroup(groupId: BookGroup.idAll, groupName: "全部")
     }
 
-    private var displayedBooks: [Book] { sorted(library.books(in: selectedGroup)) }
+    /// 书架顶部样式里的搜索框：按书名或作者筛选当前书架。
+    @State private var bookFilter = ""
+
+    private var shelfTopStyle: ThemeShelfTopStyle { (appTheme.customization ?? ThemeCustomization()).shelfTopStyle }
+
+    private var displayedBooks: [Book] {
+        let books = sorted(library.books(in: selectedGroup))
+        let keyword = bookFilter.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard shelfTopStyle.showsSearch, !keyword.isEmpty else { return books }
+        return books.filter { $0.name.localizedCaseInsensitiveContains(keyword) || $0.author.localizedCaseInsensitiveContains(keyword) }
+    }
 
     /// 书架排序：最近阅读 / 最近更新 / 书名 / 加入顺序；可正序倒序。
     private func sorted(_ books: [Book]) -> [Book] {
@@ -269,7 +287,8 @@ private struct BookshelfView: View {
                             Image(systemName: "books.vertical")
                                 .font(AppFontStyle.system(size: 30).themed)
                                 .foregroundStyle(.tertiary)
-                            Text("「\(selectedGroup.groupName)」里还没有书")
+                            Text(bookFilter.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                 ? "「\(selectedGroup.groupName)」里还没有书" : "没有找到相关书籍")
                                 .font(AppFontStyle.subheadline.themed)
                                 .foregroundStyle(.secondary)
                         }
@@ -433,11 +452,40 @@ private struct BookshelfView: View {
     }
 
     /// 书架切换条（替代原来的「全部书籍」标题）：排序、正倒序、书架胶囊（带本数）、展开面板。
+    /// 外观主题「书架 → 顶部样式」：分组与搜索 / 仅分组 / 仅搜索 / 仅标题。
     private var bookshelfSummary: some View {
-        // 只留书架分组胶囊；排序、视图、展开面板都并进右上角「⋯」菜单，顶部更整洁。
-        shelfChipScroller
-            .padding(.bottom, 16)
-            .zIndex(2)
+        let style = shelfTopStyle
+        return VStack(alignment: .leading, spacing: 10) {
+            if style.showsSearch { shelfBookSearchField }
+            if style.showsGroups { shelfChipScroller }
+        }
+        .padding(.bottom, style == .plain ? 4 : 16)
+        .zIndex(2)
+    }
+
+    private var shelfBookSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(AppFontStyle.system(size: 15).themed)
+                .foregroundStyle(ReadingTheme.tertiaryInk)
+                .accessibilityHidden(true)
+            TextField("搜索书名或作者", text: $bookFilter)
+                .font(AppFontStyle.system(size: 15).themed)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+                .submitLabel(.search)
+                .accessibilityIdentifier("bookshelf.filter")
+            if !bookFilter.isEmpty {
+                Button { bookFilter = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(ReadingTheme.tertiaryInk)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("清除")
+            }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 40)
+        .background { ThemeSurface(shape: Capsule(), isCard: true) }
     }
 
     private var shelfBarRow: some View {
@@ -1889,6 +1937,22 @@ private struct BookshelfRow: View {
     var compact = false
     /// 多选时是否已选中；nil 表示不在多选。
     var selected: Bool? = nil
+    @Environment(\.appTheme) private var appTheme
+
+    /// 外观主题「书架 → 显示标签」：来源（在线 / 本地）与分类。
+    private var tags: [String] {
+        let custom = appTheme.customization ?? ThemeCustomization()
+        guard custom.shelfShowTags else { return [] }
+        var result = [book.origin == "local" ? "本地" : "在线"]
+        let separators: Set<Character> = [",", "，", "/", " ", "　", "|", "、", ";", "；"]
+        for word in (book.kind ?? "").split(whereSeparator: { separators.contains($0) }) {
+            let value = String(word).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !value.isEmpty, value.count <= 6, !result.contains(value) else { continue }
+            result.append(value)
+            if result.count >= 3 { break }
+        }
+        return result
+    }
 
     private var started: Bool {
         book.durChapterIndex > 0 || book.durChapterPos > 0 || book.durChapterTime > 0
@@ -1939,10 +2003,15 @@ private struct BookshelfRow: View {
                 }
             VStack(alignment: .leading, spacing: compact ? 4 : 7) {
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(book.name)
-                        .font(AppFontStyle.headline.themed)
-                        .foregroundStyle(.primary)
-                        .lineLimit(1)
+                    HStack(spacing: 5) {
+                        Text(book.name)
+                            .font(AppFontStyle.headline.themed)
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        ForEach(Array(tags.enumerated()), id: \.offset) { index, tag in
+                            BookshelfTagChip(text: tag, index: index)
+                        }
+                    }
                     detail(statusLine)
                 }
                 if let currentLine { detail(currentLine) }
@@ -1969,6 +2038,38 @@ private struct BookshelfRow: View {
             .foregroundStyle(.secondary)
             .lineLimit(1)
             .truncationMode(.tail)
+    }
+}
+
+/// 书架列表里的小标签；颜色跟随外观主题「书架 → 文字颜色」（彩色 / 文字色 / 自定义）。
+struct BookshelfTagChip: View {
+    let text: String
+    var index = 0
+    @Environment(\.appTheme) private var appTheme
+
+    private static let colorful: [Color] = [
+        Color(red: 0.0, green: 0.48, blue: 1.0), Color(red: 0.2, green: 0.7, blue: 0.35),
+        Color(red: 1.0, green: 0.58, blue: 0.0), Color(red: 0.69, green: 0.32, blue: 0.87)
+    ]
+
+    private var color: Color {
+        let custom = appTheme.customization ?? ThemeCustomization()
+        switch custom.shelfTagColor {
+        case .colorful: return Self.colorful[index % Self.colorful.count]
+        case .text: return ReadingTheme.secondaryInk
+        case .custom: return AppThemeColor.color(custom.shelfTagCustomColor)
+        }
+    }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .fixedSize()
     }
 }
 
@@ -2047,6 +2148,11 @@ struct SearchView: View {
     }
 
     var body: some View {
+        searchContent.environment(\.themePageScope, .search)
+    }
+
+    @ViewBuilder
+    private var searchContent: some View {
         ScrollView {
             LazyVStack(spacing: 12) {
                 header
@@ -4417,7 +4523,9 @@ struct BookshelfCover: View {
     @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
 
     /// 网格与列表统一的封面圆角：随封面宽度变化（约 8.5%），5…10pt。
-    static func cornerRadius(width: CGFloat) -> CGFloat { min(max((width * 0.085).rounded(), 5), 10) }
+    static func cornerRadius(width: CGFloat) -> CGFloat {
+        AppThemeRuntime.coverCornerRadius(width: width, legacy: min(max((width * 0.085).rounded(), 5), 10))
+    }
 
     var body: some View {
         let radius = Self.cornerRadius(width: width)

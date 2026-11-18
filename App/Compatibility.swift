@@ -410,14 +410,23 @@ extension View {
     }
 
     @ViewBuilder
-    func readingTabBarBackground() -> some View {
+    func readingTabBarBackground(classic: Bool = true) -> some View {
+        // 外观主题「经典底栏」：实色整条底栏；关闭时用系统半透明（iOS 26 为悬浮玻璃）底栏。
         if #available(iOS 16.0, *), !ReadingCompatibility.usesLegacyUI {
-            toolbarBackground(ReadingTheme.canvas, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
+            if classic {
+                toolbarBackground(ReadingTheme.canvas, for: .tabBar).toolbarBackground(.visible, for: .tabBar)
+            } else {
+                toolbarBackground(.automatic, for: .tabBar)
+            }
         } else {
             background(ReadingUIKitConfiguration { controller in
                 let appearance = UITabBarAppearance()
-                appearance.configureWithOpaqueBackground()
-                appearance.backgroundColor = UIColor(ReadingTheme.canvas)
+                if classic {
+                    appearance.configureWithOpaqueBackground()
+                    appearance.backgroundColor = UIColor(ReadingTheme.canvas)
+                } else {
+                    appearance.configureWithDefaultBackground()
+                }
                 controller.tabBarController?.tabBar.standardAppearance = appearance
                 controller.tabBarController?.tabBar.scrollEdgeAppearance = appearance
             })

@@ -141,6 +141,12 @@ final class ThemeAssetStore: @unchecked Sendable {
         return image
     }
 
+    /// 导出主题时把图片原文件一起打包。
+    func data(for id: String) -> Data? {
+        guard let url = ownedURL(id), isRegularOwnedFile(url) else { return nil }
+        return try? Self.readBounded(url)
+    }
+
     /// Idempotent; refuses paths, directories and symbolic links, even in tests.
     func remove(_ id: String) {
         guard let url = ownedURL(id), isRegularOwnedFile(url) else { return }

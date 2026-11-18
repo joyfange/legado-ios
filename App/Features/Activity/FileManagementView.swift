@@ -205,6 +205,11 @@ struct FileManagementView: View {
     }
 
     var body: some View {
+        fileContent.environment(\.themePageScope, .files)
+    }
+
+    @ViewBuilder
+    private var fileContent: some View {
         deletionView
         .onChange(of: model.partialExport?.id) { value in confirmsPartialExport = value != nil }
         .onChange(of: confirmsPartialExport) { isPresented in

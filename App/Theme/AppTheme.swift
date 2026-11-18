@@ -22,10 +22,19 @@ struct AppThemeSwatches: Codable, Equatable {
     // Shape is independently configurable in each light/dark variant too.
     var cardRadius: Double? = nil
     var cardBorder: Bool? = nil
+    /// 「颜色与字体」里的弱文字（占位、说明等最淡的一级文字）。
+    var tertiaryText: String? = nil
 
     var allColors: [String] {
         [background, backgroundEnd, surface, accent]
-            + [primaryText, secondaryText, border, selection].compactMap { $0 }
+            + [primaryText, secondaryText, border, selection, tertiaryText].compactMap { $0 }
+    }
+
+    /// 弱文字：未设置时由次级文字向背景再淡一些。
+    func resolvedTertiary(style: AppThemeBackgroundStyle) -> String {
+        if let tertiaryText { return tertiaryText }
+        let ink = resolvedInk(style: style)
+        return AppThemeColor.mix(ink.secondary, background, fraction: 0.35)
     }
 
     var hasCustomTextOrSelection: Bool {

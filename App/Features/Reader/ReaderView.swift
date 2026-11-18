@@ -11,6 +11,7 @@ struct ReaderView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.appTheme) private var appTheme
     @EnvironmentObject private var library: BookLibraryModel
     @EnvironmentObject private var sourceLibrary: SourceLibraryModel
     @EnvironmentObject private var replaceRules: ReplaceRuleLibraryModel
@@ -296,8 +297,14 @@ struct ReaderView: View {
         }
         .overlay(alignment: .bottom) {
             if showsReaderMenu {
-                readerBottomChrome
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                Group {
+                    if appTheme.customization?.readerBarStyle == .chat {
+                        readerChatBottomChrome
+                    } else {
+                        readerBottomChrome
+                    }
+                }
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .dismissesSheetOnOutsideTap(Binding(
@@ -310,8 +317,8 @@ struct ReaderView: View {
                 }
             }
         ))
-        .sheet(isPresented: $showsTableOfContents) { tableOfContents }
-        .sheet(isPresented: $showsBookmarks) { bookmarksSheet }
+        .sheet(isPresented: $showsTableOfContents) { tableOfContents.readerPanelAppearance(followsPanelTheme) }
+        .sheet(isPresented: $showsBookmarks) { bookmarksSheet.readerPanelAppearance(followsPanelTheme) }
         .sheet(item: $reviewPage) { page in
             ReaderReviewSheet(page: page)
         }
@@ -323,9 +330,9 @@ struct ReaderView: View {
         .sheet(item: $illustrationChapter) { chapter in
             EPUBIllustrationsView(book: book, chapter: chapter)
         }
-        .sheet(isPresented: $showsAutoReadControls) { autoReadControls }
-        .sheet(isPresented: $showsStyleControls) { styleControls }
-        .sheet(isPresented: $showsContentSearch) { contentSearchSheet }
+        .sheet(isPresented: $showsAutoReadControls) { autoReadControls.readerPanelAppearance(followsPanelTheme) }
+        .sheet(isPresented: $showsStyleControls) { styleControls.readerPanelAppearance(followsPanelTheme) }
+        .sheet(isPresented: $showsContentSearch) { contentSearchSheet.readerPanelAppearance(followsPanelTheme) }
         .sheet(item: $sourceSwitchBook) { currentBook in
             ReadingNavigationStack {
                 SourceSwitchView(book: currentBook, sources: sourceLibrary.sources) { report, source in
@@ -355,8 +362,8 @@ struct ReaderView: View {
                 return saved ? nil : (replaceRules.notice?.detail ?? "保存失败")
             }
         }
-        .sheet(isPresented: $showsReaderSettings) { readerSettings }
-        .sheet(isPresented: $showsBookActions) { bookActionsSheet }
+        .sheet(isPresented: $showsReaderSettings) { readerSettings.readerPanelAppearance(followsPanelTheme) }
+        .sheet(isPresented: $showsBookActions) { bookActionsSheet.readerPanelAppearance(followsPanelTheme) }
         .sheet(isPresented: $showsClickActionSettings) { clickActionSettings }
         .sheet(isPresented: $showsContentEditor) { contentEditor }
         .task(id: model.chapterLoadGeneration) {
@@ -956,11 +963,126 @@ struct ReaderView: View {
 
     /// 玻璃材质：iOS 26 用系统 Liquid Glass，旧系统用毛玻璃 + 阅读底色轻染；
     /// 「减少透明度」或关闭玻璃模式时退回实色。
+    @ViewBuilder
     private func readerGlass<S: InsettableShape>(_ shape: S) -> some View {
-        AppGlassSurface(shape: shape, tint: backgroundColor, tintOpacity: 0.32,
-                        reduceTransparency: reduceTransparency)
-            .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
-            .shadow(color: .black.opacity(resolvedStyle.id == "night" ? 0.25 : 0.08), radius: 10, x: 0, y: 4)
+        if followsPanelTheme {
+            // 外观主题「阅读半屏卡片跟随外观」：阅读页的菜单卡片也用主题卡片（界面效果 / 卡片背景）。
+            ThemeSurface(shape: shape, isCard: true)
+                .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
+                .shadow(color: .black.opacity(resolvedStyle.id == "night" ? 0.25 : 0.08), radius: 10, x: 0, y: 4)
+        } else {
+            AppGlassSurface(shape: shape, tint: backgroundColor, tintOpacity: 0.32,
+                            reduceTransparency: reduceTransparency)
+                .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
+                .shadow(color: .black.opacity(resolvedStyle.id == "night" ? 0.25 : 0.08), radius: 10, x: 0, y: 4)
+        }
+    }
+
+    private var followsPanelTheme: Bool { appTheme.customization?.readerPanelFollowsTheme == true }
+
+    private var readerIsDark: Bool { resolvedStyle.id == "night" }
+
+    /// 外观主题「阅读工具栏图标 → 图标大小」（未自定义时沿用原来的大小）。
+    private var readerToolbarIconPointSize: CGFloat {
+        if let value = appTheme.customization?.readerToolbarIconSize { return CGFloat(min(max(value, 10), 40)) }
+        return CGFloat(min(toolbarIconSize, 26))
+    }
+
+    /// 工具栏图标：外观主题里为亮色 / 深色选了图片就用图片，否则用系统图标。
+    @ViewBuilder
+    private func readerToolbarIcon(_ item: ThemeReaderToolbarItem?, symbol: String) -> some View {
+        let size = readerToolbarIconPointSize
+        if let item, let id = appTheme.customization?.readerToolbarIcon(item, dark: readerIsDark),
+           let image = ThemeAssetStore.shared.image(for: id) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(width: size + 4, height: size + 4)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: size, weight: .regular))
+        }
+    }
+
+    /// 底栏样式「聊天输入框」：进度卡片 + 一条像聊天输入框的胶囊（目录 · 搜索框 · 朗读 · 外观 · 更多）。
+    private var readerChatBottomChrome: some View {
+        VStack(spacing: 8) {
+            readerChapterControls
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
+                .padding(.bottom, 2)
+                .background { readerGlass(RoundedRectangle(cornerRadius: 22, style: .continuous)) }
+            HStack(spacing: 8) {
+                readerChatButton(.toc, symbol: "list.bullet", label: "目录") {
+                    showsReaderMenu = false
+                    showsTableOfContents = true
+                }
+                Button {
+                    showsReaderMenu = false
+                    showsContentSearch = true
+                } label: {
+                    HStack(spacing: 8) {
+                        readerToolbarIcon(.search, symbol: "magnifyingglass")
+                            .foregroundStyle(readerChromeTint.opacity(0.7))
+                        Text("搜索本章内容")
+                            .font(.subheadline)
+                            .foregroundStyle(readerChromeTint.opacity(0.45))
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 14)
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .background { readerGlass(Capsule()) }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("搜索正文")
+                if speech.isSpeaking {
+                    readerChatButton(nil, symbol: "stop.fill", label: "停止") { toggleSpeech() }
+                } else {
+                    readerChatButton(.tts, symbol: "speaker.wave.2", label: "朗读") { toggleSpeech() }
+                }
+                readerChatButton(.style, symbol: "textformat.size", label: "外观") {
+                    showsReaderMenu = false
+                    showsStyleControls = true
+                }
+                Menu {
+                    Button {
+                        showsReaderMenu = false
+                        showsReaderSettings = true
+                    } label: { Label("阅读设置", systemImage: "gearshape") }
+                    if model.canEditContent {
+                        Button(action: openSourceSwitch) { Label("换源", systemImage: "arrow.triangle.2.circlepath") }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 46, height: 46)
+                        .background { readerGlass(Circle()) }
+                        .contentShape(Circle())
+                }
+                .accessibilityLabel("更多")
+            }
+        }
+        .foregroundStyle(readerChromeTint)
+        .frame(maxWidth: 560)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .background { Color.white.opacity(0.001).ignoresSafeArea(edges: .bottom).onTapGesture {} }
+    }
+
+    private func readerChatButton(_ item: ThemeReaderToolbarItem?, symbol: String, label: String,
+                                  action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            readerToolbarIcon(item, symbol: symbol)
+                .frame(width: 46, height: 46)
+                .background { readerGlass(Circle()) }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
     private func readerGlassCircleButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
@@ -1144,7 +1266,7 @@ struct ReaderView: View {
         VStack(spacing: 6) {
             readerChapterControls
             LazyVGrid(columns: readerToolbarColumns, spacing: 4) {
-                readerChromeAction("list.bullet", "目录") {
+                readerChromeAction("list.bullet", "目录", item: .toc) {
                     showsReaderMenu = false
                     showsTableOfContents = true
                 }
@@ -1153,8 +1275,9 @@ struct ReaderView: View {
                     .accessibilityIdentifier("reader.changeSource")
                     .accessibilityValue(book.originName)
                 }
-                readerChromeAction(speech.isSpeaking ? "stop.fill" : "headphones", speech.isSpeaking ? "停止" : "朗读", isActive: speech.isSpeaking) { toggleSpeech() }
-                readerChromeAction("textformat.size", "外观") {
+                readerChromeAction(speech.isSpeaking ? "stop.fill" : "headphones", speech.isSpeaking ? "停止" : "朗读",
+                                   isActive: speech.isSpeaking, item: speech.isSpeaking ? nil : .tts) { toggleSpeech() }
+                readerChromeAction("textformat.size", "外观", item: .style) {
                     showsReaderMenu = false
                     showsStyleControls = true
                 }
@@ -1219,7 +1342,8 @@ struct ReaderView: View {
                 ), in: 0...1, onEditingChanged: { editing in
                     if !editing { commitScrub() }
                 })
-                .tint(readerChromeTint.opacity(0.8))
+                .tint(appTheme.customization?.progressBarFollowsTheme == true
+                      ? ReadingTheme.accent : readerChromeTint.opacity(0.8))
                 .disabled(model.content.isEmpty || model.isLoading)
                 .accessibilityLabel("阅读进度")
                 .accessibilityValue(chapterProgress.formatted(.percent.precision(.fractionLength(0))))
@@ -1257,12 +1381,12 @@ struct ReaderView: View {
         .accessibilityLabel(label)
     }
 
-    private func readerChromeAction(_ icon: String, _ title: String, isActive: Bool = false, action: @escaping () -> Void) -> some View {
+    private func readerChromeAction(_ icon: String, _ title: String, isActive: Bool = false,
+                                    item: ThemeReaderToolbarItem? = nil, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 3) {
-                Image(systemName: icon)
-                    .font(.system(size: min(toolbarIconSize, 26), weight: .regular))
-                    .frame(height: 26)
+                readerToolbarIcon(item, symbol: icon)
+                    .frame(height: max(26, readerToolbarIconPointSize + 4))
                 Text(title)
                     .font(.system(size: 10.5))
                     .foregroundStyle(readerChromeTint.opacity(isActive ? 1 : 0.6))
@@ -3021,5 +3145,29 @@ struct ReaderMediaChapterView: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .opacity(enabled ? 1 : 0.4)
+    }
+}
+
+
+/// 外观主题「阅读半屏卡片跟随外观」：阅读页弹出的半屏面板铺主题页面背景（颜色 / 渐变 / 背景图），
+/// 列表行用主题卡片底。关闭时保持原来的系统样式。
+private struct ReaderPanelAppearanceModifier: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .readingScrollContentBackgroundHidden()
+                .background { AppThemeCanvas().ignoresSafeArea() }
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func readerPanelAppearance(_ enabled: Bool) -> some View {
+        modifier(ReaderPanelAppearanceModifier(enabled: enabled))
     }
 }

@@ -31,6 +31,11 @@ struct ResolvedAppPalette {
     let cardOpacity: Double
     let cardBorderOpacity: Double
     let cardBorderWidth: CGFloat
+    /// 弱文字（「颜色与字体」）。
+    let tertiary: Color
+    /// 「卡片背景」里的背景图（当前明暗）与显示方式。
+    let cardImageID: String?
+    let cardImageMode: ThemeCardImageMode
     private let cardRadiusOverride: CGFloat?
 
     /// Existing cards keep their own geometry until a radius is explicitly set.
@@ -61,7 +66,8 @@ struct ResolvedAppPalette {
         // 背景图原样显示（不再自动压一层底色），透明度由「页面背景 → 不透明度」控制。
         pageScrimOpacity = 0
         let custom = theme.customization
-        let tint = custom?.surfaceOpacity ?? 0.85
+        // 透明模式和毛玻璃各有一份不透明度（界面效果页里两个滑块）。
+        let tint = custom?.effectOpacity ?? 0.85
         let clamped = tint.isFinite ? min(max(tint, 0), 1) : 0.85
         // 界面效果里的「不透明度」直接就是卡片底色的不透明度：0% 完全透出背景，100% 实色。
         frostedSurfaceOpacity = clamped
@@ -72,6 +78,9 @@ struct ResolvedAppPalette {
         cardOpacity = min(max(custom?.cardOpacity ?? 0.6, 0), 1)
         cardBorderOpacity = min(max(custom?.cardBorderOpacity ?? 0.3, 0), 1)
         cardBorderWidth = CGFloat(min(max(custom?.cardBorderWidth ?? 0.7, 0), 4))
+        cardImageID = custom?.cardImage(dark: scheme == .dark)
+        cardImageMode = custom?.cardImageMode ?? .fill
+        tertiary = AppThemeColor.color(colors.resolvedTertiary(style: theme.backgroundStyle))
         // Geometry-only edits must not change Classic Monochrome's native colors.
         var colorDefaults = colors
         colorDefaults.cardRadius = nil
@@ -165,10 +174,12 @@ struct AppThemeCanvas: View {
     @ThemePalette private var palette
     @Environment(\.appTheme) private var theme
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.themePageScope) private var scope
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @StateObject private var imageLoader = ThemeAssetImageLoader()
 
-    private var imageID: String? { theme.customization?.pageBackgroundImage(dark: scheme == .dark) }
+    private var page: ThemePageBackground? { theme.customization?.pageBackground(scope) }
+    private var imageID: String? { theme.customization?.pageBackgroundImage(dark: scheme == .dark, scope: scope) }
 
     var body: some View {
         base
@@ -208,7 +219,18 @@ struct AppThemeCanvas: View {
     }
 
     @ViewBuilder private var base: some View {
-        if palette.gradient {
+        if let page, page.hasColors {
+            // 这个页面单独设置了颜色：没设的一项沿用全局。
+            let dark = scheme == .dark
+            let swatch = theme.swatches(for: scheme)
+            let start = (dark ? page.darkBackground : page.lightBackground) ?? swatch.background
+            let end = (dark ? page.darkBackgroundEnd : page.lightBackgroundEnd) ?? swatch.backgroundEnd
+            if start != end {
+                LinearGradient(colors: [AppThemeColor.color(start), AppThemeColor.color(end)], startPoint: .top, endPoint: .bottom)
+            } else {
+                AppThemeColor.color(start)
+            }
+        } else if palette.gradient {
             LinearGradient(colors: [palette.background, palette.backgroundEnd], startPoint: .top, endPoint: .bottom)
         } else { palette.background }
     }
@@ -327,7 +349,11 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
         ZStack {
             Color.clear
             if isCard, palette.customCard {
-                // 「卡片背景」：自定义颜色 + 透明度 + 边框，完全按设置绘制。
+                // 「卡片背景」：自定义背景图 + 颜色 + 透明度 + 边框，完全按设置绘制。
+                if let id = palette.cardImageID, !reduceTransparency, let image = ThemeAssetStore.shared.image(for: id) {
+                    ThemeCardImageFill(image: image, mode: palette.cardImageMode)
+                        .clipShape(shape)
+                }
                 if reduceTransparency {
                     shape.fill(palette.surface)
                 } else {
@@ -344,7 +370,7 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                     case .transparent:
                         // 透明模式：只铺一层按「不透明度」设置的卡片色，背景（照片）直接透出来。
                         shape.fill(palette.surface.opacity(palette.surfaceOpacity))
-                        if palette.glowIntensity > 0 {
+                        if palette.glowIntensity > 0, palette.surfaceOpacity > 0 {
                             shape.fill(RadialGradient(
                                 colors: [palette.accent.opacity(0.22 * palette.glowIntensity), palette.accent.opacity(0)],
                                 center: .topLeading, startRadius: 0, endRadius: 200))
@@ -370,7 +396,11 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                     if glassEnabled, !reduceTransparency, effect == .frosted {
                         shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.14 : 0.45), lineWidth: 0.6)
                     } else if effect == .transparent {
-                        shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.12 : 0.35), lineWidth: 0.5)
+                        // 透明模式：不透明度为 0 时完全没有卡片（连边线也不画），和参考一致。
+                        if palette.surfaceOpacity > 0 {
+                            shape.strokeBorder(Color.white.opacity((scheme == .dark ? 0.12 : 0.35) * min(1, palette.surfaceOpacity * 4)),
+                                               lineWidth: 0.5)
+                        }
                     } else {
                         shape.strokeBorder(palette.border.opacity(0.6), lineWidth: 0.5)
                     }
@@ -380,6 +410,32 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
         // 整块参与点击：放在按钮 / 链接背后时，卡片空白处也能点中。
         .contentShape(shape)
         .accessibilityHidden(true)
+    }
+}
+
+/// 卡片背景图：填充 / 适应 / 拉伸 / 平铺。
+struct ThemeCardImageFill: View {
+    let image: UIImage
+    let mode: ThemeCardImageMode
+
+    var body: some View {
+        GeometryReader { geometry in
+            switch mode {
+            case .fill:
+                Image(uiImage: image).resizable().scaledToFill()
+                    .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+            case .fit:
+                Image(uiImage: image).resizable().scaledToFit()
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            case .stretch:
+                Image(uiImage: image).resizable()
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            case .tile:
+                Image(uiImage: image).resizable(resizingMode: .tile)
+                    .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
