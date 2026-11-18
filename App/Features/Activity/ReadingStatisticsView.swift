@@ -154,10 +154,16 @@ struct ReadingStatisticsView: View {
 
     var body: some View {
         let digest = ReadingStatsDigest(records: activity.readRecords)
-        ScrollView {
+        // 日期标题固定在顶部，只滚下面的卡片（仿 bookon）：卡片不会再滑进状态栏底下，下拉时背景不动。
+        VStack(spacing: 0) {
+            header(digest)
+                .padding(.top, 14)
+                .padding(.bottom, 4)
+                .padding(.horizontal, 20)
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
+            ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                header(digest)
-                    .padding(.top, 14)
                 sectionTitle("阅读目标")
                 dailyCard(digest)
                 streakCard(digest).padding(.top, 14)
@@ -171,6 +177,7 @@ struct ReadingStatisticsView: View {
             .padding(.bottom, 44)
             .frame(maxWidth: 680)
             .frame(maxWidth: .infinity)
+            }
         }
         .readingCanvas()
         .foregroundStyle(ReadingTheme.ink)

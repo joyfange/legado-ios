@@ -244,15 +244,18 @@ private struct BookshelfView: View {
     private var contentWidth: CGFloat { max(UIScreen.main.bounds.width - 48, 120) }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 0) {
-                ReadingPageHeader(title: "书架", subtitle: selection.isActive ? "已选 \(selection.urls.count) 本" : "阅读，让时间有了形状") {
-                    if selection.isActive {
-                        selectionHeaderButtons
-                    } else {
-                        normalHeaderButtons
-                    }
+        // 仿 bookon：标题栏固定在顶部，只有下面的内容滚动；上滑时内容在标题栏下沿直接裁掉，
+        // 下拉时背景和标题都不动，只有书本身被拉下来，不会露出一截主题色。
+        VStack(spacing: 0) {
+            ReadingPageHeader(title: "书架", subtitle: selection.isActive ? "已选 \(selection.urls.count) 本" : "阅读，让时间有了形状",
+                              bottomPadding: 14) {
+                if selection.isActive {
+                    selectionHeaderButtons
+                } else {
+                    normalHeaderButtons
                 }
+            }
+            ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !library.hasLoaded {
                         // 书架还没读完：保持空白，不闪「空书架」占位。
@@ -302,17 +305,11 @@ private struct BookshelfView: View {
                     }
                 }
                 .padding(.horizontal, 24)
+                .padding(.top, 6)
                 .padding(.bottom, 32)
             }
         }
         .readingCanvas()
-        .readingPinnedTopBar(title: selection.isActive ? "已选 \(selection.urls.count) 本" : selectedGroup.groupName) {
-            if selection.isActive {
-                selectionHeaderButtons
-            } else {
-                normalHeaderButtons
-            }
-        }
         .overlay(alignment: .trailing) {
             if showsSideSwitcher {
                 sideSwitcherBar
@@ -2669,115 +2666,131 @@ private struct SearchBookRow: View {
 
 private struct SettingsView: View {
     @ThemePalette private var palette
+    @EnvironmentObject private var activity: ReadingActivityModel
+    @EnvironmentObject private var library: BookLibraryModel
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeMode") private var themeMode = "0"
     @ScaledMetric(relativeTo: .body) private var rowHeight = 52
 
     var body: some View {
-        GeometryReader { geometry in
+        // 标题固定在顶部、只滚下面的设置（与书架 / 发现 / 统计一致，仿 bookon）：
+        // 不再铺装饰插画和渐变色带，下拉时背景纹丝不动，不会露出主题色，照片背景也不会被插画盖住。
+        VStack(alignment: .leading, spacing: 0) {
+            ReadingPageHeader(title: "我的", subtitle: "按照你的方式阅读", bottomPadding: 14) { }
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    profileHeader(topInset: geometry.safeAreaInsets.top)
-                    VStack(alignment: .leading, spacing: 24) {
-                        appCard
-                        readingSection
-                        rulesSection
-                        settingSection("文件与存储") {
-                            settingLink("文件管理", icon: "folder", showsSeparator: false) {
-                                FileManagementView()
-                            }
+                VStack(alignment: .leading, spacing: 24) {
+                    profileCard
+                    readingSection
+                    rulesSection
+                    settingSection("文件与存储") {
+                        settingLink("文件管理", icon: "folder", showsSeparator: false) {
+                            FileManagementView()
                         }
-                        supportSection
                     }
-                    .padding(.horizontal, 28)
-                    .padding(.bottom, 32)
+                    supportSection
                 }
-                .background(alignment: .top) {
-                    Image("ProfileHeader")
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: geometry.size.width, height: geometry.safeAreaInsets.top + 156)
-                        .clipped()
-                        .overlay {
-                            if colorScheme == .dark {
-                                Color.black.opacity(0.78)
-                            }
-                        }
-                        .overlay(alignment: .bottom) {
-                            LinearGradient(
-                                colors: [ProfileTheme.canvas.opacity(0), ProfileTheme.canvas],
-                                startPoint: .top, endPoint: .bottom
-                            )
-                            .frame(height: 44)
-                        }
-                        .accessibilityHidden(true)
-                }
+                .padding(.horizontal, 24)
+                .padding(.top, 6)
+                .padding(.bottom, 32)
             }
-            .ignoresSafeArea(.container, edges: .top)
             .accessibilityIdentifier("profile.scroll")
         }
         .readingCanvas()
         .navigationBarHidden(true)
     }
 
-    private func profileHeader(topInset: CGFloat) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("我的")
-                .font(AppFontStyle.largeTitle.bold().themed)
-                .foregroundStyle(ProfileTheme.ink)
-                .accessibilityAddTraits(.isHeader)
-            Text("按照你的方式阅读")
-                .font(AppFontStyle.subheadline.themed)
-                .foregroundStyle(ProfileTheme.secondary)
+    /// 顶部名片：应用信息 + 三项阅读数据，一张跟随主题的卡片承载，不再叠插画。
+    private var profileCard: some View {
+        let digest = ReadingStatsDigest(records: activity.readRecords)
+        return VStack(spacing: 0) {
+            NavigationLink {
+                AboutView()
+            } label: {
+                HStack(spacing: 14) {
+                    Image("BrandIcon")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: 54, height: 54)
+                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(AppIdentity.name)
+                            .font(AppFontStyle.headline.themed)
+                            .foregroundStyle(ProfileTheme.ink)
+                        Text(AppIdentity.slogan)
+                            .font(AppFontStyle.footnote.themed)
+                            .foregroundStyle(ProfileTheme.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(AppFontStyle.system(size: 13, weight: .semibold).themed)
+                        .foregroundStyle(ProfileTheme.secondary)
+                        .accessibilityHidden(true)
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 14)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityElement(children: .combine)
+            .accessibilityHint("查看关于与版本信息")
+            .accessibilityIdentifier("profile.about")
+
+            Rectangle()
+                .fill(palette.border.opacity(0.5))
+                .frame(height: 0.5)
+                .padding(.horizontal, 16)
+
+            HStack(spacing: 0) {
+                profileStat(value: "\(library.books.count)", unit: "本", title: "书架藏书")
+                profileStatDivider
+                profileStat(value: Self.durationValue(digest.todayReadTime), unit: Self.durationUnit(digest.todayReadTime), title: "今日阅读")
+                profileStatDivider
+                profileStat(value: Self.durationValue(digest.totalReadTime), unit: Self.durationUnit(digest.totalReadTime), title: "累计阅读")
+            }
+            .padding(.vertical, 14)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 28)
-        .padding(.top, topInset + 42)
-        .padding(.bottom, 34)
+        .background { ThemeCardSurface(radius: 20) }
+        .shadow(color: .black.opacity(palette.cardBackground ? 0.04 : 0), radius: 16, x: 0, y: 6)
     }
 
-    private var appCard: some View {
-        NavigationLink {
-            AboutView()
-        } label: {
-            HStack(spacing: 16) {
-                Image("BrandIcon")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 58, height: 58)
-                    .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(AppIdentity.name)
-                        .font(AppFontStyle.headline.themed)
-                        .foregroundStyle(ProfileTheme.ink)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(AppIdentity.slogan)
-                        .font(AppFontStyle.footnote.themed)
-                        .foregroundStyle(ProfileTheme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(AppFontStyle.system(size: 13, weight: .medium).themed)
-                    .foregroundStyle(ProfileTheme.ink.opacity(0.75))
-                    .frame(width: 26, height: 26)
-                    .background(ProfileTheme.detail.opacity(0.10), in: Circle())
-                    .accessibilityHidden(true)
+    private func profileStat(value: String, unit: String, title: String) -> some View {
+        VStack(spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(value)
+                    .font(AppFontStyle.system(size: 20, weight: .semibold).themed.monospacedDigit())
+                    .foregroundStyle(ProfileTheme.ink)
+                Text(unit)
+                    .font(AppFontStyle.caption.themed)
+                    .foregroundStyle(ProfileTheme.secondary)
             }
-            .padding(14)
-            .frame(maxWidth: .infinity, minHeight: 86, alignment: .leading)
-            .background {
-                // 跟随主题的界面效果 / 卡片背景 / 圆角边框 / 玻璃模式。
-                ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: 16), style: .continuous),
-                             isCard: true)
-            }
-            .shadow(color: .black.opacity(palette.cardBackground ? 0.035 : 0), radius: 18, x: 0, y: 8)
+            Text(title)
+                .font(AppFontStyle.caption.themed)
+                .foregroundStyle(ProfileTheme.secondary)
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
         .accessibilityElement(children: .combine)
-        .accessibilityHint("查看关于与版本信息")
-        .accessibilityIdentifier("profile.about")
+    }
+
+    private var profileStatDivider: some View {
+        Rectangle()
+            .fill(palette.border.opacity(0.5))
+            .frame(width: 0.5, height: 28)
+    }
+
+    /// 毫秒 → 数字部分：不足 1 小时按分钟，否则按小时（10 小时内保留一位小数）。
+    private static func durationValue(_ milliseconds: Int64) -> String {
+        let minutes = max(0, milliseconds) / 60_000
+        if minutes < 60 { return "\(minutes)" }
+        let hours = Double(minutes) / 60
+        return hours < 10 ? String(format: "%.1f", hours) : "\(Int(hours))"
+    }
+
+    private static func durationUnit(_ milliseconds: Int64) -> String {
+        max(0, milliseconds) / 60_000 < 60 ? "分钟" : "小时"
     }
 
     private var readingSection: some View {

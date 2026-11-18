@@ -433,14 +433,15 @@ struct ExploreView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                ReadingPageHeader(title: "发现", subtitle: "下一本好书，在这里遇见") {
-                    NavigationLink { SearchView() } label: {
-                        ReadingToolbarIcon(systemName: "magnifyingglass")
-                    }
-                    .accessibilityLabel("搜索")
+        // 标题栏固定、只滚内容（仿 bookon）：上滑内容在标题下沿直接裁掉，下拉时背景不动。
+        VStack(alignment: .leading, spacing: 0) {
+            ReadingPageHeader(title: "发现", subtitle: "下一本好书，在这里遇见", bottomPadding: 14) {
+                NavigationLink { SearchView() } label: {
+                    ReadingToolbarIcon(systemName: "magnifyingglass")
                 }
+                .accessibilityLabel("搜索")
+            }
+            ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     HStack(spacing: 16) {
                         Image(systemName: "safari")
@@ -507,18 +508,17 @@ struct ExploreView: View {
                         .foregroundStyle(ReadingTheme.ink)
                         .padding(18)
                         .background { ThemeCardSurface(radius: 18) }
+                        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityIdentifier("explore.manageSources")
                 }
                 .padding(.horizontal, 24)
+                .padding(.top, 6)
                 .padding(.bottom, 32)
             }
         }
         .readingCanvas()
-        .readingPinnedTopBar(title: "发现") {
-            NavigationLink { SearchView() } label: { ReadingToolbarIcon(systemName: "magnifyingglass") }
-                .accessibilityLabel("搜索")
-        }
         .navigationBarHidden(true)
     }
 }

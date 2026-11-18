@@ -68,7 +68,10 @@ struct ResolvedAppPalette {
         // scrim (72–100% opaque) here hides the very blur it is meant to protect.
         let tint = theme.customization?.surfaceOpacity ?? 0.85
         // 玻璃卡片要在同色系背景上看得出来：主题卡片色铺到约 40%，再配上描边。
-        frostedSurfaceOpacity = 0.2 + 0.45 * (tint.isFinite ? min(max(tint, 0), 1) : 0.85)
+        let baseFrosted = 0.2 + 0.45 * (tint.isFinite ? min(max(tint, 0), 1) : 0.85)
+        // 背景是照片时玻璃卡片至少铺到一半主题卡片色：照片细节在卡片里只剩柔和的色块，
+        // 文字不会压在人脸 / 高光上，卡片也和主题配色连成一体。
+        frostedSurfaceOpacity = theme.customization?.pageBackgroundImage != nil ? max(baseFrosted, 0.5) : baseFrosted
         let glow = theme.customization?.glowIntensity ?? 0.5
         glowIntensity = glow.isFinite ? min(max(glow, 0), 1) : 0.5
         let opacity = theme.customization?.surfaceOpacity ?? 0.85
@@ -129,7 +132,37 @@ struct ThemePalette: DynamicProperty {
     @Environment(\.appTheme) private var theme
     @Environment(\.colorScheme) private var scheme
     @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
-    var wrappedValue: ResolvedAppPalette { ResolvedAppPalette(theme: theme, scheme: scheme, glass: glassEnabled) }
+    var wrappedValue: ResolvedAppPalette { ResolvedPaletteCache.shared.palette(theme: theme, scheme: scheme, glass: glassEnabled) }
+}
+
+/// 色板解析含对比度计算（背景图片时还要逐级试算遮罩），每张玻璃卡片、每个按钮都会读一次。
+/// 同一主题 / 明暗 / 玻璃开关只算一次，滚动和打开「外观主题」时不再反复计算。
+final class ResolvedPaletteCache: @unchecked Sendable {
+    static let shared = ResolvedPaletteCache()
+    private struct Entry {
+        let theme: AppTheme
+        let dark: Bool
+        let glass: Bool
+        let palette: ResolvedAppPalette
+    }
+    private let lock = NSLock()
+    private var entries: [Entry] = []
+
+    func palette(theme: AppTheme, scheme: ColorScheme, glass: Bool) -> ResolvedAppPalette {
+        let dark = scheme == .dark
+        lock.lock()
+        if let hit = entries.first(where: { $0.dark == dark && $0.glass == glass && $0.theme == theme }) {
+            lock.unlock()
+            return hit.palette
+        }
+        lock.unlock()
+        let value = ResolvedAppPalette(theme: theme, scheme: scheme, glass: glass)
+        lock.lock()
+        entries.insert(Entry(theme: theme, dark: dark, glass: glass, palette: value), at: 0)
+        if entries.count > 24 { entries.removeLast(entries.count - 24) }
+        lock.unlock()
+        return value
+    }
 }
 
 struct AppThemeCanvas: View {
@@ -140,12 +173,21 @@ struct AppThemeCanvas: View {
     var body: some View {
         base
             .overlay {
-                if let image = imageLoader.image, imageLoader.assetID == theme.customization?.pageBackgroundImage,
-                   !reduceTransparency {
+                if let image = currentImage, !reduceTransparency {
                     GeometryReader { geometry in
                         Image(uiImage: image).resizable().scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height).clipped()
                             .overlay { base.opacity(palette.pageScrimOpacity) }
+                            // 顶部标题区与底部 Tab 栏多压一层主题底色：照片在中间保持清晰，
+                            // 标题、按钮和 Tab 栏不会直接压在照片的五官 / 高光上，和主题色融为一体。
+                            .overlay {
+                                LinearGradient(stops: [
+                                    .init(color: palette.background.opacity(0.55), location: 0),
+                                    .init(color: palette.background.opacity(0), location: 0.22),
+                                    .init(color: palette.background.opacity(0), location: 0.82),
+                                    .init(color: palette.background.opacity(0.4), location: 1)
+                                ], startPoint: .top, endPoint: .bottom)
+                            }
                             .overlay {
                                 if theme.customization?.effect == .transparent, palette.glowIntensity > 0 {
                                     RadialGradient(
@@ -167,6 +209,13 @@ struct AppThemeCanvas: View {
             .allowsHitTesting(false)
     }
 
+    /// 先用解码缓存里的图：新开的页面（每个 Tab、每次 push）第一帧就有照片，不再先闪一下主题底色。
+    private var currentImage: UIImage? {
+        guard let id = theme.customization?.pageBackgroundImage else { return nil }
+        if let image = imageLoader.image, imageLoader.assetID == id { return image }
+        return ThemeAssetStore.shared.cachedImage(for: id)
+    }
+
     @ViewBuilder private var base: some View {
         if palette.gradient {
             LinearGradient(colors: [palette.background, palette.backgroundEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
@@ -182,6 +231,7 @@ struct AppGlassSurface<S: InsettableShape>: View {
     var tintOpacity: Double
     var reduceTransparency: Bool
     @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
+    @Environment(\.scenePhase) private var scenePhase
 
     init(shape: S, tint: Color = Color(uiColor: .secondarySystemBackground),
          tintOpacity: Double = 0.10, reduceTransparency: Bool = false) {
@@ -195,6 +245,11 @@ struct AppGlassSurface<S: InsettableShape>: View {
         Group {
             if reduceTransparency || !glassEnabled {
                 shape.fill(tint)
+            } else if scenePhase == .background {
+                // 系统在 App 进后台时截图做多任务卡片，截图拍不到实时模糊，玻璃会变成一块偏暗的灰，
+                // 回到 App 时就看到「由暗转亮」。后台时改画接近玻璃观感的半透明底，截图和实际一致。
+                shape.fill(tint.opacity(min(0.92, tintOpacity + 0.5)))
+                    .overlay { shape.fill(Color.white.opacity(0.18)) }
             } else if #available(iOS 26.0, *) {
                 Color.clear.glassEffect(.regular.tint(tint.opacity(tintOpacity)), in: shape)
             } else {
@@ -203,7 +258,8 @@ struct AppGlassSurface<S: InsettableShape>: View {
                     .overlay { shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5) }
             }
         }
-        .allowsHitTesting(false)
+        // 作为按钮背景时整块都能点（之前不参与点击，卡片空白处点了没反应，比如「管理书源」）。
+        .contentShape(shape)
         .accessibilityHidden(true)
     }
 }
@@ -276,6 +332,7 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
 
     var body: some View {
         ZStack {
+            Color.clear
             if !isCard || palette.cardBackground {
                 if reduceTransparency {
                     shape.fill(palette.surface)
@@ -331,7 +388,8 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                 }
             }
         }
-        .allowsHitTesting(false)
+        // 整块参与点击：放在按钮 / 链接背后时，卡片空白处也能点中。
+        .contentShape(shape)
         .accessibilityHidden(true)
     }
 }

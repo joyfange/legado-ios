@@ -188,7 +188,16 @@ enum ReadingTheme {
 struct ReadingPageHeader<Actions: View>: View {
     let title: String
     let subtitle: String
+    /// 固定在页面顶部（不随内容滚动）时下沿留得小一些，内容从这里开始、滑上来直接被裁掉。
+    var bottomPadding: CGFloat = 28
     @ViewBuilder var actions: Actions
+
+    init(title: String, subtitle: String, bottomPadding: CGFloat = 28, @ViewBuilder actions: () -> Actions) {
+        self.title = title
+        self.subtitle = subtitle
+        self.bottomPadding = bottomPadding
+        self.actions = actions()
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -207,7 +216,7 @@ struct ReadingPageHeader<Actions: View>: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 24)
         .padding(.top, 20)
-        .padding(.bottom, 28)
+        .padding(.bottom, bottomPadding)
         // 把大标题行的下沿报给页面：滚上去以后由顶部悬浮栏接替标题。
         .background(alignment: .top) {
             GeometryReader { proxy in

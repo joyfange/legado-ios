@@ -15,6 +15,10 @@ final class ThemeAssetImageLoader: ObservableObject {
         let token = UUID()
         generation = token
         assetID = id
+        if let id, let cached = store.cachedImage(for: id) {
+            image = cached
+            return
+        }
         image = nil
         guard let id, ThemeAssetStore.isValidID(id) else { return }
         let decoded = await Task.detached(priority: .utility) { store.image(for: id) }.value
@@ -121,6 +125,11 @@ final class ThemeAssetStore: @unchecked Sendable {
         }
         try png.write(to: target, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         return id
+    }
+
+    /// 只查已解码的缓存，不读文件；界面首帧同步取图用。
+    func cachedImage(for id: String) -> UIImage? {
+        cache.object(forKey: id as NSString)
     }
 
     func image(for id: String?) -> UIImage? {
