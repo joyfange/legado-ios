@@ -281,7 +281,7 @@ enum AppThemeRuntime {
     /// 是否需要在页面底层绘制主题画布（渐变或背景图片）。
     static var drawsCanvas: Bool {
         let value = current
-        return value.backgroundStyle == .gradient || value.customization?.pageBackgroundImage != nil
+        return value.backgroundStyle == .gradient || value.customization?.hasPageBackground == true
     }
 }
 
@@ -291,7 +291,7 @@ struct ReadingCanvasBackground: View {
     var grouped = false
     var body: some View {
         ZStack {
-            if theme.backgroundStyle == .gradient || theme.customization?.pageBackgroundImage != nil {
+            if theme.backgroundStyle == .gradient || theme.customization?.hasPageBackground == true {
                 AppThemeCanvas()
             } else if grouped {
                 ReadingTheme.groupedCanvas
@@ -315,7 +315,7 @@ struct ThemeAmbientGlow: View {
 
     var body: some View {
         if palette.interfaceEffect == .frosted, glassEnabled, !reduceTransparency,
-           theme.customization?.pageBackgroundImage == nil, palette.glowIntensity > 0 {
+           theme.customization?.hasPageBackground != true, palette.glowIntensity > 0 {
             GeometryReader { geometry in
                 let size = max(geometry.size.width, geometry.size.height)
                 let strength = (scheme == .dark ? 0.30 : 0.22) * palette.glowIntensity
@@ -342,7 +342,9 @@ struct ThemeListRowBackground: View {
 
     var body: some View {
         Group {
-            if !palette.cardBackground {
+            if palette.customCard {
+                palette.surface.opacity(reduceTransparency ? 1 : palette.cardOpacity)
+            } else if !palette.cardBackground {
                 Color.clear
             } else if reduceTransparency {
                 palette.surface
@@ -351,7 +353,7 @@ struct ThemeListRowBackground: View {
                 switch palette.interfaceEffect ?? .opaque {
                 case .transparent:
                     ZStack {
-                        Color.clear
+                        palette.surface.opacity(palette.surfaceOpacity)
                         if palette.glowIntensity > 0 {
                             palette.accent.opacity(0.06 * palette.glowIntensity)
                         }
@@ -491,18 +493,11 @@ struct AppThemeShell<Content: View>: View {
         .modifier(AppTypographyRoot())
         .modifier(AppThemeRoot(store: store))
         .preferredColorScheme(themeMode == "2" ? .dark : (themeMode == "1" || themeMode == "3" ? .light : nil))
-        .sheet(isPresented: $presenter.isPresented) {
-            if #available(iOS 17.0, *) {
-                NavigationStack {
-                    AppAppearanceSettingsView(store: store)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("完成") { presenter.isPresented = false }
-                            }
-                        }
-                }
+        // 外观主题整页覆盖（参考应用是一个完整页面），页面本身显示主题背景与玻璃效果，改动即时可见。
+        .fullScreenCover(isPresented: $presenter.isPresented) {
+            AppearanceSettingsRoot { presenter.isPresented = false }
+                .modifier(AppTypographyRoot())
                 .modifier(AppThemeRoot(store: store))
-            }
         }
     }
 }

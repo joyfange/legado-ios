@@ -91,6 +91,22 @@ struct AppTheme: Codable, Equatable, Identifiable {
         return copy
     }
 
+    /// 只检查数据是否完整有效（名称、取值范围、颜色格式），不检查对比度：
+    /// 「外观主题」页的即时修改允许任意配色，和参考应用一致。
+    var structuralValidationMessage: String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return "请为主题填写名称。" }
+        if trimmed.count > 40 { return "主题名称最多 40 个字。" }
+        if let message = customization?.validationMessage { return message }
+        for colors in [light, dark] {
+            if let radius = colors.cardRadius, !radius.isFinite || !Self.cardRadiusRange.contains(radius) {
+                return "卡片圆角须在 8–30 点之间。"
+            }
+            guard colors.allColors.allSatisfy(AppThemeColor.isValid) else { return "配色包含无效颜色，请重新选择。" }
+        }
+        return nil
+    }
+
     var validationMessage: String? {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "请为主题填写名称。" }

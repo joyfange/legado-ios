@@ -25,6 +25,7 @@
 		7E3A00000000000000000290 /* CoverLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000190 /* CoverLibrary.swift */; };
 		7E3A00000000000000000211 /* ThemeIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000111 /* ThemeIntegration.swift */; };
 		7E3A00000000000000000212 /* ThemePalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000112 /* ThemePalette.swift */; };
+		7E3A0000000000000000A212 /* AppearanceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A0000000000000000A112 /* AppearanceSettings.swift */; };
 		7E3A00000000000000000213 /* ThemePreviewCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000113 /* ThemePreviewCard.swift */; };
 		DA1000000000000000000002 /* AppearanceContrastTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000002; };
 		DA1000000000000000000001 /* DarkModeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001; };
@@ -179,6 +180,7 @@
 		7E3A00000000000000000190 /* CoverLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoverLibrary.swift; sourceTree = "<group>"; };
 		7E3A00000000000000000111 /* ThemeIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeIntegration.swift; sourceTree = "<group>"; };
 		7E3A00000000000000000112 /* ThemePalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePalette.swift; sourceTree = "<group>"; };
+		7E3A0000000000000000A112 /* AppearanceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearanceSettings.swift; sourceTree = "<group>"; };
 		7E3A00000000000000000113 /* ThemePreviewCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemePreviewCard.swift; sourceTree = "<group>"; };
 		DA2000000000000000000002 /* AppearanceContrastTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderTests/AppearanceContrastTests.swift; sourceTree = SOURCE_ROOT; };
 		DA2000000000000000000001 /* DarkModeUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderUITests/DarkModeUITests.swift; sourceTree = SOURCE_ROOT; };
@@ -352,6 +354,7 @@
 				7E3A00000000000000000190 /* CoverLibrary.swift */,
 				7E3A00000000000000000111 /* ThemeIntegration.swift */,
 				7E3A00000000000000000112 /* ThemePalette.swift */,
+				7E3A0000000000000000A112 /* AppearanceSettings.swift */,
 				7E3A00000000000000000113 /* ThemePreviewCard.swift */,
 			);
 			path = Theme;
@@ -822,6 +825,7 @@
 				7E3A00000000000000000290 /* CoverLibrary.swift in Sources */,
 				7E3A00000000000000000211 /* ThemeIntegration.swift in Sources */,
 				7E3A00000000000000000212 /* ThemePalette.swift in Sources */,
+				7E3A0000000000000000A212 /* AppearanceSettings.swift in Sources */,
 				7E3A00000000000000000213 /* ThemePreviewCard.swift in Sources */,
 				AA1100000000000000000001 /* SourceEditorView.swift in Sources */,
 				AA1100000000000000000002 /* ReplaceRuleEditorView.swift in Sources */,

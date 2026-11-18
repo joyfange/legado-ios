@@ -388,7 +388,11 @@ struct BookCoverArtwork: View {
 
     var body: some View {
         Group {
-            if let remoteURL, remoteURL.hasPrefix("data:image/"),
+            if AppThemeRuntime.current.customization?.forceDefaultCover == true,
+               AppThemeRuntime.current.customization?.defaultCoverImage != nil {
+                // 外观主题「强制使用默认封面」：所有书都用主题的默认封面。
+                placeholder
+            } else if let remoteURL, remoteURL.hasPrefix("data:image/"),
                let comma = remoteURL.firstIndex(of: ","),
                let data = Data(base64Encoded: String(remoteURL[remoteURL.index(after: comma)...])),
                let image = UIImage(data: data) {

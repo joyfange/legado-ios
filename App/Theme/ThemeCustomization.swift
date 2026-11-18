@@ -10,9 +10,9 @@ struct ThemeShelfMetrics {
     init(width: CGFloat, customization: ThemeCustomization, accessibility: Bool) {
         let available = max(1, (width.isFinite ? width : 320) - 48)
         let minimumCell: CGFloat = accessibility ? 120 : 60
-        let fitting = max(1, Int(min(5, (available + 18) / (minimumCell + 18))))
-        let requested = min(max(customization.shelfColumns, 2), 5)
-        columns = min(requested, fitting, accessibility ? 2 : 5)
+        let fitting = max(1, Int(min(6, (available + 18) / (minimumCell + 14))))
+        let requested = min(max(customization.shelfColumns, 2), 6)
+        columns = min(requested, fitting, accessibility ? 2 : 6)
         let cell = max(1, (available - CGFloat(columns - 1) * 18) / CGFloat(columns))
         let desired = customization.coverWidth.isFinite ? min(max(customization.coverWidth, 60), 180) : 112
         coverWidth = min(CGFloat(desired), cell)
@@ -61,6 +61,7 @@ struct ThemeLaunchOverlay: View {
 
 struct ThemeLaunchHost: ViewModifier {
     @Environment(\.appTheme) private var theme
+    @Environment(\.colorScheme) private var scheme
     @StateObject private var imageLoader = ThemeAssetImageLoader()
     @State private var evaluated = false
     @State private var presented = false
@@ -77,7 +78,7 @@ struct ThemeLaunchHost: ViewModifier {
             .task {
                 guard !evaluated else { return }
                 evaluated = true
-                let id = ThemeLaunchSession.shared.claim(theme.customization?.launchImage)
+                let id = ThemeLaunchSession.shared.claim(theme.customization?.launchImage(dark: scheme == .dark))
                 await imageLoader.load(id)
                 guard !Task.isCancelled, imageLoader.image != nil else { return }
                 presented = true
@@ -130,8 +131,19 @@ struct ThemeCustomization: Codable, Equatable {
     var glowIntensity: Double = 0.5
     /// Opacity of the frosted effect's surface tint layer.
     var surfaceOpacity: Double = 0.85
+    /// 深色模式背景图；为空时深色也用亮色背景图。
+    var darkPageBackgroundImage: String? = nil
+    /// 背景图本身的不透明度（越低越透出主题底色）。
+    var backgroundImageOpacity: Double = 1
+    /// 「卡片背景」：开启后卡片用下面的颜色 / 透明度 / 边框，替代界面效果。
+    var customCard: Bool = false
+    var cardOpacity: Double = 0.6
+    var cardBorderOpacity: Double = 0.3
+    var cardBorderWidth: Double = 0.7
+    var darkLaunchImage: String? = nil
+    var forceDefaultCover: Bool = false
 
-    static let shelfColumnsRange = 2...5
+    static let shelfColumnsRange = 2...6
     static let coverWidthRange: ClosedRange<Double> = 60...180
     static let glowIntensityRange: ClosedRange<Double> = 0...1
     static let surfaceOpacityRange: ClosedRange<Double> = 0...1
@@ -161,6 +173,8 @@ struct ThemeCustomization: Codable, Equatable {
         case tabStyle, shelfColumns, coverWidth, defaultCoverImage, launchImage
         case pageBackgroundImage, fontPostScriptName, effect, cardBackground
         case tabIcons, glowIntensity, surfaceOpacity
+        case darkPageBackgroundImage, backgroundImageOpacity, customCard, cardOpacity
+        case cardBorderOpacity, cardBorderWidth, darkLaunchImage, forceDefaultCover
     }
 
     /// Newly added fields get their defaults; malformed present values still fail.
@@ -178,15 +192,34 @@ struct ThemeCustomization: Codable, Equatable {
         tabIcons = try values.decodeIfPresent([String: String].self, forKey: .tabIcons)
         glowIntensity = try values.decodeIfPresent(Double.self, forKey: .glowIntensity) ?? 0.5
         surfaceOpacity = try values.decodeIfPresent(Double.self, forKey: .surfaceOpacity) ?? 0.85
+        darkPageBackgroundImage = try values.decodeIfPresent(String.self, forKey: .darkPageBackgroundImage)
+        backgroundImageOpacity = try values.decodeIfPresent(Double.self, forKey: .backgroundImageOpacity) ?? 1
+        customCard = try values.decodeIfPresent(Bool.self, forKey: .customCard) ?? false
+        cardOpacity = try values.decodeIfPresent(Double.self, forKey: .cardOpacity) ?? 0.6
+        cardBorderOpacity = try values.decodeIfPresent(Double.self, forKey: .cardBorderOpacity) ?? 0.3
+        cardBorderWidth = try values.decodeIfPresent(Double.self, forKey: .cardBorderWidth) ?? 0.7
+        darkLaunchImage = try values.decodeIfPresent(String.self, forKey: .darkLaunchImage)
+        forceDefaultCover = try values.decodeIfPresent(Bool.self, forKey: .forceDefaultCover) ?? false
+    }
+
+    /// 当前明暗下实际使用的背景图。
+    func pageBackgroundImage(dark: Bool) -> String? {
+        dark ? (darkPageBackgroundImage ?? pageBackgroundImage) : pageBackgroundImage
+    }
+
+    var hasPageBackground: Bool { pageBackgroundImage != nil || darkPageBackgroundImage != nil }
+
+    func launchImage(dark: Bool) -> String? {
+        dark ? (darkLaunchImage ?? launchImage) : launchImage
     }
 
     var assetIDs: Set<String> {
-        Set([defaultCoverImage, launchImage, pageBackgroundImage].compactMap { $0 })
+        Set([defaultCoverImage, launchImage, pageBackgroundImage, darkPageBackgroundImage, darkLaunchImage].compactMap { $0 })
             .union((tabIcons ?? [:]).values.filter(ThemeAssetStore.isValidID))
     }
 
     var validationMessage: String? {
-        guard Self.shelfColumnsRange.contains(shelfColumns) else { return "书架列数须在 2–5 列之间。" }
+        guard Self.shelfColumnsRange.contains(shelfColumns) else { return "书架列数须在 2–6 列之间。" }
         guard coverWidth.isFinite, Self.coverWidthRange.contains(coverWidth) else { return "封面宽度须在 60–180 点之间。" }
         if let font = fontPostScriptName,
            font.count > 128 || font.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
@@ -198,6 +231,10 @@ struct ThemeCustomization: Codable, Equatable {
         guard surfaceOpacity.isFinite, Self.surfaceOpacityRange.contains(surfaceOpacity) else {
             return "透明度须在 0–1 之间。"
         }
+        for value in [backgroundImageOpacity, cardOpacity, cardBorderOpacity] {
+            guard value.isFinite, (0...1).contains(value) else { return "透明度须在 0–1 之间。" }
+        }
+        guard cardBorderWidth.isFinite, (0...4).contains(cardBorderWidth) else { return "边框大小须在 0–4 之间。" }
         if let tabIcons {
             guard !tabIcons.isEmpty, tabIcons.count <= Self.tabIconKeys.count,
                   tabIcons.keys.allSatisfy(Self.tabIconKeys.contains) else {

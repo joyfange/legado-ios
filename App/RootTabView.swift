@@ -196,7 +196,7 @@ private struct BookshelfView: View {
     @State private var showsShelfSettings = false
     @AppStorage("bookshelfLayout") private var bookshelfLayout = "grid3"
     @AppStorage(BookshelfShelfSettings.sideSwitcherKey) private var sideSwitcher = true
-    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
+    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = true
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
     @State private var shelfDestination: BookshelfShelfDestination?
 
@@ -434,26 +434,10 @@ private struct BookshelfView: View {
 
     /// 书架切换条（替代原来的「全部书籍」标题）：排序、正倒序、书架胶囊（带本数）、展开面板。
     private var bookshelfSummary: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            shelfBarRow
-                // 展开的书架面板悬浮在书上方，不再把下面的书往下推。
-                .overlay(alignment: .topLeading) {
-                    if shelfBarExpanded {
-                        shelfPanel
-                            .offset(y: 40)
-                            .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .top)))
-                    }
-                }
-                .zIndex(2)
-            HStack(alignment: .center) {
-                Text("\(displayedBooks.count) 本")
-                    .font(AppFontStyle.caption.themed).foregroundStyle(.secondary)
-                Spacer()
-                layoutSwitcher
-            }
-        }
-        .padding(.bottom, 18)
-        .zIndex(2)
+        // 只留书架分组胶囊；排序、视图、展开面板都并进右上角「⋯」菜单，顶部更整洁。
+        shelfChipScroller
+            .padding(.bottom, 16)
+            .zIndex(2)
     }
 
     private var shelfBarRow: some View {
@@ -898,22 +882,13 @@ private struct BookshelfView: View {
         return trimmed.prefix(4).map(String.init).joined(separator: "\n")
     }
 
+    /// 右上角只保留两个按钮：搜索 + 「⋯」（视图、排序、书架、导入等全部收进菜单）。
     @ViewBuilder
     private var normalHeaderButtons: some View {
         NavigationLink { SearchView() } label: {
             ReadingToolbarIcon(systemName: "magnifyingglass")
         }
         .accessibilityLabel("搜索")
-        if bookshelfLayout == "shelf" {
-            Button { showsOrnamentManager = true } label: {
-                ReadingToolbarIcon(systemName: "leaf")
-            }
-            .accessibilityLabel("书架摆件")
-        }
-        Button { showsShelfSettings = true } label: {
-            ReadingToolbarIcon(systemName: "slider.horizontal.3")
-        }
-        .accessibilityLabel("书架设置")
         bookshelfMenu
     }
 
@@ -941,23 +916,61 @@ private struct BookshelfView: View {
             ProgressView().controlSize(.small).frame(width: 44, height: 44)
         } else {
             Menu {
-                if bookshelfLayout != "shelf" {
-                    Button("选择", systemImage: "checkmark.circle") { selection.begin() }
-                }
-                Button("更新目录", systemImage: "arrow.clockwise") {
-                    Task { await library.checkForUpdates(sources: sources.sources) }
-                }
-                Button("本地书", systemImage: "plus") { showsLocalImporter = true }
-                Button("管理书架", systemImage: "rectangle.3.group") { showsGroupManager = true }
-                if bookshelfLayout == "shelf" {
-                    Button { showsOrnamentManager = true } label: {
-                        Label("书架摆件", systemImage: "leaf")
+                Section {
+                    Picker(selection: Binding(
+                        get: { bookshelfLayout.hasPrefix("grid") ? "grid" : (bookshelfLayout == "shelf" ? "shelf" : "list") },
+                        set: { value in
+                            withAnimation(.easeInOut(duration: 0.22)) {
+                                switch value {
+                                case "grid": bookshelfLayout = "grid\(BookshelfShelfSettings.lastGridCount)"
+                                case "shelf": bookshelfLayout = "shelf"
+                                default: bookshelfLayout = "list"
+                                }
+                            }
+                        }
+                    )) {
+                        Label("网格", systemImage: "square.grid.2x2").tag("grid")
+                        Label("列表", systemImage: "list.bullet").tag("list")
+                        Label("仿真书架", systemImage: "books.vertical").tag("shelf")
+                    } label: { Label("视图", systemImage: "square.grid.2x2") }
+                    Menu {
+                        Picker("排序方式", selection: $sortMode) {
+                            ForEach(Self.sortTitles.indices, id: \.self) { index in
+                                Text(Self.sortTitles[index]).tag(index)
+                            }
+                        }
+                        Picker("顺序", selection: $sortAscending) {
+                            Text("倒序").tag(false)
+                            Text("正序").tag(true)
+                        }
+                    } label: {
+                        Label("排序：\(Self.sortTitles[min(max(sortMode, 0), 3)])", systemImage: "arrow.up.arrow.down")
                     }
                 }
-                NavigationLink {
-                    FileManagementView()
-                } label: {
-                    Label("文件管理", systemImage: "folder")
+                Section {
+                    if bookshelfLayout != "shelf" {
+                        Button { selection.begin() } label: { Label("选择", systemImage: "checkmark.circle") }
+                    }
+                    Button {
+                        Task { await library.checkForUpdates(sources: sources.sources) }
+                    } label: { Label("更新目录", systemImage: "arrow.clockwise") }
+                    Button { showsLocalImporter = true } label: { Label("导入本地书", systemImage: "plus") }
+                }
+                Section {
+                    Button {
+                        newShelfName = ""
+                        withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = true }
+                    } label: { Label("新建书架", systemImage: "plus.rectangle.on.rectangle") }
+                    Button { showsGroupManager = true } label: { Label("管理书架", systemImage: "rectangle.3.group") }
+                    Button { showsShelfSettings = true } label: { Label("书架设置", systemImage: "slider.horizontal.3") }
+                    if bookshelfLayout == "shelf" {
+                        Button { showsOrnamentManager = true } label: { Label("书架摆件", systemImage: "leaf") }
+                    }
+                    NavigationLink {
+                        FileManagementView()
+                    } label: {
+                        Label("文件管理", systemImage: "folder")
+                    }
                 }
             } label: {
                 ReadingToolbarIcon(systemName: "ellipsis")
@@ -1204,7 +1217,7 @@ private struct BookshelfGridItem: View {
     var selected: Bool? = nil
     @AppStorage(BookshelfShelfSettings.gridShowTitleKey) private var showsGridTitle = true
     @AppStorage(BookshelfShelfSettings.gridShowAuthorKey) private var showsGridAuthor = true
-    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
+    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = true
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
     @AppStorage(BookshelfShelfSettings.coverStyleKey) private var coverStyle = "flat"
 
@@ -1267,7 +1280,7 @@ private struct BookshelfFolderGridTile: View {
     let books: [Book]
     let width: CGFloat
     @AppStorage(BookshelfShelfSettings.gridShowTitleKey) private var showsGridTitle = true
-    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
+    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = true
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
 
     var body: some View {
@@ -2826,29 +2839,14 @@ private struct SettingsView: View {
         }
     }
 
-    /// iOS 17 起打开完整的「外观主题」（主题配色、编辑器、玻璃模式、应用外观）；更早的系统保留原来的外观菜单。
-    @ViewBuilder
+    /// 打开「外观主题」（所有系统版本都可用）。
     private var appearanceEntry: some View {
-        if #available(iOS 17.0, *) {
-            Button { AppearanceHubPresenter.shared.isPresented = true } label: {
-                settingRow("外观主题", icon: "circle.lefthalf.filled",
-                           value: AppThemeStore.shared.selectedTheme.name + " · " + appearanceTitle,
-                           showsValuePill: true)
-            }
-            .buttonStyle(.plain)
-        } else {
-            Menu {
-                Picker("外观", selection: $themeMode) {
-                    Text("跟随系统").tag("0")
-                    Text("浅色").tag("1")
-                    Text("深色").tag("2")
-                    Text("E-Ink 模式").tag("3")
-                }
-            } label: {
-                settingRow("外观", icon: "circle.lefthalf.filled", value: appearanceTitle, showsValuePill: true)
-            }
-            .buttonStyle(.plain)
+        Button { AppearanceHubPresenter.shared.isPresented = true } label: {
+            settingRow("外观主题", icon: "circle.lefthalf.filled",
+                       value: AppThemeStore.shared.selectedTheme.name,
+                       showsValuePill: true)
         }
+        .buttonStyle(.plain)
     }
 
     private var appearanceTitle: String {
@@ -7554,7 +7552,7 @@ struct BookshelfShelfSettingsSheet: View {
     @AppStorage(BookshelfShelfSettings.deleteLocalKey) private var deleteLocal = false
     @AppStorage(BookshelfShelfSettings.sideSwitcherKey) private var sideSwitcher = true
     @AppStorage(BookshelfShelfSettings.hideTitlesKey) private var hideTitles = false
-    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = false
+    @AppStorage(BookshelfShelfSettings.hideShelfBaseKey) private var hideShelfBase = true
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
     @AppStorage(BookshelfShelfSettings.bookWidthKey) private var bookWidth = BookshelfShelfSettings.defaultWidth
     @AppStorage(BookshelfShelfSettings.bookHeightKey) private var bookHeight = BookshelfShelfSettings.defaultHeight

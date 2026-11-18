@@ -26,6 +26,11 @@ struct ResolvedAppPalette {
     let glowIntensity: Double
     /// Bounded 0...1; drives the frosted effect's tint layer.
     let surfaceOpacity: Double
+    /// 「卡片背景」自定义：开启后卡片按颜色 / 透明度 / 边框绘制。
+    let customCard: Bool
+    let cardOpacity: Double
+    let cardBorderOpacity: Double
+    let cardBorderWidth: CGFloat
     private let cardRadiusOverride: CGFloat?
 
     /// Existing cards keep their own geometry until a radius is explicitly set.
@@ -53,29 +58,20 @@ struct ResolvedAppPalette {
         }
         cardBackground = theme.customization?.cardBackground ?? true
         let ink = colors.resolvedInk(style: theme.backgroundStyle)
-        if theme.customization?.pageBackgroundImage != nil {
-            let labels = [ink.primary, ink.secondary, colors.accent, scheme == .dark ? "F5F5F5" : "101010"]
-            let canvas = theme.backgroundStyle == .gradient
-                ? (0...12).map { AppThemeColor.mix(colors.background, colors.backgroundEnd, fraction: Double($0) / 12) }
-                : [colors.background]
-            // Keep the selected wallpaper visible; a full opaque scrim defeats the setting.
-            // Glass rows provide local contrast; Reduce Transparency still uses base only.
-            pageScrimOpacity = min(0.35, ThemeReadability.scrimOpacity(backgrounds: canvas, labels: labels))
-        } else {
-            pageScrimOpacity = 1
-        }
-        // Native material already provides adaptive contrast. A photographic
-        // scrim (72–100% opaque) here hides the very blur it is meant to protect.
-        let tint = theme.customization?.surfaceOpacity ?? 0.85
-        // 玻璃卡片要在同色系背景上看得出来：主题卡片色铺到约 40%，再配上描边。
-        let baseFrosted = 0.2 + 0.45 * (tint.isFinite ? min(max(tint, 0), 1) : 0.85)
-        // 背景是照片时玻璃卡片至少铺到一半主题卡片色：照片细节在卡片里只剩柔和的色块，
-        // 文字不会压在人脸 / 高光上，卡片也和主题配色连成一体。
-        frostedSurfaceOpacity = theme.customization?.pageBackgroundImage != nil ? max(baseFrosted, 0.5) : baseFrosted
-        let glow = theme.customization?.glowIntensity ?? 0.5
+        // 背景图原样显示（不再自动压一层底色），透明度由「页面背景 → 不透明度」控制。
+        pageScrimOpacity = 0
+        let custom = theme.customization
+        let tint = custom?.surfaceOpacity ?? 0.85
+        let clamped = tint.isFinite ? min(max(tint, 0), 1) : 0.85
+        // 界面效果里的「不透明度」直接就是卡片底色的不透明度：0% 完全透出背景，100% 实色。
+        frostedSurfaceOpacity = clamped
+        let glow = custom?.glowIntensity ?? 0.5
         glowIntensity = glow.isFinite ? min(max(glow, 0), 1) : 0.5
-        let opacity = theme.customization?.surfaceOpacity ?? 0.85
-        surfaceOpacity = opacity.isFinite ? min(max(opacity, 0), 1) : 0.85
+        surfaceOpacity = clamped
+        customCard = custom?.customCard ?? false
+        cardOpacity = min(max(custom?.cardOpacity ?? 0.6, 0), 1)
+        cardBorderOpacity = min(max(custom?.cardBorderOpacity ?? 0.3, 0), 1)
+        cardBorderWidth = CGFloat(min(max(custom?.cardBorderWidth ?? 0.7, 0), 4))
         // Geometry-only edits must not change Classic Monochrome's native colors.
         var colorDefaults = colors
         colorDefaults.cardRadius = nil
@@ -168,8 +164,12 @@ final class ResolvedPaletteCache: @unchecked Sendable {
 struct AppThemeCanvas: View {
     @ThemePalette private var palette
     @Environment(\.appTheme) private var theme
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @StateObject private var imageLoader = ThemeAssetImageLoader()
+
+    private var imageID: String? { theme.customization?.pageBackgroundImage(dark: scheme == .dark) }
+
     var body: some View {
         base
             .overlay {
@@ -177,17 +177,8 @@ struct AppThemeCanvas: View {
                     GeometryReader { geometry in
                         Image(uiImage: image).resizable().scaledToFill()
                             .frame(width: geometry.size.width, height: geometry.size.height).clipped()
-                            .overlay { base.opacity(palette.pageScrimOpacity) }
-                            // 顶部标题区与底部 Tab 栏多压一层主题底色：照片在中间保持清晰，
-                            // 标题、按钮和 Tab 栏不会直接压在照片的五官 / 高光上，和主题色融为一体。
-                            .overlay {
-                                LinearGradient(stops: [
-                                    .init(color: palette.background.opacity(0.55), location: 0),
-                                    .init(color: palette.background.opacity(0), location: 0.22),
-                                    .init(color: palette.background.opacity(0), location: 0.82),
-                                    .init(color: palette.background.opacity(0.4), location: 1)
-                                ], startPoint: .top, endPoint: .bottom)
-                            }
+                            // 照片原样显示，只按「页面背景 → 不透明度」透出主题底色。
+                            .opacity(min(max(theme.customization?.backgroundImageOpacity ?? 1, 0), 1))
                             .overlay {
                                 if theme.customization?.effect == .transparent, palette.glowIntensity > 0 {
                                     RadialGradient(
@@ -202,8 +193,8 @@ struct AppThemeCanvas: View {
                     }
                 }
             }
-            .task(id: theme.customization?.pageBackgroundImage) {
-                await imageLoader.load(theme.customization?.pageBackgroundImage)
+            .task(id: imageID) {
+                await imageLoader.load(imageID)
             }
             .accessibilityHidden(true)
             .allowsHitTesting(false)
@@ -211,14 +202,14 @@ struct AppThemeCanvas: View {
 
     /// 先用解码缓存里的图：新开的页面（每个 Tab、每次 push）第一帧就有照片，不再先闪一下主题底色。
     private var currentImage: UIImage? {
-        guard let id = theme.customization?.pageBackgroundImage else { return nil }
+        guard let id = imageID else { return nil }
         if let image = imageLoader.image, imageLoader.assetID == id { return image }
         return ThemeAssetStore.shared.cachedImage(for: id)
     }
 
     @ViewBuilder private var base: some View {
         if palette.gradient {
-            LinearGradient(colors: [palette.background, palette.backgroundEnd], startPoint: .topLeading, endPoint: .bottomTrailing)
+            LinearGradient(colors: [palette.background, palette.backgroundEnd], startPoint: .top, endPoint: .bottom)
         } else { palette.background }
     }
 }
@@ -330,37 +321,40 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
         self.reduceTransparency = reduceTransparency
     }
 
+    private var effect: ThemeInterfaceEffect { palette.interfaceEffect ?? .frosted }
+
     var body: some View {
         ZStack {
             Color.clear
-            if !isCard || palette.cardBackground {
+            if isCard, palette.customCard {
+                // 「卡片背景」：自定义颜色 + 透明度 + 边框，完全按设置绘制。
                 if reduceTransparency {
                     shape.fill(palette.surface)
                 } else {
-                    switch isCard ? (palette.interfaceEffect ?? .frosted) : .frosted {
+                    shape.fill(palette.surface.opacity(palette.cardOpacity))
+                }
+                if palette.cardBorderOpacity > 0, palette.cardBorderWidth > 0 {
+                    shape.strokeBorder(palette.border.opacity(palette.cardBorderOpacity), lineWidth: palette.cardBorderWidth)
+                }
+            } else if !isCard || palette.cardBackground {
+                if reduceTransparency {
+                    shape.fill(palette.surface)
+                } else {
+                    switch effect {
                     case .transparent:
-                        // Real transparency: the contrast-protected canvas shows through.
-                        shape.fill(Color.clear)
-                        // Subtle radial glow behind the content; brightness stays
-                        // capped so it never reads as a filled background.
+                        // 透明模式：只铺一层按「不透明度」设置的卡片色，背景（照片）直接透出来。
+                        shape.fill(palette.surface.opacity(palette.surfaceOpacity))
                         if palette.glowIntensity > 0 {
-                            shape.fill(
-                                RadialGradient(
-                                    colors: [palette.accent.opacity(0.28 * palette.glowIntensity),
-                                             palette.accent.opacity(0)],
-                                    center: .center,
-                                    startRadius: 0,
-                                    endRadius: 160
-                                )
-                            )
+                            shape.fill(RadialGradient(
+                                colors: [palette.accent.opacity(0.22 * palette.glowIntensity), palette.accent.opacity(0)],
+                                center: .topLeading, startRadius: 0, endRadius: 200))
                         }
                     case .frosted:
                         AppGlassSurface(shape: shape, tint: palette.surface,
                                         tintOpacity: palette.frostedSurfaceOpacity)
                         if glassEnabled {
-                            // 玻璃的「受光面」：左上角一层很淡的白色高光，让卡片有厚度感。
                             shape.fill(LinearGradient(
-                                colors: [Color.white.opacity(scheme == .dark ? 0.07 : 0.22), .clear],
+                                colors: [Color.white.opacity(scheme == .dark ? 0.07 : 0.2), .clear],
                                 startPoint: .topLeading, endPoint: .center))
                             if palette.glowIntensity > 0 {
                                 shape.fill(RadialGradient(
@@ -373,17 +367,12 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                     }
                 }
                 if !isCard || palette.cardBorder {
-                    if glassEnabled, !reduceTransparency,
-                       (isCard ? (palette.interfaceEffect ?? .frosted) : .frosted) == .frosted {
-                        // 玻璃边缘：上亮下暗的渐变描边，比单色细线更像真实玻璃。
-                        // 先画一圈主题边框色（保证浅色主题上也看得到轮廓），再叠上亮下暗的玻璃高光。
-                        shape.strokeBorder(palette.border.opacity(scheme == .dark ? 0.9 : 0.75), lineWidth: 0.75)
-                        shape.strokeBorder(LinearGradient(
-                            colors: [Color.white.opacity(scheme == .dark ? 0.25 : 0.7),
-                                     Color.white.opacity(0)],
-                            startPoint: .top, endPoint: .center), lineWidth: 1)
+                    if glassEnabled, !reduceTransparency, effect == .frosted {
+                        shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.14 : 0.45), lineWidth: 0.6)
+                    } else if effect == .transparent {
+                        shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.12 : 0.35), lineWidth: 0.5)
                     } else {
-                        shape.strokeBorder(palette.border, lineWidth: 0.5)
+                        shape.strokeBorder(palette.border.opacity(0.6), lineWidth: 0.5)
                     }
                 }
             }

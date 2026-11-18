@@ -57,7 +57,7 @@ final class AppThemeStore: ObservableObject {
         var seen = Set<String>()
         let valid = snapshot.themes.filter { theme in
             !theme.isBuiltIn && UUID(uuidString: theme.id) != nil
-                && theme.validationMessage == nil && seen.insert(theme.id).inserted
+                && theme.structuralValidationMessage == nil && seen.insert(theme.id).inserted
         }
         customThemes = Array(valid.prefix(Self.maximumThemes))
         selectedID = themes.contains(where: { $0.id == snapshot.selectedID }) ? snapshot.selectedID : AppTheme.defaultID
@@ -81,6 +81,20 @@ final class AppThemeStore: ObservableObject {
             items.append(value)
         }
         try persist(items, selected: apply ? value.id : selectedID)
+    }
+
+    /// 「外观主题」页即时保存：不做对比度校验，保存后立即应用。
+    func saveLive(_ theme: AppTheme) throws {
+        guard !theme.isBuiltIn, UUID(uuidString: theme.id) != nil else { throw StoreError.builtIn }
+        if let error = theme.structuralValidationMessage { throw StoreError.invalid(error) }
+        if theme == selectedTheme { return }
+        var items = customThemes
+        if let index = items.firstIndex(where: { $0.id == theme.id }) { items[index] = theme }
+        else {
+            guard items.count < Self.maximumThemes else { throw StoreError.limit }
+            items.append(theme)
+        }
+        try persist(items, selected: theme.id)
     }
 
     func apply(id: String) throws {
