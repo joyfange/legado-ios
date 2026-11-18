@@ -266,7 +266,7 @@ private struct BookshelfView: View {
         // 下拉时背景和标题都不动，只有书本身被拉下来，不会露出一截主题色。
         VStack(spacing: 0) {
             ReadingPageHeader(title: "书架", subtitle: selection.isActive ? "已选 \(selection.urls.count) 本" : "阅读，让时间有了形状",
-                              bottomPadding: 14) {
+                              bottomPadding: 0) {
                 if selection.isActive {
                     selectionHeaderButtons
                 } else {
@@ -324,9 +324,12 @@ private struct BookshelfView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 6)
+                // 标题下沿到第一张卡片仍是 20pt，但这段留在滚动区里：卡片阴影完整显示，
+                // 不会在滚动区上沿被切出一道横线（看起来像标题区和内容是两块拼起来的）。
+                .padding(.top, 20)
                 .padding(.bottom, 32)
             }
+            .readingTopScrollEdgeHidden()
         }
         .readingCanvas()
         .overlay(alignment: .trailing) {
@@ -1882,7 +1885,8 @@ private struct ReaderOpeningPlaceholder: View {
     @State private var backgroundImage: UIImage?
 
     private var style: ReaderStylePreset {
-        themeMode == "3" ? .eInk : ReaderStylePreset.resolve(theme)
+        if themeMode == "3" { return .eInk }
+        return ReaderStylePreset.boundToAppTheme(themeMode: themeMode) ?? ReaderStylePreset.resolve(theme)
     }
 
     init() {
@@ -2795,7 +2799,7 @@ private struct SettingsView: View {
         // 标题固定在顶部、只滚下面的设置（与书架 / 发现 / 统计一致，仿 bookon）：
         // 不再铺装饰插画和渐变色带，下拉时背景纹丝不动，不会露出主题色，照片背景也不会被插画盖住。
         VStack(alignment: .leading, spacing: 0) {
-            ReadingPageHeader(title: "我的", subtitle: "按照你的方式阅读", bottomPadding: 14) { }
+            ReadingPageHeader(title: "我的", subtitle: "按照你的方式阅读", bottomPadding: 0) { }
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 24) {
                     profileCard
@@ -2809,9 +2813,11 @@ private struct SettingsView: View {
                     supportSection
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 6)
+                // 名片卡片的阴影留在滚动区内，不在标题下沿被切出硬边。
+                .padding(.top, 20)
                 .padding(.bottom, 32)
             }
+            .readingTopScrollEdgeHidden()
             .accessibilityIdentifier("profile.scroll")
         }
         .readingCanvas()

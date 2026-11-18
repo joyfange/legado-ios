@@ -787,6 +787,7 @@ struct ReaderView: View {
 
     private var resolvedStyle: ReaderStylePreset {
         if themeMode == "3" { return .eInk }
+        if let bound = ReaderStylePreset.boundToAppTheme(themeMode: themeMode) { return bound }
         if theme == ReaderStylePreset.customID {
             _ = (customBackgroundHex, customForegroundHex)
             return ReaderStylePreset.custom()

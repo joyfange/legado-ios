@@ -47,6 +47,31 @@ struct ReaderStylePreset: Identifiable {
         return legadoDefaults.first(where: { $0.id == migratedID }) ?? legadoDefaults[0]
     }
 
+    /// 外观主题「绑定阅读主题」开启时，阅读背景与文字跟随应用主题（亮 / 深色各自一套）；未开启返回 nil。
+    /// 明暗取「显示模式」，跟随系统时读窗口场景的系统外观（不受阅读页自己设置的明暗影响）。
+    @MainActor
+    static func boundToAppTheme(themeMode: String) -> ReaderStylePreset? {
+        let theme = AppThemeStore.shared.selectedTheme
+        guard theme.customization?.bindReaderTheme == true else { return nil }
+        let dark: Bool
+        switch themeMode {
+        case "2": dark = true
+        case "1", "3": dark = false
+        default:
+            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            dark = (scene?.traitCollection.userInterfaceStyle ?? .light) == .dark
+        }
+        let swatch = theme.swatches(for: dark ? .dark : .light)
+        let ink = swatch.resolvedInk(style: theme.backgroundStyle)
+        let background = AppThemeColor.mix(swatch.background, swatch.backgroundEnd, fraction: 0.5)
+        return ReaderStylePreset(
+            id: dark ? "night" : "appTheme",
+            name: "跟随外观",
+            background: UIColor(readerHex: background) ?? (dark ? .black : .white),
+            foreground: UIColor(readerHex: ink.primary) ?? (dark ? .white : .black)
+        )
+    }
+
     static let customID = "custom"
     static let customBackgroundKey = "readerCustomBackgroundHex"
     static let customForegroundKey = "readerCustomForegroundHex"

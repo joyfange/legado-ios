@@ -376,22 +376,12 @@ struct ThemeListRowBackground: View {
                 // 未自定义的主题（系统原样）列表保持实色，和 iOS 原生设置页一致。
                 switch palette.interfaceEffect ?? .opaque {
                 case .transparent:
-                    ZStack {
-                        palette.surface.opacity(palette.surfaceOpacity)
-                        if palette.glowIntensity > 0 {
-                            palette.accent.opacity(0.06 * palette.glowIntensity)
-                        }
-                    }
+                    // 透明模式：纯白（深色为深灰）按不透明度铺底，没有模糊。
+                    ThemeEffectFill.transparentColor(dark: scheme == .dark).opacity(palette.surfaceOpacity)
                 case .frosted:
                     if glassEnabled {
-                        // 和 bookon 的玻璃一致：真实模糊 + 很淡的底色 + 一层受光高光，
-                        // 不再用 70% 以上的实色盖住模糊（那样看起来只是灰色块）。
-                        ZStack {
-                            Rectangle().fill(.ultraThinMaterial)
-                            palette.surface.opacity(palette.frostedSurfaceOpacity)
-                            LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.05 : 0.16), .clear],
-                                           startPoint: .top, endPoint: .bottom)
-                        }
+                        // 毛玻璃：背后内容的磨砂模糊，整体按不透明度淡入；无高光、无亮边。
+                        ThemeFrostedFill(shape: Rectangle(), opacity: palette.frostedSurfaceOpacity)
                     } else {
                         palette.surface
                     }

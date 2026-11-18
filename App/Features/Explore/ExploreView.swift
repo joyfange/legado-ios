@@ -435,7 +435,7 @@ struct ExploreView: View {
     var body: some View {
         // 标题栏固定、只滚内容（仿 bookon）：上滑内容在标题下沿直接裁掉，下拉时背景不动。
         VStack(alignment: .leading, spacing: 0) {
-            ReadingPageHeader(title: "发现", subtitle: "下一本好书，在这里遇见", bottomPadding: 14) {
+            ReadingPageHeader(title: "发现", subtitle: "下一本好书，在这里遇见", bottomPadding: 0) {
                 NavigationLink { SearchView() } label: {
                     ReadingToolbarIcon(systemName: "magnifyingglass")
                 }
@@ -514,9 +514,11 @@ struct ExploreView: View {
                     .accessibilityIdentifier("explore.manageSources")
                 }
                 .padding(.horizontal, 24)
-                .padding(.top, 6)
+                // 标题与内容之间的间距放进滚动区：卡片阴影不会在滚动区上沿被切出横线。
+                .padding(.top, 20)
                 .padding(.bottom, 32)
             }
+            .readingTopScrollEdgeHidden()
         }
         .readingCanvas()
         .navigationBarHidden(true)

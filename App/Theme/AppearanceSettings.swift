@@ -53,6 +53,16 @@ final class AppearanceLiveModel: ObservableObject {
         }
     }
 
+    /// 「主题切换」：改所选配色 / 深色主题设置，并把配色写进亮 / 深色色板。
+    func colorTheme(_ change: (inout ThemeCustomization) -> Void) {
+        edit { theme in
+            var value = theme.customization ?? ThemeCustomization()
+            change(&value)
+            theme.customization = value
+            ThemeColorPreset.apply(value, to: &theme)
+        }
+    }
+
     /// 保存并应用到整个应用。
     func commit() {
         guard dirty else { return }
@@ -179,6 +189,7 @@ struct AppearanceSettingsView: View {
     @State private var importing = false
     @State private var confirmReset = false
     @State private var exportURL: URL?
+    @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
 
     private var settings: ThemeCustomization { model.settings }
 
@@ -260,7 +271,7 @@ struct AppearanceSettingsView: View {
     private var effectTitle: String {
         switch settings.effect {
         case .transparent: return "透明"
-        case .frosted: return "毛玻璃"
+        case .frosted: return glassEnabled ? "毛玻璃" : "系统"
         case .opaque: return "系统"
         }
     }
@@ -663,48 +674,319 @@ struct AppearanceActivityView: UIViewControllerRepresentable {
 
 // MARK: - 主题切换
 
+/// 参考视频：顶部一张卡片放配色色块（每行 4 个：海洋蓝、落日橙、森林绿、薰衣草、玫瑰粉、琥珀金 +「新建」），
+/// 下面是「单独设置深色主题」「绑定阅读主题」两个开关。开启单独设置深色主题后，色块卡片上方出现
+/// 「亮色主题 / 深色主题」分段控件（选择正在设置哪一套），两个开关之间多出「跟随系统」。
 struct AppearanceThemeSwitchPage: View {
     @ObservedObject private var model = AppearanceLiveModel.shared
-    @ObservedObject private var store = AppThemeStore.shared
     @ThemePalette private var palette
     @AppStorage("themeMode") private var themeMode = "0"
+    @State private var editingDark = false
+    @State private var editor: ThemeColorPresetDraft?
+
+    private var settings: ThemeCustomization { model.settings }
+    private var slotIsDark: Bool { settings.separateDarkTheme && editingDark }
+    private var selectedID: String? {
+        slotIsDark ? (settings.darkColorThemeID ?? settings.colorThemeID) : settings.colorThemeID
+    }
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 4)
 
     var body: some View {
         AppearancePage(title: "主题切换") {
             AppearanceGroup {
-                AppearancePickerRow(title: "显示模式",
-                                    options: [("0", "跟随系统"), ("1", "浅色"), ("2", "深色"), ("3", "E-Ink 模式")],
-                                    selection: $themeMode)
-            }
-            AppearanceGroup("内置主题") {
-                ForEach(AppTheme.templates) { theme in row(theme) }
-            }
-            if !store.customThemes.isEmpty {
-                AppearanceGroup("我的主题") {
-                    ForEach(store.customThemes) { theme in row(theme) }
+                if settings.separateDarkTheme {
+                    AppearanceSegmentedCard(options: [(false, "亮色主题"), (true, "深色主题")], selection: Binding(
+                        get: { editingDark },
+                        set: { dark in
+                            editingDark = dark
+                            if !settings.darkThemeFollowsSystem { themeMode = dark ? "2" : "1" }
+                        }
+                    ))
                 }
+                swatchCard
+            }
+            AppearanceGroup {
+                AppearanceToggleRow(title: "单独设置深色主题", isOn: Binding(
+                    get: { settings.separateDarkTheme },
+                    set: { on in
+                        let forced = !settings.darkThemeFollowsSystem
+                        model.colorTheme { value in
+                            value.separateDarkTheme = on
+                            if on, value.darkColorThemeID == nil { value.darkColorThemeID = value.colorThemeID }
+                        }
+                        if on {
+                            if forced { themeMode = editingDark ? "2" : "1" }
+                        } else {
+                            editingDark = false
+                            if forced, themeMode == "1" || themeMode == "2" { themeMode = "0" }
+                        }
+                    }
+                ))
+                if settings.separateDarkTheme {
+                    AppearanceToggleRow(title: "跟随系统", isOn: Binding(
+                        get: { settings.darkThemeFollowsSystem },
+                        set: { on in
+                            model.colorTheme { $0.darkThemeFollowsSystem = on }
+                            themeMode = on ? "0" : (editingDark ? "2" : "1")
+                        }
+                    ))
+                }
+                AppearanceToggleRow(title: "绑定阅读主题", isOn: Binding(
+                    get: { settings.bindReaderTheme },
+                    set: { on in model.colorTheme { $0.bindReaderTheme = on } }
+                ))
+            }
+        }
+        .sheet(item: $editor) { draft in
+            ThemeColorPresetEditor(draft: draft) { preset in
+                save(preset)
+                editor = nil
+            } onCancel: {
+                editor = nil
+            }
+            .environment(\.appTheme, model.draft)
+            .environment(\.themePageScope, .settings)
+        }
+    }
+
+    private var swatchCard: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+            ForEach(ThemeColorPreset.all(settings)) { preset in
+                tile(preset)
+            }
+            Button {
+                editor = ThemeColorPresetDraft(preset: nil)
+            } label: {
+                ThemeColorPresetNewTile()
+            }
+            .buttonStyle(.plain)
+            .disabled((settings.customColorThemes?.count ?? 0) >= ThemeColorPreset.maximumCustom)
+            .accessibilityLabel("新建主题")
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 16)
+        .padding(.bottom, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { ThemeCardSurface(radius: 20) }
+    }
+
+    @ViewBuilder
+    private func tile(_ preset: ThemeColorPreset) -> some View {
+        let selected = selectedID == preset.id
+        let button = Button { select(preset.id) } label: {
+            ThemeColorPresetTile(preset: preset, selected: selected, linked: settings.bindReaderTheme && selected)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(preset.name)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        if preset.isCustom {
+            // 自己新建的配色长按可编辑、删除。
+            button.contextMenu {
+                Button { editor = ThemeColorPresetDraft(preset: preset) } label: {
+                    Label("编辑", systemImage: "pencil")
+                }
+                Button(role: .destructive) { delete(preset.id) } label: {
+                    Label("删除", systemImage: "trash")
+                }
+            }
+        } else {
+            button
+        }
+    }
+
+    private func select(_ id: String) {
+        let dark = slotIsDark
+        model.colorTheme { value in
+            if dark {
+                value.darkColorThemeID = id
+            } else {
+                value.colorThemeID = id
+                if !value.separateDarkTheme { value.darkColorThemeID = nil }
             }
         }
     }
 
-    private func row(_ theme: AppTheme) -> some View {
-        Button { model.switchTheme(to: theme.id) } label: {
-            AppearanceCard {
-                HStack(spacing: 12) {
-                    HStack(spacing: -6) {
-                        Circle().fill(AppThemeColor.color(theme.light.background)).frame(width: 22, height: 22)
-                        Circle().fill(AppThemeColor.color(theme.light.accent)).frame(width: 22, height: 22)
+    private func save(_ preset: ThemeColorPreset) {
+        let dark = slotIsDark
+        model.colorTheme { value in
+            var list = value.customColorThemes ?? []
+            if let index = list.firstIndex(where: { $0.id == preset.id }) {
+                list[index] = preset
+            } else {
+                guard list.count < ThemeColorPreset.maximumCustom else { return }
+                list.append(preset)
+                if dark { value.darkColorThemeID = preset.id } else { value.colorThemeID = preset.id }
+            }
+            value.customColorThemes = list
+        }
+    }
+
+    private func delete(_ id: String) {
+        model.colorTheme { value in
+            let list = (value.customColorThemes ?? []).filter { $0.id != id }
+            value.customColorThemes = list.isEmpty ? nil : list
+            // 删掉正在用的配色：颜色保留当前效果，只是不再标记选中。
+            if value.colorThemeID == id { value.colorThemeID = nil }
+            if value.darkColorThemeID == id { value.darkColorThemeID = nil }
+        }
+    }
+}
+
+/// 一个配色色块：浅色渐变底、强调色圆点 + 三条「文字」线，下面是名称；选中时强调色描边，
+/// 绑定阅读主题时右上角显示链接角标。
+struct ThemeColorPresetTile: View {
+    @ThemePalette private var palette
+    let preset: ThemeColorPreset
+    let selected: Bool
+    var linked = false
+
+    var body: some View {
+        VStack(spacing: 6) {
+            ZStack(alignment: .topTrailing) {
+                ThemeColorPresetPreview(preset: preset)
+                    .overlay {
+                        if selected {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(palette.accent, lineWidth: 2)
+                        }
                     }
-                    .overlay(Capsule().strokeBorder(Color.black.opacity(0.08), lineWidth: 0.5))
-                    Text(theme.name).font(AppFontStyle.body.themed).foregroundStyle(palette.primary)
-                    Spacer()
-                    if store.selectedID == theme.id {
-                        Image(systemName: "checkmark").font(.system(size: 14, weight: .semibold)).foregroundStyle(palette.accent)
+                if linked {
+                    Image(systemName: "link")
+                        .font(.system(size: 7.5, weight: .bold))
+                        .foregroundStyle(Color.white)
+                        .frame(width: 13, height: 13)
+                        .background(Circle().fill(palette.accent))
+                        .padding(4)
+                        .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.easeOut(duration: 0.18), value: linked)
+            Text(preset.name)
+                .font(.system(size: 11))
+                .foregroundStyle(palette.primary)
+                .lineLimit(1)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// 色块里的迷你预览。
+struct ThemeColorPresetPreview: View {
+    let preset: ThemeColorPreset
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 9, style: .continuous)
+            .fill(LinearGradient(colors: [AppThemeColor.color(preset.tileStart), AppThemeColor.color(preset.tileEnd)],
+                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+            .overlay(alignment: .leading) {
+                HStack(spacing: 6) {
+                    Circle().fill(AppThemeColor.color(preset.accent)).frame(width: 10, height: 10)
+                    VStack(alignment: .leading, spacing: 2.6) {
+                        Capsule().fill(Color(white: 0.07)).frame(width: 29, height: 2.6)
+                        Capsule().fill(Color(white: 0.33)).frame(width: 22, height: 2.6)
+                        Capsule().fill(Color(white: 0.55)).frame(width: 14, height: 2.6)
                     }
+                }
+                .padding(.leading, 7)
+            }
+            .frame(height: 39)
+            .frame(maxWidth: .infinity)
+    }
+}
+
+/// 「新建」色块：灰色半透明底 + 强调色「+」。
+struct ThemeColorPresetNewTile: View {
+    @ThemePalette private var palette
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(spacing: 6) {
+            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                .fill(scheme == .dark ? Color.white.opacity(0.16) : Color.black.opacity(0.2))
+                .overlay {
+                    Image(systemName: "plus")
+                        .font(.system(size: 17, weight: .regular))
+                        .foregroundStyle(palette.accent)
+                }
+                .frame(height: 39)
+                .frame(maxWidth: .infinity)
+            Text("新建")
+                .font(.system(size: 11))
+                .foregroundStyle(palette.secondary)
+                .lineLimit(1)
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+/// 新建 / 编辑配色的草稿（sheet 用 Identifiable）。
+struct ThemeColorPresetDraft: Identifiable {
+    let id = UUID()
+    let preset: ThemeColorPreset?
+}
+
+/// 新建 / 编辑自己的配色：名称、强调色、底色，深色版本自动推算。
+struct ThemeColorPresetEditor: View {
+    @ThemePalette private var palette
+    let draft: ThemeColorPresetDraft
+    let onSave: (ThemeColorPreset) -> Void
+    let onCancel: () -> Void
+    @State private var name: String
+    @State private var accent: String
+    @State private var background: String
+
+    init(draft: ThemeColorPresetDraft, onSave: @escaping (ThemeColorPreset) -> Void, onCancel: @escaping () -> Void) {
+        self.draft = draft
+        self.onSave = onSave
+        self.onCancel = onCancel
+        _name = State(initialValue: draft.preset?.name ?? "我的主题")
+        _accent = State(initialValue: draft.preset?.accent ?? "007AFF")
+        _background = State(initialValue: draft.preset?.tileStart ?? "DCEBF7")
+    }
+
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private var preview: ThemeColorPreset {
+        ThemeColorPreset.custom(name: trimmedName.isEmpty ? "我的主题" : String(trimmedName.prefix(20)),
+                                accent: accent, background: background, id: draft.preset?.id)
+    }
+
+    var body: some View {
+        ReadingNavigationStack {
+            AppearancePage(title: draft.preset == nil ? "新建主题" : "编辑主题") {
+                AppearanceGroup {
+                    HStack {
+                        Spacer()
+                        ThemeColorPresetTile(preset: preview, selected: true)
+                            .frame(width: 96)
+                        Spacer()
+                    }
+                    .padding(.vertical, 18)
+                    .background { ThemeCardSurface(radius: 22) }
+                }
+                AppearanceGroup {
+                    AppearanceCard {
+                        HStack(spacing: 12) {
+                            Text("名称").font(AppFontStyle.body.themed).foregroundStyle(palette.primary)
+                            TextField("主题名称", text: $name)
+                                .multilineTextAlignment(.trailing)
+                                .font(AppFontStyle.body.themed)
+                                .foregroundStyle(palette.primary)
+                        }
+                    }
+                    AppearanceColorRow(title: "强调色", hex: accent) { accent = $0 }
+                    AppearanceColorRow(title: "背景色", hex: background) { background = $0 }
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消", action: onCancel)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { onSave(preview) }
+                        .disabled(trimmedName.isEmpty)
                 }
             }
         }
-        .buttonStyle(.plain)
     }
 }
 

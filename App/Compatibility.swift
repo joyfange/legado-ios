@@ -409,6 +409,17 @@ extension View {
         }
     }
 
+    /// 固定标题下面的滚动区：顶部不加系统的滚动边缘效果（iOS 26 会在上沿叠一层模糊 / 提亮），
+    /// 标题区和内容区共用同一张页面背景，中间没有色差或接缝；内容滑到上沿直接裁掉。
+    @ViewBuilder
+    func readingTopScrollEdgeHidden() -> some View {
+        if #available(iOS 26.0, *) {
+            scrollEdgeEffectHidden(true, for: .top)
+        } else {
+            self
+        }
+    }
+
     @ViewBuilder
     func readingTabBarBackground(classic: Bool = true) -> some View {
         // 外观主题「经典底栏」：实色整条底栏；关闭时用系统半透明（iOS 26 为悬浮玻璃）底栏。

@@ -178,6 +178,7 @@ struct ReadingStatisticsView: View {
             .frame(maxWidth: 680)
             .frame(maxWidth: .infinity)
             }
+            .readingTopScrollEdgeHidden()
         }
         .readingCanvas()
         .foregroundStyle(ReadingTheme.ink)

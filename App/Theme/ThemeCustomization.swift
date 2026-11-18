@@ -320,6 +320,13 @@ struct ThemeCustomization: Codable, Equatable {
     var cardImage: String? = nil
     var darkCardImage: String? = nil
     var cardImageMode: ThemeCardImageMode = .fill
+    // 主题切换：所选配色（亮色 / 单独设置的深色）、跟随系统、绑定阅读主题、自建配色
+    var colorThemeID: String? = nil
+    var darkColorThemeID: String? = nil
+    var separateDarkTheme: Bool = false
+    var darkThemeFollowsSystem: Bool = true
+    var bindReaderTheme: Bool = false
+    var customColorThemes: [ThemeColorPreset]? = nil
 
     static let shelfColumnsRange = 2...6
     static let coverWidthRange: ClosedRange<Double> = 60...180
@@ -360,6 +367,8 @@ struct ThemeCustomization: Codable, Equatable {
         case pageBackgrounds, transparentOpacity, frostedOpacity
         case readerPanelFollowsTheme, progressBarFollowsTheme
         case cardImage, darkCardImage, cardImageMode
+        case colorThemeID, darkColorThemeID, separateDarkTheme, darkThemeFollowsSystem
+        case bindReaderTheme, customColorThemes
     }
 
     /// Newly added fields get their defaults; malformed present values still fail.
@@ -409,6 +418,13 @@ struct ThemeCustomization: Codable, Equatable {
         cardImage = try values.decodeIfPresent(String.self, forKey: .cardImage)
         darkCardImage = try values.decodeIfPresent(String.self, forKey: .darkCardImage)
         cardImageMode = (try? values.decodeIfPresent(ThemeCardImageMode.self, forKey: .cardImageMode)) ?? .fill
+        colorThemeID = try? values.decodeIfPresent(String.self, forKey: .colorThemeID)
+        darkColorThemeID = try? values.decodeIfPresent(String.self, forKey: .darkColorThemeID)
+        separateDarkTheme = (try? values.decodeIfPresent(Bool.self, forKey: .separateDarkTheme)) ?? false
+        darkThemeFollowsSystem = (try? values.decodeIfPresent(Bool.self, forKey: .darkThemeFollowsSystem)) ?? true
+        bindReaderTheme = (try? values.decodeIfPresent(Bool.self, forKey: .bindReaderTheme)) ?? false
+        let presets = (try? values.decodeIfPresent([ThemeColorPreset].self, forKey: .customColorThemes)) ?? nil
+        customColorThemes = presets.map { Array($0.filter(\.isValid).prefix(ThemeColorPreset.maximumCustom)) }
     }
 
     /// 当前明暗下实际使用的背景图。
@@ -549,6 +565,96 @@ struct ThemeCustomization: Codable, Equatable {
             }) else { return "标签页图标无效，请重新选择图标或图片。" }
         }
         guard assetIDs.allSatisfy(ThemeAssetStore.isValidID) else { return "主题图片标识无效，请重新导入图片。" }
+        if let presets = customColorThemes {
+            guard presets.count <= ThemeColorPreset.maximumCustom, presets.allSatisfy(\.isValid) else {
+                return "自建主题配色无效。"
+            }
+        }
         return nil
+    }
+}
+
+/// 「主题切换」里的一套配色：海洋蓝、落日橙……以及用户「新建」的配色。
+/// 只决定强调色与亮 / 深色页面底色，其它外观设置（背景图、界面效果、卡片等）保持不变。
+struct ThemeColorPreset: Codable, Equatable, Identifiable, Sendable {
+    var id: String
+    var name: String
+    /// 亮色强调色（色块里的圆点）。
+    var accent: String
+    /// 色块预览的渐变（左上 → 右下），也用来推算亮色页面底色。
+    var tileStart: String
+    var tileEnd: String
+    var darkAccent: String
+    var darkBackground: String
+    var darkBackgroundEnd: String
+    var darkSurface: String
+
+    static let maximumCustom = 24
+    static let customPrefix = "custom."
+
+    var isCustom: Bool { id.hasPrefix(Self.customPrefix) }
+
+    var isValid: Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !id.isEmpty && id.count <= 80 && !trimmed.isEmpty && trimmed.count <= 20
+            && [accent, tileStart, tileEnd, darkAccent, darkBackground, darkBackgroundEnd, darkSurface]
+                .allSatisfy(AppThemeColor.isValid)
+    }
+
+    /// 亮色页面底色：比色块再淡一些，文字始终清楚。
+    var lightBackground: String { AppThemeColor.mix(tileStart, "FFFFFF", fraction: 0.35) }
+    var lightBackgroundEnd: String { AppThemeColor.mix(tileEnd, "FFFFFF", fraction: 0.6) }
+
+    /// 用户新建：只选名称、强调色和底色，深色版本自动推算。
+    static func custom(name: String, accent: String, background: String, id: String? = nil) -> ThemeColorPreset {
+        ThemeColorPreset(
+            id: id ?? customPrefix + UUID().uuidString.lowercased(),
+            name: name,
+            accent: accent,
+            tileStart: background,
+            tileEnd: AppThemeColor.mix(background, accent, fraction: 0.08),
+            darkAccent: AppThemeColor.mix(accent, "FFFFFF", fraction: 0.2),
+            darkBackground: AppThemeColor.mix("0E0E10", accent, fraction: 0.10),
+            darkBackgroundEnd: AppThemeColor.mix("0E0E10", accent, fraction: 0.18),
+            darkSurface: AppThemeColor.mix("1C1C1E", accent, fraction: 0.14))
+    }
+
+    static let builtIns: [ThemeColorPreset] = [
+        ThemeColorPreset(id: "ocean", name: "海洋蓝", accent: "007AFF", tileStart: "CBE5F4", tileEnd: "CAEEEC",
+                         darkAccent: "3D9BFF", darkBackground: "0C1724", darkBackgroundEnd: "112434", darkSurface: "1A2C3E"),
+        ThemeColorPreset(id: "sunset", name: "落日橙", accent: "FF5F2F", tileStart: "FDDDCF", tileEnd: "FED2D8",
+                         darkAccent: "FF8257", darkBackground: "22130E", darkBackgroundEnd: "2E1A17", darkSurface: "3B241E"),
+        ThemeColorPreset(id: "forest", name: "森林绿", accent: "2CBC4D", tileStart: "D6EFD4", tileEnd: "DDEED1",
+                         darkAccent: "4CD46B", darkBackground: "0D1E13", darkBackgroundEnd: "142A1A", darkSurface: "1E3525"),
+        ThemeColorPreset(id: "lavender", name: "薰衣草", accent: "A248D9", tileStart: "E6D9F9", tileEnd: "EBD9FA",
+                         darkAccent: "BF7DEB", darkBackground: "1A1324", darkBackgroundEnd: "251A33", darkSurface: "312542"),
+        ThemeColorPreset(id: "rose", name: "玫瑰粉", accent: "FF2548", tileStart: "FCDDE7", tileEnd: "F9DEEF",
+                         darkAccent: "FF5C78", darkBackground: "241016", darkBackgroundEnd: "321820", darkSurface: "40222C"),
+        ThemeColorPreset(id: "amber", name: "琥珀金", accent: "FB8800", tileStart: "FAEED0", tileEnd: "F6E9D3",
+                         darkAccent: "FFA733", darkBackground: "221A0B", darkBackgroundEnd: "2E2311", darkSurface: "3C2F19")
+    ]
+
+    static func all(_ custom: ThemeCustomization) -> [ThemeColorPreset] {
+        builtIns + (custom.customColorThemes ?? [])
+    }
+
+    static func find(_ id: String?, in custom: ThemeCustomization) -> ThemeColorPreset? {
+        guard let id else { return nil }
+        return all(custom).first { $0.id == id }
+    }
+
+    /// 把「主题切换」里选中的配色写进主题的亮 / 深色色板（其它颜色设置不动）。
+    static func apply(_ custom: ThemeCustomization, to theme: inout AppTheme) {
+        guard let light = find(custom.colorThemeID, in: custom) else { return }
+        let dark = custom.separateDarkTheme ? (find(custom.darkColorThemeID, in: custom) ?? light) : light
+        theme.backgroundStyle = .gradient
+        theme.light.background = light.lightBackground
+        theme.light.backgroundEnd = light.lightBackgroundEnd
+        theme.light.surface = "FFFFFF"
+        theme.light.accent = light.accent
+        theme.dark.background = dark.darkBackground
+        theme.dark.backgroundEnd = dark.darkBackgroundEnd
+        theme.dark.surface = dark.darkSurface
+        theme.dark.accent = dark.darkAccent
     }
 }

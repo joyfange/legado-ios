@@ -263,12 +263,10 @@ struct AppGlassSurface<S: InsettableShape>: View {
                 // 回到 App 时就看到「由暗转亮」。后台时改画接近玻璃观感的半透明底，截图和实际一致。
                 shape.fill(tint.opacity(min(0.92, tintOpacity + 0.5)))
                     .overlay { shape.fill(Color.white.opacity(0.18)) }
-            } else if #available(iOS 26.0, *) {
-                Color.clear.glassEffect(.regular.tint(tint.opacity(tintOpacity)), in: shape)
             } else {
+                // 毛玻璃（磨砂模糊 + 淡淡底色），不用 iOS 26 的 Liquid Glass，没有高光和亮边。
                 shape.fill(.ultraThinMaterial)
                     .overlay { shape.fill(tint.opacity(tintOpacity)) }
-                    .overlay { shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5) }
             }
         }
         // 作为按钮背景时整块都能点（之前不参与点击，卡片空白处点了没反应，比如「管理书源」）。
@@ -368,40 +366,22 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                 } else {
                     switch effect {
                     case .transparent:
-                        // 透明模式：只铺一层按「不透明度」设置的卡片色，背景（照片）直接透出来。
-                        shape.fill(palette.surface.opacity(palette.surfaceOpacity))
-                        if palette.glowIntensity > 0, palette.surfaceOpacity > 0 {
-                            shape.fill(RadialGradient(
-                                colors: [palette.accent.opacity(0.22 * palette.glowIntensity), palette.accent.opacity(0)],
-                                center: .topLeading, startRadius: 0, endRadius: 200))
-                        }
+                        // 透明模式：纯白（深色模式为深灰）按「不透明度」铺底，没有模糊；0% 完全没有卡片。
+                        shape.fill(ThemeEffectFill.transparentColor(dark: scheme == .dark)
+                            .opacity(palette.surfaceOpacity))
                     case .frosted:
-                        AppGlassSurface(shape: shape, tint: palette.surface,
-                                        tintOpacity: palette.frostedSurfaceOpacity)
                         if glassEnabled {
-                            shape.fill(LinearGradient(
-                                colors: [Color.white.opacity(scheme == .dark ? 0.07 : 0.2), .clear],
-                                startPoint: .topLeading, endPoint: .center))
-                            if palette.glowIntensity > 0 {
-                                shape.fill(RadialGradient(
-                                    colors: [palette.accent.opacity(0.12 * palette.glowIntensity), .clear],
-                                    center: .topLeading, startRadius: 0, endRadius: 220))
-                            }
+                            ThemeFrostedFill(shape: shape, opacity: palette.frostedSurfaceOpacity)
+                        } else {
+                            shape.fill(palette.surface)
                         }
                     case .opaque:
                         shape.fill(palette.surface)
                     }
                 }
                 if !isCard || palette.cardBorder {
-                    if glassEnabled, !reduceTransparency, effect == .frosted {
-                        shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.14 : 0.45), lineWidth: 0.6)
-                    } else if effect == .transparent {
-                        // 透明模式：不透明度为 0 时完全没有卡片（连边线也不画），和参考一致。
-                        if palette.surfaceOpacity > 0 {
-                            shape.strokeBorder(Color.white.opacity((scheme == .dark ? 0.12 : 0.35) * min(1, palette.surfaceOpacity * 4)),
-                                               lineWidth: 0.5)
-                        }
-                    } else {
+                    // 毛玻璃、透明模式都不画亮边（参考应用卡片没有描边）；只有实色卡片保留细分隔线。
+                    if reduceTransparency || effect == .opaque || (effect == .frosted && !glassEnabled) {
                         shape.strokeBorder(palette.border.opacity(0.6), lineWidth: 0.5)
                     }
                 }
@@ -410,6 +390,42 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
         // 整块参与点击：放在按钮 / 链接背后时，卡片空白处也能点中。
         .contentShape(shape)
         .accessibilityHidden(true)
+    }
+}
+
+/// 界面效果的两种卡片底。
+enum ThemeEffectFill {
+    /// 透明模式的卡片色：亮色纯白，深色接近黑的深灰。
+    static func transparentColor(dark: Bool) -> Color {
+        dark ? Color(white: 0.11) : Color.white
+    }
+}
+
+/// 毛玻璃：对卡片背后的内容做强高斯模糊（系统磨砂材质，柔和、偏奶白），整体按「不透明度」淡入：
+/// 100% 时是完整的磨砂卡片，10% 时几乎直接透出背景、只带一点朦胧。没有 Liquid Glass 高光、亮边。
+struct ThemeFrostedFill<S: Shape>: View {
+    let shape: S
+    let opacity: Double
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.scenePhase) private var scenePhase
+
+    init(shape: S, opacity: Double) {
+        self.shape = shape
+        self.opacity = opacity
+    }
+
+    var body: some View {
+        let amount = min(max(opacity.isFinite ? opacity : 0, 0), 1)
+        Group {
+            if scenePhase == .background {
+                // 多任务截图拍不到实时模糊：后台时画接近磨砂观感的半透明底，回到 App 时不会由暗转亮。
+                shape.fill(scheme == .dark ? Color(white: 0.16).opacity(0.8) : Color(white: 0.97).opacity(0.78))
+            } else {
+                shape.fill(.ultraThinMaterial)
+                    .overlay { shape.fill(Color.white.opacity(scheme == .dark ? 0.02 : 0.12)) }
+            }
+        }
+        .opacity(amount)
     }
 }
 
