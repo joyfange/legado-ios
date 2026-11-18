@@ -365,3 +365,15 @@ struct AppThemeRoot: ViewModifier {
         content.modifier(MonochromeAppStyle()).environment(\.appTheme, store.selectedTheme)
     }
 }
+
+/// 主题卡片底：圆角跟随「编辑主题」里的卡片圆角（未设置时用各处原来的圆角），
+/// 材质跟随卡片效果（玻璃 / 透明 / 不透明）、「显示卡片背景」与卡片边框开关。
+struct ThemeCardSurface: View {
+    @ThemePalette private var palette
+    var radius: CGFloat
+
+    var body: some View {
+        ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: radius), style: .continuous),
+                     isCard: true)
+    }
+}

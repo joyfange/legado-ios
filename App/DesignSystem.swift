@@ -255,12 +255,12 @@ struct ReadingPinnedTopBar<Actions: View>: ViewModifier {
                             .mask(alignment: .top) {
                                 LinearGradient(stops: [
                                     .init(color: .black, location: 0),
-                                    .init(color: .black, location: height / (height + 18)),
+                                    .init(color: .black, location: height / (height + 4)),
                                     .init(color: .clear, location: 1)
                                 ], startPoint: .top, endPoint: .bottom)
-                                .frame(height: height + 18)
+                                .frame(height: height + 4)
                             }
-                            .frame(height: height + 18, alignment: .top)
+                            .frame(height: height + 4, alignment: .top)
                             .clipped()
                             .allowsHitTesting(false)
                         HStack(spacing: 10) {
@@ -301,7 +301,10 @@ struct ReadingToolbarIcon: View {
             .font(AppFontStyle.system(size: 19, weight: .regular).themed)
             .foregroundStyle(ReadingTheme.accent)
             .frame(width: 44, height: 44)
-            .background(ReadingTheme.groupedCanvas, in: Circle())
+            // 玻璃圆钮（跟随外观主题的玻璃/实色/透明设置），和 bookon 右上角按钮一致。
+            .background { ThemeSurface(shape: Circle()) }
+            .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
+            .contentShape(Circle())
             .accessibilityHidden(true)
     }
 }

@@ -7,12 +7,9 @@ struct SettingsGlassSurface: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     func body(content: Content) -> some View {
         content
-            .appGlass(in: RoundedRectangle(cornerRadius: palette.cornerRadius(default: AppLayout.radiusCard), style: .continuous), tint: palette.surface)
-            .overlay {
-                RoundedRectangle(cornerRadius: palette.cornerRadius(default: AppLayout.radiusCard), style: .continuous)
-                    .strokeBorder(.white.opacity(scheme == .dark ? 0.12 : 0.42), lineWidth: 0.5)
-                    .allowsHitTesting(false).accessibilityHidden(true)
-            }
+            // 设置行与书架、发现页卡片同一套主题卡片底：玻璃 / 透明 / 不透明、卡片背景、
+            // 边框、圆角、背景透明度都跟随「外观主题」（之前固定玻璃 10% 底，主题里这些开关对它不起作用）。
+            .background { ThemeCardSurface(radius: AppLayout.radiusCard) }
             .shadow(color: .black.opacity(scheme == .dark ? 0.09 : 0.035), radius: 4, x: 0, y: 2)
     }
 }

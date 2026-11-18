@@ -508,8 +508,7 @@ private struct BookshelfView: View {
                 .foregroundStyle(sortAscending ? Color.secondary.opacity(0.55) : Color.primary)
         }
         .frame(width: 38, height: 30)
-        .appGlass(in: Capsule(), tint: ReadingTheme.surface, tintOpacity: 0.6)
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+        .background { ThemeSurface(shape: Capsule()) }
         .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
         .contentShape(Capsule())
     }
@@ -540,8 +539,7 @@ private struct BookshelfView: View {
                 .foregroundStyle(.secondary)
                 .rotationEffect(.degrees(shelfBarExpanded ? 180 : 0))
                 .frame(width: 30, height: 30)
-                .appGlass(in: Circle(), tint: ReadingTheme.surface, tintOpacity: 0.6)
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+                .background { ThemeSurface(shape: Circle()) }
                 .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
                 .contentShape(Circle())
         }
@@ -567,7 +565,7 @@ private struct BookshelfView: View {
     }
 
     private func shelfChipLabel(_ group: BookGroup, selected: Bool, compact: Bool) -> some View {
-        let fill: Color = selected ? .clear : (compact ? Color.secondary.opacity(0.08) : ReadingTheme.surface)
+        let fill: Color = selected || !compact ? .clear : Color.secondary.opacity(0.08)
         return HStack(spacing: 3) {
             Text(group.groupName)
                 .font(AppFontStyle.system(size: compact ? 12 : 13, weight: selected ? .semibold : .regular).themed)
@@ -580,8 +578,14 @@ private struct BookshelfView: View {
         .padding(.horizontal, compact ? 10 : 12)
         .frame(height: compact ? 26 : 30)
         .background(fill, in: Capsule())
-        .background(selected ? ReadingTheme.accentFill : Color.clear, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(selected || compact ? 0 : 0.06), lineWidth: 0.5))
+        .background {
+            // 未选中的胶囊走主题玻璃（与右上角按钮同一套材质），选中的用强调色实底。
+            if selected {
+                Capsule().fill(ReadingTheme.accentFill)
+            } else if !compact {
+                ThemeSurface(shape: Capsule())
+            }
+        }
         .contentShape(Capsule())
     }
 
@@ -607,8 +611,7 @@ private struct BookshelfView: View {
         }
         .padding(10)
         .frame(maxWidth: 320, alignment: .leading)
-        .appGlass(in: RoundedRectangle(cornerRadius: 16, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 0.5))
+        .background { ThemeSurface(shape: RoundedRectangle(cornerRadius: 16, style: .continuous)) }
         .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
     }
 
@@ -624,7 +627,7 @@ private struct BookshelfView: View {
             }
             .padding(.horizontal, 10)
             .frame(height: 32)
-            .background(Color.secondary.opacity(0.08), in: Capsule())
+            .background { ThemeSurface(shape: Capsule()) }
             Button {
                 newShelfName = ""
                 withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = true }
@@ -645,7 +648,7 @@ private struct BookshelfView: View {
                     .font(AppFontStyle.system(size: 13, weight: .medium).themed)
                     .foregroundStyle(.secondary)
                     .frame(width: 30, height: 30)
-                    .background(Color.secondary.opacity(0.08), in: Circle())
+                    .background { ThemeSurface(shape: Circle()) }
             }
             .buttonStyle(.plain)
             .accessibilityLabel("管理书架")
@@ -685,7 +688,7 @@ private struct BookshelfView: View {
             }
             .padding(20)
             .frame(maxWidth: 300)
-            .appGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
+            .background { ThemeSurface(shape: RoundedRectangle(cornerRadius: 22, style: .continuous)) }
             .shadow(color: .black.opacity(0.18), radius: 20, y: 8)
         }
     }
@@ -724,7 +727,7 @@ private struct BookshelfView: View {
             }
         }
         .padding(3)
-        .background(Color.secondary.opacity(0.10), in: Capsule())
+        .background { ThemeSurface(shape: Capsule()) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("bookshelf.layoutSwitcher")
     }
@@ -930,7 +933,7 @@ private struct BookshelfView: View {
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 14)
                 .frame(height: 36)
-                .background(Color.secondary.opacity(0.12), in: Capsule())
+                .background { ThemeSurface(shape: Capsule()) }
         }
         .buttonStyle(.plain)
     }
@@ -1324,7 +1327,7 @@ private struct BookshelfFolderRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, compact ? 9 : 10)
         .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
-        .appGlass(in: RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
+        .background { ThemeCardSurface(radius: BookshelfRow.cornerRadius) }
         .contentShape(RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel("文件夹「\(folder.name)」，\(books.count) 本书")
@@ -1383,7 +1386,7 @@ private struct ContinueReadingCard: View {
             .background(ReadingTheme.accentFill, in: Capsule())
         }
         .padding(12)
-        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14))
+        .background { ThemeCardSurface(radius: 14) }
     }
 }
 
@@ -1944,7 +1947,7 @@ private struct BookshelfRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, compact ? 9 : 10)
         .frame(maxWidth: .infinity, minHeight: compact ? 80 : 104, alignment: .leading)
-        .appGlass(in: RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous), tint: ReadingTheme.surface, tintOpacity: 0.6)
+        .background { ThemeCardSurface(radius: Self.cornerRadius) }
         .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityValue(book.lastCheckCount > 0 ? "有 \(book.lastCheckCount) 章更新" : "")

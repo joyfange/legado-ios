@@ -455,7 +455,7 @@ struct ExploreView: View {
                     }
                     .padding(22)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 20))
+                    .background { ThemeCardSurface(radius: 20) }
 
                     HStack(alignment: .firstTextBaseline) {
                         Text("分类与榜单").font(AppFontStyle.title3.bold().themed)
@@ -473,7 +473,8 @@ struct ExploreView: View {
                                 .readingProminentButtonStyle()
                         }
                     } else {
-                        LazyVStack(spacing: 0) {
+                        // 每个书源一张玻璃卡片（仿 bookon 发现页），跟随外观主题的卡片材质、圆角与边框。
+                        LazyVStack(spacing: 10) {
                             ForEach(sources) { source in
                                 NavigationLink { ExploreLazyView { ExploreSourceView(source: source) } } label: {
                                     HStack(spacing: 12) {
@@ -482,14 +483,12 @@ struct ExploreView: View {
                                         Image(systemName: "chevron.right")
                                             .font(AppFontStyle.caption.themed).foregroundStyle(.tertiary)
                                     }
+                                    .padding(.horizontal, 12)
                                     .padding(.vertical, 8)
-                                    .contentShape(Rectangle())
+                                    .background { ThemeCardSurface(radius: 18) }
+                                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
-                                if source.id != sources.last?.id {
-                                    Rectangle().fill(ReadingTheme.separator).frame(height: 0.5)
-                                        .padding(.leading, 58)
-                                }
                             }
                         }
                     }
@@ -507,7 +506,7 @@ struct ExploreView: View {
                         }
                         .foregroundStyle(ReadingTheme.ink)
                         .padding(18)
-                        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 18))
+                        .background { ThemeCardSurface(radius: 18) }
                     }
                     .buttonStyle(.plain)
                 }
@@ -533,7 +532,7 @@ private struct ExploreSourceRow: View {
                 .font(AppFontStyle.system(size: 20).themed)
                 .foregroundStyle(ReadingTheme.accent)
                 .frame(width: 44, height: 48)
-                .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12))
+                .background { ThemeSurface(shape: RoundedRectangle(cornerRadius: 12, style: .continuous)) }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(source.bookSourceName)
@@ -811,8 +810,7 @@ private struct ExploreControlBar: View {
                         .padding(.horizontal, 12)
                         .frame(height: 30)
                         .foregroundStyle(index == 0 ? ReadingTheme.onAccent : ReadingTheme.ink)
-                        .background(index == 0 ? ReadingTheme.accentFill : ReadingTheme.groupedCanvas, in: Capsule())
-                        .overlay(Capsule().strokeBorder(ReadingTheme.separator.opacity(index == 0 ? 0 : 1), lineWidth: 0.5))
+                        .background { if index == 0 { Capsule().fill(ReadingTheme.accentFill) } else { ThemeSurface(shape: Capsule()) } }
                         .contentShape(Capsule())
                     }
                     .disabled(model.applyingControl != nil)
@@ -842,8 +840,7 @@ private struct ExploreKindChips: View {
                                 .padding(.horizontal, 14)
                                 .frame(minHeight: 34)
                                 .foregroundStyle(on ? ReadingTheme.onAccent : ReadingTheme.ink)
-                                .background(on ? ReadingTheme.accentFill : ReadingTheme.groupedCanvas, in: Capsule())
-                                .overlay(Capsule().strokeBorder(ReadingTheme.separator.opacity(on ? 0 : 1), lineWidth: 0.5))
+                                .background { if on { Capsule().fill(ReadingTheme.accentFill) } else { ThemeSurface(shape: Capsule()) } }
                                 .contentShape(Capsule())
                         }
                         .buttonStyle(.plain)
