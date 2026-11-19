@@ -879,14 +879,6 @@ struct ReaderView: View {
         .primary
     }
 
-    @ViewBuilder private var readerChromeBackground: some View {
-        if resolvedStyle.id == "night" {
-            Color(uiColor: .secondarySystemBackground)
-        } else {
-            Color(uiColor: .systemBackground)
-        }
-    }
-
     private var chapterProgress: Double {
         let chapter = max(model.readableChapterCount, 1)
         let readable = model.readableNumber(at: model.currentIndex)
@@ -1402,18 +1394,6 @@ struct ReaderView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
-    }
-
-    private var readerBrightnessBinding: Binding<Double> {
-        Binding(
-            get: { readerBrightness },
-            set: { value in
-                followsSystemBrightness = false
-                readerBrightness = value
-                storedReaderBrightness = value
-                UIScreen.main.brightness = CGFloat(value)
-            }
-        )
     }
 
     private func toggleNightTheme() {
@@ -1935,32 +1915,6 @@ struct ReaderView: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
-    }
-
-    private var stylePreviewCard: some View {
-        ReaderStylePreviewCard(
-            background: resolvedStyle.background,
-            foreground: resolvedStyle.foreground,
-            backgroundImage: activeBackgroundImage,
-            fontSize: fontSize,
-            fontPath: fontPath,
-            fontWeight: fontWeight,
-            letterSpacing: letterSpacing,
-            lineSpacing: lineSpacing,
-            paragraphSpacing: paragraphSpacing,
-            paragraphIndent: paragraphIndent,
-            paddingLeft: paddingLeft,
-            paddingRight: paddingRight,
-            titleMode: titleMode,
-            titleSize: titleSize,
-            titleColor: titleColorHex.isEmpty ? nil : UIColor(readerHex: titleColorHex),
-            titleBold: titleBold,
-            footerLeft: ReaderStylePreviewCard.sampleTitle,
-            footerRight: "1/8  0.9%",
-            footerPaddingLeft: footerPaddingLeft,
-            footerPaddingRight: footerPaddingRight,
-            showsFooter: footerVisible
-        )
     }
 
     /// 执行书源回调脚本（书评、章评、作家说、作品功能），拿到网址后半屏打开。

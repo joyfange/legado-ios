@@ -1128,6 +1128,22 @@ struct AppearanceTabBarPage: View {
                     }
                 }
             }
+            // iOS 26 新版底栏：右侧独立的搜索圆钮、下滑收起。
+            AppearanceGroup("搜索按钮") {
+                AppearanceToggleRow(title: "显示搜索按钮", isOn: Binding(
+                    get: { model.settings.showsSearchTab },
+                    set: { on in model.custom { $0.showsSearchTab = on } }
+                ))
+                AppearanceToggleRow(title: "下滑时收起底栏", isOn: Binding(
+                    get: { model.settings.tabBarMinimizesOnScroll },
+                    set: { on in model.custom { $0.tabBarMinimizesOnScroll = on } }
+                ))
+                if model.settings.showsSearchTab {
+                    ForEach(ThemeTabIconState.allCases) { state in
+                        iconRow(.search, state: state)
+                    }
+                }
+            }
         }
     }
 

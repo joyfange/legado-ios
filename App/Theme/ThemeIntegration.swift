@@ -11,7 +11,8 @@ import UniformTypeIdentifiers
 
 /// 底栏的四个标签。rawValue 只作标识；tabIcons 用 key 保存每个标签的自定义图标。
 enum LibraryTab: Int, CaseIterable {
-    case shelf = 0, discover = 1, statistics = 2, profile = 3
+    /// search：iOS 26 底栏右侧独立的搜索圆钮（不在 displayOrder 里，外观主题「Tab 栏」单独设置）。
+    case shelf = 0, discover = 1, statistics = 2, profile = 3, search = 4
 
     static let displayOrder: [LibraryTab] = [.shelf, .discover, .statistics, .profile]
 
@@ -21,6 +22,7 @@ enum LibraryTab: Int, CaseIterable {
         case .discover: return "发现"
         case .statistics: return "统计"
         case .profile: return "我的"
+        case .search: return "搜索"
         }
     }
 
@@ -30,6 +32,7 @@ enum LibraryTab: Int, CaseIterable {
         case .discover: return "safari"
         case .statistics: return "chart.bar"
         case .profile: return "person.crop.circle"
+        case .search: return "magnifyingglass"
         }
     }
 
@@ -39,40 +42,8 @@ enum LibraryTab: Int, CaseIterable {
         case .discover: return "discover"
         case .statistics: return "statistics"
         case .profile: return "profile"
+        case .search: return "search"
         }
-    }
-}
-
-/// 主题编辑器里的底栏示意（主界面使用系统底栏，这里只用于预览显示方式与自定义图标）。
-struct LibraryDock: View {
-    @ThemePalette private var palette
-    @Environment(\.appTheme) private var theme
-    @Binding var selection: LibraryTab
-    private var style: ThemeTabStyle { theme.customization?.tabStyle ?? .iconsAndText }
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(LibraryTab.displayOrder, id: \.rawValue) { tab in
-                Button { selection = tab } label: {
-                    VStack(spacing: 3) {
-                        if style != .text {
-                            ThemeTabIconImage(tab: tab, theme: theme, size: 20)
-                                .frame(width: 24, height: 22)
-                        }
-                        if style != .icons {
-                            Text(tab.title).appFont(.system(size: style == .text ? 14 : 10, weight: .medium))
-                        }
-                    }
-                    .foregroundStyle(selection == tab ? palette.accent : palette.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(selection == tab ? palette.selection : Color.clear, in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(5)
-        .background { ThemeSurface(shape: Capsule()) }
-        .padding(.horizontal, 16)
     }
 }
 
@@ -172,7 +143,29 @@ final class ReadingFontManager: ObservableObject {
     let selectedPostScriptName = ""
     var selectedDisplayName: String { "系统默认" }
 
+    /// 字体管理里删除过的预设字体（系统字体删不掉，只是不再出现在列表里）。
+    @Published private(set) var hasHiddenBuiltIns = false
+    private static let hiddenKey = "fonts.hiddenBuiltIn"
+    private static var hiddenBuiltInIDs: [String] {
+        UserDefaults.standard.stringArray(forKey: hiddenKey) ?? []
+    }
+
     private init() { reload() }
+
+    /// 从列表里删除一个预设字体。
+    func hideBuiltIn(_ id: String) {
+        var ids = Self.hiddenBuiltInIDs
+        guard !ids.contains(id) else { return }
+        ids.append(id)
+        UserDefaults.standard.set(ids, forKey: Self.hiddenKey)
+        reload()
+    }
+
+    /// 恢复所有删除过的预设字体。
+    func restoreBuiltIns() {
+        UserDefaults.standard.removeObject(forKey: Self.hiddenKey)
+        reload()
+    }
 
     func reload() {
         let candidates: [(String, String)] = [
@@ -183,7 +176,10 @@ final class ReadingFontManager: ObservableObject {
             ("Georgia", "Georgia"),
             ("Avenir-Book", "Avenir")
         ]
-        builtInFonts = candidates.filter { UIFont(name: $0.0, size: 17) != nil }
+        let available = candidates.filter { UIFont(name: $0.0, size: 17) != nil }
+        let hidden = Set(Self.hiddenBuiltInIDs)
+        hasHiddenBuiltIns = available.contains { hidden.contains($0.0) }
+        builtInFonts = available.filter { !hidden.contains($0.0) }
             .map { ReadingFontChoice(id: $0.0, name: $0.1) }
         var families: [ReadingImportedFontFamily] = []
         let directory = ReaderFontStore.directory
@@ -357,6 +353,31 @@ struct ThemeAmbientGlow: View {
     }
 }
 
+enum ReadingGlassRowMetrics {
+    /// 「系统」玻璃下相邻两张行卡片之间的间距。
+    static let gap: CGFloat = 8
+    /// 行卡片圆角（与「我的」入口卡片相近）。
+    static let radius: CGFloat = 16
+}
+
+/// 列表行底 + 分隔线：「系统」玻璃时行是独立卡片，不画分隔线；其它效果保持系统分隔线。
+struct ReadingRowBackgroundModifier: ViewModifier {
+    @ThemePalette private var palette
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
+
+    private var separatedCards: Bool {
+        glassEnabled && !reduceTransparency && !palette.customCard && palette.cardBackground
+            && (palette.interfaceEffect ?? .opaque) == .opaque
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .listRowBackground(ThemeListRowBackground())
+            .listRowSeparator(separatedCards ? .hidden : .automatic)
+    }
+}
+
 /// 列表（List / Form）每一行的底：跟随主题的「界面效果」「卡片背景」和全局「玻璃模式」。
 /// 透明：直接透出页面背景；玻璃：毛玻璃 + 主题卡片色；不透明或关闭玻璃模式：主题卡片实色。
 struct ThemeListRowBackground: View {
@@ -387,9 +408,13 @@ struct ThemeListRowBackground: View {
                         palette.surface
                     }
                 case .opaque:
-                    // 「系统」（透明模式、毛玻璃都没开）：恢复第二轮之前的默认玻璃行底；玻璃总开关关闭时仍是实色。
+                    // 「系统」（透明模式、毛玻璃都没开）：每一行是一张独立的圆角玻璃卡片（与「我的」入口卡片同款），
+                    // 行与行之间留出间距、不再连成一整块；分隔线由 `readingRowBackground` 一并隐藏。
+                    // 玻璃总开关关闭时仍是实色。
                     if glassEnabled {
-                        ThemeSystemGlassRowFill(palette: palette)
+                        ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: ReadingGlassRowMetrics.radius),
+                                                             style: .continuous), isCard: true)
+                            .padding(.vertical, ReadingGlassRowMetrics.gap / 2)
                     } else {
                         palette.surface
                     }
@@ -420,8 +445,9 @@ extension View {
     }
 
     /// 让这一组列表行使用主题卡片底（界面效果、卡片背景、玻璃模式都会生效）。
+    /// 「系统」玻璃下每行是独立的圆角玻璃卡片，行间分隔线随之隐藏。
     func readingRowBackground() -> some View {
-        listRowBackground(ThemeListRowBackground())
+        modifier(ReadingRowBackgroundModifier())
     }
 
     /// 页面顶部常驻的搜索框，代替系统搜索栏（系统搜索栏在部分系统上会在左上角留下一个搜索图标）。
@@ -548,15 +574,17 @@ struct AppThemeShell<Content: View>: View {
     @ObservedObject private var store = AppThemeStore.shared
     @ObservedObject private var presenter = AppearanceHubPresenter.shared
     @AppStorage("themeMode") private var themeMode = "0"
-    let content: Content
+    /// 每次主题刷新都重新构造根视图：根视图的初始值（如当前所在的标签）在构造时读取，
+    /// 只构造一次的话，刷新后会回到最初的标签（例如在「我的」里换界面字体后跳回书架）。
+    let content: () -> Content
 
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
+    init(@ViewBuilder content: @escaping () -> Content) {
+        self.content = content
     }
 
     var body: some View {
         ZStack {
-            content
+            content()
                 .id(store.revision)
         }
         // 启动图要读到所选主题，放在 AppThemeRoot 之内。
@@ -574,6 +602,12 @@ struct AppThemeShell<Content: View>: View {
 }
 
 // MARK: - 字体管理（「我的」→ 字体管理）
+
+/// 换界面字体会整体刷新应用：刷新后回到「我的」并重新打开字体管理（停在原来的分段）。
+@MainActor
+enum FontManagementRestore {
+    static var pendingPart: FontManagementView.Part?
+}
 
 /// 字体管理：导入的字体文件（.ttf / .otf / .ttc）放在同一个字体库里，分两部分使用——
 /// 「书籍字体」决定阅读正文的字体（与阅读设置里的字体是同一个设置），
@@ -604,9 +638,14 @@ struct FontManagementView: View {
     @State private var importing = false
     @State private var message: String?
     @State private var pendingDelete: String?
+    @State private var pendingPreset: Option?
     @Namespace private var segmentAnimation
 
     private static let sample = "永和九年，岁在癸丑 Aa 123"
+
+    init(initialPart: Part = .book) {
+        _part = State(initialValue: initialPart)
+    }
 
     private var importedOptions: [Option] {
         fonts.importedFonts.compactMap { family in
@@ -670,6 +709,7 @@ struct FontManagementView: View {
                     ForEach(options) { option in
                         row(option)
                     }
+                    deleteHint
                 }
                 if importedOptions.isEmpty {
                     emptyCard
@@ -704,6 +744,18 @@ struct FontManagementView: View {
             Button("取消", role: .cancel) { pendingDelete = nil }
         } message: {
             Text("书籍和界面里正在使用这个字体时会恢复为系统默认。")
+        }
+        .confirmationDialog("删除这个预设字体？", isPresented: Binding(
+            get: { pendingPreset != nil },
+            set: { if !$0 { pendingPreset = nil } }
+        ), titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                if let option = pendingPreset { deletePreset(option) }
+                pendingPreset = nil
+            }
+            Button("取消", role: .cancel) { pendingPreset = nil }
+        } message: {
+            Text("预设字体是系统自带的，删除后只是不再出现在列表里，可随时在这里恢复。正在使用时会恢复为系统默认。")
         }
         .onAppear { fonts.reload() }
         .readingTabBarHidden()
@@ -783,7 +835,7 @@ struct FontManagementView: View {
                             .font(Self.previewFont(option.postScriptName, size: 17))
                             .foregroundStyle(palette.primary)
                             .lineLimit(1)
-                        Text(option.fileName.map { "已导入 · \($0)" } ?? (option.id.isEmpty ? "跟随系统" : "系统内置"))
+                        Text(subtitle(option))
                             .font(AppFontStyle.caption.themed)
                             .foregroundStyle(palette.secondary)
                             .lineLimit(1)
@@ -801,9 +853,46 @@ struct FontManagementView: View {
                 Button(role: .destructive) { pendingDelete = file } label: {
                     Label("删除字体", systemImage: "trash")
                 }
+            } else if part == .interface, !option.id.isEmpty {
+                Button(role: .destructive) { pendingPreset = option } label: {
+                    Label("删除预设字体", systemImage: "trash")
+                }
             }
         }
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// 只含西文字形的系统字体：中文仍显示为系统字体，只有英文和数字会变。
+    private static let latinOnlyFonts: Set<String> = ["Georgia", "Avenir-Book"]
+
+    private func subtitle(_ option: Option) -> String {
+        if let file = option.fileName { return "已导入 · \(file)" }
+        if option.id.isEmpty { return "跟随系统" }
+        return Self.latinOnlyFonts.contains(option.id) ? "系统内置 · 仅英文和数字生效" : "系统内置"
+    }
+
+    /// 列表下方：怎么删除字体，以及恢复删除过的预设字体。
+    @ViewBuilder
+    private var deleteHint: some View {
+        let canDelete = part == .interface || !importedOptions.isEmpty
+        if canDelete || (part == .interface && fonts.hasHiddenBuiltIns) {
+            HStack(spacing: 8) {
+                if canDelete {
+                    Text(part == .interface ? "长按预设或导入的字体可删除" : "长按导入的字体可删除")
+                        .font(AppFontStyle.caption.themed)
+                        .foregroundStyle(palette.secondary)
+                }
+                Spacer(minLength: 0)
+                if part == .interface, fonts.hasHiddenBuiltIns {
+                    Button("恢复预设字体") { fonts.restoreBuiltIns() }
+                        .font(AppFontStyle.caption.weight(.medium).themed)
+                        .foregroundStyle(palette.accent)
+                        .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 4)
+            .padding(.top, 2)
+        }
     }
 
     private var emptyCard: some View {
@@ -861,7 +950,11 @@ struct FontManagementView: View {
         let model = AppearanceLiveModel.shared
         model.resync()
         model.custom { $0.fontPostScriptName = name }
+        let revision = AppThemeStore.shared.revision
         model.commit()
+        // 保存后整个应用会刷新一次（界面字体要全局生效），导航会回到根页面：
+        // 记下当前所在的部分，「我的」重新出现时直接回到字体管理，看起来一直停在这个页面。
+        if AppThemeStore.shared.revision != revision { FontManagementRestore.pendingPart = part }
         AppThemeRuntime.invalidateFont()
         if let error = model.message { message = error }
     }
@@ -888,6 +981,13 @@ struct FontManagementView: View {
         } else {
             message = installed > 0 ? "已导入 \(installed) 个字体，\(failed) 个文件无法识别" : "无法识别这个字体文件"
         }
+    }
+
+    private func deletePreset(_ option: Option) {
+        let inUse = (theme.customization?.fontPostScriptName ?? "") == option.id
+        fonts.hideBuiltIn(option.id)
+        if inUse { setInterfaceFont("") }
+        message = "已删除「\(option.name)」"
     }
 
     private func delete(_ file: String) {

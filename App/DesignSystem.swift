@@ -187,48 +187,6 @@ enum ReadingTheme {
     static var tertiaryInk: Color { AppThemeRuntime.color { $0.tertiary } }
 }
 
-struct ReadingPageHeader<Actions: View>: View {
-    let title: String
-    let subtitle: String
-    /// 固定在页面顶部（不随内容滚动）时下沿留得小一些，内容从这里开始、滑上来直接被裁掉。
-    var bottomPadding: CGFloat = 28
-    @ViewBuilder var actions: Actions
-
-    init(title: String, subtitle: String, bottomPadding: CGFloat = 28, @ViewBuilder actions: () -> Actions) {
-        self.title = title
-        self.subtitle = subtitle
-        self.bottomPadding = bottomPadding
-        self.actions = actions()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 16) {
-                Text(title)
-                    .font(AppFontStyle.largeTitle.bold().themed)
-                    .foregroundStyle(ReadingTheme.ink)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: 0)
-                HStack(spacing: 10) { actions }
-            }
-            Text(subtitle)
-                .font(AppFontStyle.subheadline.themed)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 24)
-        .padding(.top, 20)
-        .padding(.bottom, bottomPadding)
-        // 把大标题行的下沿报给页面：滚上去以后由顶部悬浮栏接替标题。
-        .background(alignment: .top) {
-            GeometryReader { proxy in
-                Color.clear.preference(key: ReadingHeaderBottomKey.self,
-                                       value: proxy.frame(in: .global).minY + 20 + 44)
-            }
-        }
-    }
-}
-
 struct ReadingHeaderBottomKey: PreferenceKey {
     static let defaultValue: CGFloat = .greatestFiniteMagnitude
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }

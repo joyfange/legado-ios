@@ -62,7 +62,10 @@ struct AppFontStyle {
 
     func resolve(_ name: String) -> Font {
         guard !name.isEmpty, UIFont(name: name, size: size) != nil else { return original }
-        return .custom(name, size: size, relativeTo: relativeTo).weight(fontWeight)
+        let font = Font.custom(name, size: size, relativeTo: relativeTo)
+        // 常规字重不再叠 .weight(.regular)：否则「苹方 细体」「黑体（细）」这类字体会被换回同族的常规字重，
+        // 选了看起来没变化。粗体 / 半粗等仍按样式加粗。
+        return fontWeight == .regular ? font : font.weight(fontWeight)
     }
     /// Public UIKit resolver for app-owned UIKit text and native regression checks.
     func uiFont(_ name: String, category: UIContentSizeCategory = .large) -> UIFont {

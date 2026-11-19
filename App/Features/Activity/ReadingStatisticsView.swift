@@ -879,21 +879,6 @@ struct ReadingHeatmap: View {
     }
 }
 
-struct ReadingHeatmapLegend: View {
-    var body: some View {
-        HStack(spacing: 4) {
-            Text("少").font(AppFontStyle.system(size: 12).themed).foregroundStyle(ReadingTheme.secondaryInk)
-            ForEach(0..<5, id: \.self) { level in
-                RoundedRectangle(cornerRadius: 2, style: .continuous)
-                    .fill(ReadingHeatmap.fill(level))
-                    .frame(width: 10, height: 10)
-            }
-            Text("多").font(AppFontStyle.system(size: 12).themed).foregroundStyle(ReadingTheme.secondaryInk)
-        }
-        .accessibilityHidden(true)
-    }
-}
-
 // MARK: - 今年每月柱状图（阅读时长）
 
 struct ReadingYearlyBars: View {

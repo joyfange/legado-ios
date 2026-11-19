@@ -474,28 +474,6 @@ struct ThemeSystemGlassFill<S: InsettableShape>: View {
     }
 }
 
-/// 「系统」界面效果下 List / Form 每一行的玻璃底：和卡片同一种通透玻璃观感（磨砂模糊、不叠卡片色），
-/// 背景图透得出来。iOS 26 每行一块系统 Liquid Glass（与卡片同款），更早的系统用磨砂材质。
-struct ThemeSystemGlassRowFill: View {
-    let palette: ResolvedAppPalette
-    @Environment(\.colorScheme) private var scheme
-    @Environment(\.scenePhase) private var scenePhase
-
-    var body: some View {
-        if scenePhase == .background {
-            ThemeEffectFill.transparentColor(dark: scheme == .dark).opacity(scheme == .dark ? 0.55 : 0.6)
-        } else if #available(iOS 26.0, *) {
-            // iOS 26：和「我的」入口卡片、右上角圆钮完全同一种系统 Liquid Glass（之前用磨砂材质 + 奶白，
-            // 在浅色背景上发灰，看起来不像玻璃）。分组的圆角由列表自己裁出。
-            Color.clear.glassEffect(.regular, in: Rectangle())
-        } else {
-            // iOS 15–18：磨砂材质叠一层淡奶白提亮，和同系统上的玻璃卡片（磨砂 + 细亮边）观感一致。
-            Rectangle().fill(.ultraThinMaterial)
-                .overlay(Color.white.opacity(scheme == .dark ? 0.06 : 0.28))
-        }
-    }
-}
-
 /// 卡片背景图：填充 / 适应 / 拉伸 / 平铺。
 struct ThemeCardImageFill: View {
     let image: UIImage
@@ -519,28 +497,6 @@ struct ThemeCardImageFill: View {
             }
         }
         .allowsHitTesting(false)
-    }
-}
-
-/// Cover the photograph enough that every allowed pixel keeps 4.5:1 label contrast.
-/// The black/white extremes bound the luminance of all composited image pixels.
-private enum ThemeReadability {
-    static func scrimOpacity(backgrounds: [String], labels: [String]) -> Double {
-        for step in 36...50 {
-            let opacity = Double(step) / 50
-            let readable = backgrounds.allSatisfy { base in
-                let low = AppThemeColor.luminance(AppThemeColor.mix("000000", base, fraction: opacity))
-                let high = AppThemeColor.luminance(AppThemeColor.mix("FFFFFF", base, fraction: opacity))
-                return labels.allSatisfy { label in
-                    let value = AppThemeColor.luminance(label)
-                    if value <= low { return (low + 0.05) / (value + 0.05) >= 4.5 }
-                    if value >= high { return (value + 0.05) / (high + 0.05) >= 4.5 }
-                    return false
-                }
-            }
-            if readable { return opacity }
-        }
-        return 1
     }
 }
 

@@ -32,7 +32,12 @@ struct RootTabView: View {
             default: .bookshelf
             }
         }
-        _selection = State(initialValue: Self.lastSelection ?? initial)
+        var start = Self.lastSelection ?? initial
+        // 字体管理里换了界面字体（应用刚整体刷新）：留在「我的」，由「我的」重新打开字体管理。
+        if FontManagementRestore.pendingPart != nil { start = .my }
+        // 搜索按钮在外观里关掉了：不要停在一个不存在的标签上。
+        if start == .search, AppThemeRuntime.current.customization?.showsSearchTab == false { start = .bookshelf }
+        _selection = State(initialValue: start)
     }
 
     var body: some View {
@@ -91,12 +96,16 @@ struct RootTabView: View {
                 SwiftUI.Tab(value: Tab.my) { profileTab } label: {
                     themedTabItem(.profile, selected: selection == .my)
                 }
-                SwiftUI.Tab(value: Tab.search, role: .search) {
-                    ReadingNavigationStack { SearchView() }
-                        .environment(\.themePageScope, .search)
+                if appTheme.customization?.showsSearchTab ?? true {
+                    SwiftUI.Tab(value: Tab.search, role: .search) {
+                        ReadingNavigationStack { SearchView() }
+                            .environment(\.themePageScope, .search)
+                    } label: {
+                        themedTabItem(.search, selected: selection == .search)
+                    }
                 }
             }
-            .tabBarMinimizeBehavior(.onScrollDown)
+            .tabBarMinimizeBehavior((appTheme.customization?.tabBarMinimizesOnScroll ?? true) ? .onScrollDown : .never)
         } else {
             TabView(selection: $selection) {
                 shelfTab
@@ -237,7 +246,6 @@ private struct BookshelfView: View {
     @State private var selectedGroupID = BookGroup.idReading
     @State private var showsGroupManager = false
     @State private var shelfBarExpanded = false
-    @State private var shelfSearch = ""
     @State private var showsNewShelf = false
     @State private var newShelfName = ""
     @AppStorage("bookshelfSortMode") private var sortMode = 0
@@ -538,60 +546,6 @@ private struct BookshelfView: View {
         .background { ThemeSurface(shape: Capsule(), isCard: true) }
     }
 
-    private var shelfBarRow: some View {
-        HStack(spacing: 6) {
-            sortMenu
-            shelfChipScroller
-            expandButton
-        }
-    }
-
-    /// 排序按钮：一个按钮里选排序方式和正序/倒序（原来左边的排序图标已去掉）。
-    private var sortMenu: some View {
-        Menu {
-            Section("排序方式") {
-                ForEach(Self.sortTitles.indices, id: \.self) { index in
-                    Button {
-                        sortMode = index
-                    } label: {
-                        if sortMode == index { Label(Self.sortTitles[index], systemImage: "checkmark") }
-                        else { Text(Self.sortTitles[index]) }
-                    }
-                }
-            }.readingRowBackground()
-            Section {
-                Button {
-                    sortAscending = false
-                } label: {
-                    if !sortAscending { Label("倒序", systemImage: "checkmark") } else { Text("倒序") }
-                }
-                Button {
-                    sortAscending = true
-                } label: {
-                    if sortAscending { Label("正序", systemImage: "checkmark") } else { Text("正序") }
-                }
-            }.readingRowBackground()
-        } label: {
-            sortMenuLabel
-        }
-        .accessibilityLabel("排序：\(Self.sortTitles[min(max(sortMode, 0), 3)])，\(sortAscending ? "正序" : "倒序")")
-    }
-
-    private var sortMenuLabel: some View {
-        HStack(spacing: 1) {
-            Image(systemName: "arrow.up")
-                .font(AppFontStyle.system(size: 10.5, weight: .bold).themed)
-                .foregroundStyle(sortAscending ? Color.primary : Color.secondary.opacity(0.55))
-            Image(systemName: "arrow.down")
-                .font(AppFontStyle.system(size: 10.5, weight: .bold).themed)
-                .foregroundStyle(sortAscending ? Color.secondary.opacity(0.55) : Color.primary)
-        }
-        .frame(width: 38, height: 30)
-        .background { ThemeSurface(shape: Capsule()) }
-        .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
-        .contentShape(Capsule())
-    }
-
     private var shelfChipScroller: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
@@ -607,23 +561,6 @@ private struct BookshelfView: View {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) }
             }
         }
-    }
-
-    private var expandButton: some View {
-        Button {
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.88)) { shelfBarExpanded.toggle() }
-        } label: {
-            Image(systemName: "chevron.down")
-                .font(AppFontStyle.system(size: 11, weight: .semibold).themed)
-                .foregroundStyle(.secondary)
-                .rotationEffect(.degrees(shelfBarExpanded ? 180 : 0))
-                .frame(width: 30, height: 30)
-                .background { ThemeSurface(shape: Circle()) }
-                .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(shelfBarExpanded ? "收起书架列表" : "展开书架列表")
     }
 
 
@@ -666,72 +603,6 @@ private struct BookshelfView: View {
             }
         }
         .contentShape(Capsule())
-    }
-
-    /// 展开后的书架面板（悬浮）：搜索书架、新建、管理，全部书架胶囊自动换行。
-    private var shelfPanel: some View {
-        let keyword = shelfSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        let groups = keyword.isEmpty ? library.visibleGroups
-            : library.visibleGroups.filter { $0.groupName.localizedCaseInsensitiveContains(keyword) }
-        return VStack(alignment: .leading, spacing: 10) {
-            shelfPanelHeader
-            if groups.isEmpty {
-                Text("没有匹配的书架")
-                    .font(AppFontStyle.caption.themed)
-                    .foregroundStyle(.secondary)
-            } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 70), spacing: 6, alignment: .leading)],
-                          alignment: .leading, spacing: 6) {
-                    ForEach(groups) { group in
-                        shelfChip(group, compact: true)
-                    }
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: 320, alignment: .leading)
-        .background { ThemeSurface(shape: RoundedRectangle(cornerRadius: 16, style: .continuous)) }
-        .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
-    }
-
-    private var shelfPanelHeader: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 5) {
-                Image(systemName: "magnifyingglass")
-                    .font(AppFontStyle.system(size: 12).themed)
-                    .foregroundStyle(.secondary)
-                TextField("搜索书架", text: $shelfSearch)
-                    .font(AppFontStyle.system(size: 13).themed)
-                    .submitLabel(.search)
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 32)
-            .background { ThemeSurface(shape: Capsule()) }
-            Button {
-                newShelfName = ""
-                withAnimation(.easeOut(duration: 0.2)) { showsNewShelf = true }
-            } label: {
-                Image(systemName: "plus")
-                    .font(AppFontStyle.system(size: 13, weight: .semibold).themed)
-                    .foregroundStyle(ReadingTheme.onAccent)
-                    .frame(width: 30, height: 30)
-                    .background(ReadingTheme.accentFill, in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("新建书架")
-            Button {
-                shelfBarExpanded = false
-                showsGroupManager = true
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .font(AppFontStyle.system(size: 13, weight: .medium).themed)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-                    .background { ThemeSurface(shape: Circle()) }
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("管理书架")
-        }
     }
 
     /// 新建书架小弹窗（iOS 15 也能用，不依赖 alert 里的输入框）。
@@ -1074,36 +945,6 @@ private struct BookshelfView: View {
                 ReadingToolbarIcon(systemName: "ellipsis")
             }
             .accessibilityLabel("更多")
-        }
-    }
-
-    private var bookshelfGroups: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 24) {
-                ForEach(library.visibleGroups) { group in
-                    Button(group.groupName) { selectedGroupID = group.id }
-                        .font(AppFontStyle.subheadline.weight(selectedGroup.id == group.id ? .semibold : .regular).themed)
-                        .foregroundStyle(selectedGroup.id == group.id ? Color.primary : .secondary)
-                        .frame(minHeight: 44)
-                        .overlay(alignment: .bottom) {
-                            if selectedGroup.id == group.id {
-                                Rectangle().fill(ReadingTheme.accent).frame(height: 2)
-                            }
-                        }
-                        .accessibilityAddTraits(selectedGroup.id == group.id ? .isSelected : [])
-                }
-                Button { showsGroupManager = true } label: {
-                    Image(systemName: "slider.horizontal.below.rectangle")
-                        .font(AppFontStyle.system(size: 14).themed)
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 32, minHeight: 44)
-                }
-                .accessibilityLabel("管理书架")
-            }
-            .padding(.horizontal, 24)
-        }
-        .overlay(alignment: .bottom) {
-            Rectangle().fill(ReadingTheme.separator).frame(height: 0.5)
         }
     }
 
@@ -1746,57 +1587,6 @@ private struct BookshelfManagerSheet: View {
     }
 }
 
-private struct BookGroupSelectView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var library: BookLibraryModel
-    let book: Book
-    @State private var selected: Set<Int64>
-
-    init(book: Book) {
-        self.book = book
-        _selected = State(initialValue: [])
-    }
-
-    private var customGroups: [BookGroup] {
-        library.groups.filter { $0.groupId > 0 }.sorted { $0.order < $1.order }
-    }
-
-    var body: some View {
-        ReadingNavigationStack {
-            List(customGroups) { group in
-                Button {
-                    if !selected.insert(group.id).inserted { selected.remove(group.id) }
-                } label: {
-                    HStack {
-                        Text(group.groupName).foregroundStyle(.primary)
-                        Spacer()
-                        if selected.contains(group.id) { Image(systemName: "checkmark").foregroundStyle(ReadingTheme.accent) }
-                    }
-                }
-                .readingRowBackground()
-            }.readingThemedListBackground()
-            .overlay {
-                if customGroups.isEmpty {
-                    ReadingUnavailableView("没有自定义书架", systemImage: "rectangle.3.group", description: Text("在「管理书架」里新建书架。"))
-                }
-            }
-            .navigationTitle("移至书架")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("确定") {
-                        Task { await library.setBook(book, groupIDs: selected); dismiss() }
-                    }
-                }
-            }
-            .onAppear {
-                selected = Set(customGroups.filter { (book.group & $0.groupId) != 0 }.map(\.groupId))
-            }
-        }
-        .interactiveDismissDisabled()
-    }
-}
-
 private struct LocalBookImportReviewView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var library: BookLibraryModel
@@ -1928,7 +1718,6 @@ struct BookshelfReadView: View {
 private struct ReaderOpeningPlaceholder: View {
     @AppStorage("readerTheme") private var theme = "wechat"
     @AppStorage("themeMode") private var themeMode = "0"
-    @AppStorage("readerUseBackgroundImage") private var useBackgroundImage = false
     @Environment(\.dismiss) private var dismiss
     @State private var showsSpinner = false
     @State private var backgroundImage: UIImage?
@@ -2844,6 +2633,9 @@ private struct SettingsView: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("themeMode") private var themeMode = "0"
     @ScaledMetric(relativeTo: .body) private var rowHeight = 52
+    /// 换界面字体后应用整体刷新：重新打开字体管理（不带推入动画）。
+    @State private var reopensFonts = false
+    @State private var reopenedFontPart: FontManagementView.Part = .interface
 
     var body: some View {
         // 标题固定在顶部、只滚下面的设置（与书架 / 发现 / 统计一致，仿 bookon）：
@@ -2872,6 +2664,17 @@ private struct SettingsView: View {
         .readingCanvas()
         .readingLargeTitleBar(title: "我的")
         .navigationBarHidden(true)
+        .readingNavigationDestination(isPresented: $reopensFonts) {
+            FontManagementView(initialPart: reopenedFontPart)
+        }
+        .onAppear {
+            guard let part = FontManagementRestore.pendingPart else { return }
+            FontManagementRestore.pendingPart = nil
+            reopenedFontPart = part
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { reopensFonts = true }
+        }
     }
 
     private var readingSection: some View {

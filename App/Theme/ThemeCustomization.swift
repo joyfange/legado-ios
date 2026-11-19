@@ -297,6 +297,10 @@ struct ThemeCustomization: Codable, Equatable {
     // Tab 栏
     var tabIconSize: Double = 28
     var classicTabBar: Bool = false
+    /// iOS 26 底栏右侧的搜索按钮。
+    var showsSearchTab: Bool = true
+    /// iOS 26 底栏：向下滚动时收起成小胶囊。
+    var tabBarMinimizesOnScroll: Bool = true
     /// 键为「shelf.selected」「discover.darkNormal」等，值为主题图片标识。
     var tabStateIcons: [String: String]? = nil
     // 书架
@@ -362,7 +366,7 @@ struct ThemeCustomization: Codable, Equatable {
         case darkPageBackgroundImage, backgroundImageOpacity, customCard, cardOpacity
         case cardBorderOpacity, cardBorderWidth, darkLaunchImage, forceDefaultCover
         case readerBarStyle, readerToolbarIconSize, readerToolbarIcons
-        case tabIconSize, classicTabBar, tabStateIcons
+        case tabIconSize, classicTabBar, tabStateIcons, showsSearchTab, tabBarMinimizesOnScroll
         case shelfTopStyle, shelfShowTags, shelfTagColor, shelfTagCustomColor
         case coverCornerRadius, defaultCoverInTabs, darkDefaultCoverImage, launchEnabled
         case pageBackgrounds, transparentOpacity, frostedOpacity
@@ -400,6 +404,8 @@ struct ThemeCustomization: Codable, Equatable {
         readerToolbarIcons = try values.decodeIfPresent([String: String].self, forKey: .readerToolbarIcons)
         tabIconSize = try values.decodeIfPresent(Double.self, forKey: .tabIconSize) ?? 28
         classicTabBar = try values.decodeIfPresent(Bool.self, forKey: .classicTabBar) ?? false
+        showsSearchTab = (try? values.decodeIfPresent(Bool.self, forKey: .showsSearchTab)) ?? true
+        tabBarMinimizesOnScroll = (try? values.decodeIfPresent(Bool.self, forKey: .tabBarMinimizesOnScroll)) ?? true
         tabStateIcons = try values.decodeIfPresent([String: String].self, forKey: .tabStateIcons)
         shelfTopStyle = (try? values.decodeIfPresent(ThemeShelfTopStyle.self, forKey: .shelfTopStyle)) ?? .groupsAndSearch
         shelfShowTags = try values.decodeIfPresent(Bool.self, forKey: .shelfShowTags) ?? true
