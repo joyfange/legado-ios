@@ -1254,7 +1254,7 @@ private struct ExploreKindSettingsSheet: View {
                     .font(AppFontStyle.body.themed)
                     .padding(.horizontal, 14)
                     .frame(minHeight: 44)
-                    .background(ReadingTheme.groupedCanvas, in: Capsule())
+                    .background { ThemeSurface(shape: Capsule(), isCard: true) }
 
                     card {
                         Text("快捷操作").font(AppFontStyle.footnote.themed).foregroundStyle(.secondary)
@@ -1315,7 +1315,7 @@ private struct ExploreKindSettingsSheet: View {
         VStack(alignment: .leading, spacing: 10) { content() }
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .background { ThemeCardSurface(radius: 18) }
     }
 
     private func quickButton(_ title: String, filled: Bool, action: @escaping () -> Void) -> some View {

@@ -624,9 +624,11 @@ private struct RSSStarEditSheet: View {
     var body: some View {
         ReadingNavigationStack {
             Form {
-                TextField("标题", text: $value.title)
-                TextField("分组", text: $value.group)
-                ReadingLabeledContent("链接", value: value.link).textSelection(.enabled)
+                Group {
+                    TextField("标题", text: $value.title)
+                    TextField("分组", text: $value.group)
+                    ReadingLabeledContent("链接", value: value.link).textSelection(.enabled)
+                }.readingRowBackground()
             }.readingThemedListBackground().navigationTitle("编辑RSS收藏").toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save(value); dismiss() }.disabled(value.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }

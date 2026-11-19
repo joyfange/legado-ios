@@ -2573,7 +2573,7 @@ struct SearchView: View {
             .padding(.top, 10)
         }
         .padding(16)
-        .background(.background, in: RoundedRectangle(cornerRadius: 18))
+        .background { ThemeCardSurface(radius: 18) }
     }
 
     private var searchHistoryView: some View {
@@ -8512,7 +8512,7 @@ private struct ShelfSpineStyleEditor: View {
         .font(AppFontStyle.body.themed)
         .padding(.horizontal, 14)
         .frame(height: 44)
-        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background { ThemeCardSurface(radius: 12) }
 
         ShelfSpineOptionGallery(title: "风格", subtitle: "套用后可再细调",
                                 count: BookshelfSpineDesign.concrete.count,
@@ -8546,7 +8546,7 @@ private struct ShelfSpineStyleEditor: View {
             .padding(.vertical, 8)
         }
         .padding(.horizontal, 14)
-        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background { ThemeCardSurface(radius: 12) }
     }
 
     private func templateStyle(_ design: BookshelfSpineDesign) -> ShelfSpineStyle {
@@ -8677,7 +8677,7 @@ private struct ShelfFolderStyleEditor: View {
                     }
                     TextField("名称", text: $style.name)
                         .padding(12)
-                        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        .background { ThemeCardSurface(radius: 12) }
                     ShelfPartPicker(title: "正面", options: ShelfFolderStyle.windowTitles,
                                     selection: Binding(get: { style.window ?? 0 }, set: { style.window = $0 }))
                     ShelfPartPicker(title: "纹理", options: ShelfSpineStyle.textureTitles,
@@ -8693,14 +8693,14 @@ private struct ShelfFolderStyleEditor: View {
                         TextField("留空显示文件夹名", text: Binding(get: { style.title ?? "" },
                                                               set: { style.title = $0.isEmpty ? nil : String($0.prefix(10)) }))
                             .padding(12)
-                            .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background { ThemeCardSurface(radius: 12) }
                     }
                     VStack(alignment: .leading, spacing: 6) {
                         Text("底部标签").font(AppFontStyle.subheadline.weight(.medium).themed)
                         TextField("留空跟随「书匣装扮」里的底部文字，# 代表本数", text: Binding(get: { style.footer ?? "" },
                                                                     set: { style.footer = $0.isEmpty ? nil : String($0.prefix(16)) }))
                             .padding(12)
-                            .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .background { ThemeCardSurface(radius: 12) }
                     }
                 }
                 .padding(.horizontal, 20)
@@ -9021,7 +9021,7 @@ struct ShelfOrnamentManagerSheet: View {
                     .font(AppFontStyle.subheadline.weight(.medium).themed)
                     .foregroundStyle(ReadingTheme.ink)
                     .frame(maxWidth: .infinity, minHeight: 96)
-                    .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .background { ThemeCardSurface(radius: 16) }
                 }
                 .buttonStyle(.plain)
                 Text("建议使用透明背景的 PNG 图片，摆在书架上更自然。")
@@ -9032,7 +9032,7 @@ struct ShelfOrnamentManagerSheet: View {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .padding(12)
-                    .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .background { ThemeCardSurface(radius: 12) }
                 Button {
                     Task { await addFromLink() }
                 } label: {

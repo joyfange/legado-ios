@@ -56,8 +56,10 @@ final class ThemeAssetStore: @unchecked Sendable {
         let requested = (directory ?? documents.appendingPathComponent("ThemeImages", isDirectory: true)).standardizedFileURL
         self.directory = requested.deletingLastPathComponent().resolvingSymlinksInPath()
             .appendingPathComponent(requested.lastPathComponent, isDirectory: true).standardizedFileURL
-        cache.countLimit = 6
-        cache.totalCostLimit = 48 * 1024 * 1024
+        // 页面背景可以按页面（书架 / 发现 / 搜索 / 统计 / 文件管理 / 设置）× 亮 / 深色分别设置，再加卡片背景图、
+        // 默认封面、启动图：只留 6 张时切页面会互相挤掉，被挤掉的图在卡片 / 封面绘制时于主线程重新读盘解码。
+        cache.countLimit = 24
+        cache.totalCostLimit = 96 * 1024 * 1024
     }
 
     static func isValidID(_ id: String) -> Bool {

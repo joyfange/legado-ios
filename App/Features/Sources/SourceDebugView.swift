@@ -415,8 +415,7 @@ private struct DebugStepCard: View {
             }
         }
         .padding(14)
-        .background(.background, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
-        .overlay { RoundedRectangle(cornerRadius: 17, style: .continuous).stroke(.primary.opacity(0.06)) }
+        .background { ThemeCardSurface(radius: 17) }
     }
 
     private var color: Color {

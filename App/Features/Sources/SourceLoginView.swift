@@ -619,7 +619,7 @@ struct SourceLoginFormView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(12)
-                        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background { ThemeCardSurface(radius: 14) }
                 }
                 ForEach(Array(gridLines.enumerated()), id: \.offset) { _, line in
                     HStack(spacing: 10) {
@@ -696,7 +696,7 @@ struct SourceLoginFormView: View {
                         .padding(.horizontal, 10)
                         .padding(.vertical, 11)
                         .frame(maxWidth: .infinity, minHeight: 44)
-                        .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .background { ThemeCardSurface(radius: 14) }
                         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -719,7 +719,7 @@ struct SourceLoginFormView: View {
                     .lineLimit(1)
                     .padding(.horizontal, 12)
                     .frame(maxWidth: .infinity, minHeight: 44)
-                    .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    .background { ThemeCardSurface(radius: 14) }
                 }
             default:
                 VStack(alignment: .leading, spacing: 6) {
@@ -741,7 +741,7 @@ struct SourceLoginFormView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(ReadingTheme.groupedCanvas, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .background { ThemeCardSurface(radius: 14) }
             }
         }
     }

@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 
 struct ReadingUnavailableView<Label: View, Description: View, Actions: View>: View {
     private let label: Label
@@ -407,9 +408,8 @@ struct BookCoverArtwork: View {
                 // 外观主题「强制使用默认封面」：所有书都用主题的默认封面。
                 placeholder
             } else if let remoteURL, remoteURL.hasPrefix("data:image/"),
-               let comma = remoteURL.firstIndex(of: ","),
-               let data = Data(base64Encoded: String(remoteURL[remoteURL.index(after: comma)...])),
-               let image = UIImage(data: data) {
+               let image = CoverImageCache.shared.inlineImage(for: remoteURL) {
+                // 内嵌封面（本地书等）解码一次后缓存，之前每次刷新都在主线程重新 base64 解码 + 解图。
                 Image(uiImage: image).resizable().scaledToFill()
             } else {
                 CachedCoverImage(address: remoteURL) {
@@ -558,10 +558,12 @@ struct StatusPill: View {
 final class CoverImageCache {
     static let shared = CoverImageCache()
     private let memory = NSCache<NSString, UIImage>()
+    private let inline = NSCache<NSString, UIImage>()
     private let directory: URL
 
     private init() {
         memory.countLimit = 300
+        inline.countLimit = 64
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? FileManager.default.temporaryDirectory
         directory = base.appendingPathComponent("BookCovers", isDirectory: true)
@@ -574,12 +576,42 @@ final class CoverImageCache {
     }
 
     /// 只查内存和本地磁盘，不发网络请求。
+    /// 磁盘上的原图按显示需要缩到最长边 720 像素并立即解码：之前 UIImage(data:) 只是懒解码，
+    /// 第一次绘制时在主线程按原尺寸解码（几十张封面的页面推入时明显卡顿），内存里也一直留着原尺寸位图。
     func cachedImage(for url: URL) -> UIImage? {
         let key = url.absoluteString as NSString
         if let image = memory.object(forKey: key) { return image }
-        guard let data = try? Data(contentsOf: fileURL(for: url)), let image = UIImage(data: data) else { return nil }
+        guard let data = try? Data(contentsOf: fileURL(for: url)),
+              let image = Self.displayImage(from: data) ?? UIImage(data: data) else { return nil }
         memory.setObject(image, forKey: key)
         return image
+    }
+
+    /// `data:image/…;base64,` 内嵌封面：解码结果按地址缓存。
+    func inlineImage(for address: String) -> UIImage? {
+        let key = address as NSString
+        if let image = inline.object(forKey: key) { return image }
+        guard let comma = address.firstIndex(of: ","),
+              let data = Data(base64Encoded: String(address[address.index(after: comma)...])),
+              let image = Self.displayImage(from: data) ?? UIImage(data: data) else { return nil }
+        inline.setObject(image, forKey: key)
+        return image
+    }
+
+    /// 封面显示用位图：ImageIO 直接按目标尺寸解码（JPEG 可按比例缩放解码，比先解原图再缩快得多），
+    /// 结果已解码，绘制时不再在主线程解码。动图等只取第一帧，与 UIImage(data:) 显示一致。
+    nonisolated static func displayImage(from data: Data, maxPixelSize: Int = 720) -> UIImage? {
+        let sourceOptions = [kCGImageSourceShouldCache: false] as CFDictionary
+        guard let source = CGImageSourceCreateWithData(data as CFData, sourceOptions),
+              CGImageSourceGetCount(source) > 0 else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        return UIImage(cgImage: image)
     }
 
     func image(for url: URL) async -> UIImage? {
@@ -613,9 +645,13 @@ final class CoverImageCache {
                 }
                 if let image {
                     let data = payload
-                    CoverImageCache.shared.memory.setObject(image, forKey: key as NSString)
+                    // 缩放解码放到后台线程，主线程拿到的是已解码的小图。
+                    let display = await Task.detached(priority: .utility) {
+                        CoverImageCache.displayImage(from: data)
+                    }.value ?? image
+                    CoverImageCache.shared.memory.setObject(display, forKey: key as NSString)
                     try? data.write(to: target, options: .atomic)
-                    return image
+                    return display
                 }
             }
             return nil
