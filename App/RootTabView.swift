@@ -4,7 +4,7 @@ import PhotosUI
 
 struct RootTabView: View {
     @EnvironmentObject private var sourceLibrary: SourceLibraryModel
-    private enum Tab: Hashable { case bookshelf, explore, statistics, my }
+    private enum Tab: Hashable { case bookshelf, explore, statistics, my, search }
     /// 切换或编辑主题后根视图会整体刷新，记住当前标签，刷新后停留在原处。
     @MainActor private static var lastSelection: Tab?
     @Environment(\.appTheme) private var appTheme
@@ -36,83 +36,7 @@ struct RootTabView: View {
     }
 
     var body: some View {
-        TabView(selection: $selection) {
-            ReadingNavigationStack {
-                Group {
-                    if ProcessInfo.processInfo.arguments.contains("-uiDemoSourceSwitch") {
-                        SourceSwitchView(
-                            book: DemoContent.books[0],
-                            sources: DemoContent.sources,
-                            demoCandidates: DemoContent.sourceSwitchCandidates
-                        ) { _, _ in }
-                    } else if ProcessInfo.processInfo.arguments.contains("-uiDemoBookDetail") {
-                        BookDetailView(
-                            demoBook: DemoContent.books[0],
-                            source: DemoContent.sources[0],
-                            chapters: DemoContent.readerChapters
-                        )
-                    } else if requestedDemoPage == "search" {
-                        SearchView(initialKeyword: automationSearchKeyword)
-                    } else if requestedDemoPage == "sources" {
-                        SourceManagementView()
-                    } else if requestedDemoPage == "rss" {
-                        RSSHomeView()
-                    } else if requestedDemoPage == "rss-photo" {
-                        RSSPhotoView(value: "data:image/png;base64,", source: RssSource(sourceUrl: "https://appearance.invalid", sourceName: "图片外观检查"))
-                    } else {
-                        BookshelfView()
-                    }
-                }
-                .readingNavigationDestination(isPresented: $showsDemoReader) {
-                    ReaderView(
-                        demoBook: DemoContent.books[0],
-                        chapters: DemoContent.readerChapters,
-                        initialIndex: 0,
-                        content: DemoContent.readerText
-                    )
-                }
-                .task {
-                    guard !didOpenDemoReader else { return }
-                    didOpenDemoReader = true
-                    showsDemoReader = ProcessInfo.processInfo.arguments.contains("-uiDemoReader")
-                }
-            }
-                .environment(\.themePageScope, .shelf)
-                .tabItem { themedTabItem(.shelf, selected: selection == .bookshelf) }
-                .tag(Tab.bookshelf)
-
-            ReadingNavigationStack { ExploreView() }
-                .environment(\.themePageScope, .discover)
-                .tabItem { themedTabItem(.discover, selected: selection == .explore) }
-                .tag(Tab.explore)
-
-            ReadingNavigationStack { ReadingStatisticsView() }
-                .environment(\.themePageScope, .statistics)
-                .tabItem { themedTabItem(.statistics, selected: selection == .statistics) }
-                .tag(Tab.statistics)
-
-            ReadingNavigationStack {
-                if ProcessInfo.processInfo.arguments.contains("-uiDemoRules") {
-                    ReplaceRuleManagementView()
-                } else if ProcessInfo.processInfo.arguments.contains("-uiDemoHistory") {
-                    ReadingHistoryView()
-                } else if ProcessInfo.processInfo.arguments.contains("-uiDemoFiles") {
-                    FileManagementView()
-                } else if ProcessInfo.processInfo.arguments.contains("-uiDemoOtherSettings") {
-                    OtherSettingsView()
-                } else if ProcessInfo.processInfo.arguments.contains("-uiDemoAbout") {
-                    AboutView()
-                } else if ProcessInfo.processInfo.arguments.contains("-uiDemoLogs") {
-                    DiagnosticLogView()
-                } else {
-                    SettingsView()
-                }
-            }
-                .environment(\.themePageScope, .settings)
-                .tabItem { themedTabItem(.profile, selected: selection == .my) }
-                .tag(Tab.my)
-        }
-        .readingTabBarBackground(classic: appTheme.customization?.classicTabBar ?? true)
+        tabContainer
         .task(id: sourceLibrary.sources.count) {
             // 后台预热发现页：各书源的分区和第一页提前算好，切书源时秒开。
             let candidates = sourceLibrary.sources
@@ -147,6 +71,124 @@ struct RootTabView: View {
         }
         .tint(ReadingTheme.accent)
         .toggleStyle(SwitchToggleStyle(tint: ReadingTheme.toggleTint))
+    }
+
+    /// 底栏：iOS 26 用系统新版 Tab 栏（悬浮 Liquid Glass、右侧独立的搜索圆钮、向下滚动时收起成小胶囊，
+    /// 拖动时有玻璃气泡跟手）；更早的系统保持原来的底栏与「经典底栏」设置。
+    @ViewBuilder
+    private var tabContainer: some View {
+        if #available(iOS 26.0, *) {
+            TabView(selection: $selection) {
+                SwiftUI.Tab(value: Tab.bookshelf) { shelfTab } label: {
+                    themedTabItem(.shelf, selected: selection == .bookshelf)
+                }
+                SwiftUI.Tab(value: Tab.explore) { exploreTab } label: {
+                    themedTabItem(.discover, selected: selection == .explore)
+                }
+                SwiftUI.Tab(value: Tab.statistics) { statisticsTab } label: {
+                    themedTabItem(.statistics, selected: selection == .statistics)
+                }
+                SwiftUI.Tab(value: Tab.my) { profileTab } label: {
+                    themedTabItem(.profile, selected: selection == .my)
+                }
+                SwiftUI.Tab(value: Tab.search, role: .search) {
+                    ReadingNavigationStack { SearchView() }
+                        .environment(\.themePageScope, .search)
+                }
+            }
+            .tabBarMinimizeBehavior(.onScrollDown)
+        } else {
+            TabView(selection: $selection) {
+                shelfTab
+                    .tabItem { themedTabItem(.shelf, selected: selection == .bookshelf) }
+                    .tag(Tab.bookshelf)
+                exploreTab
+                    .tabItem { themedTabItem(.discover, selected: selection == .explore) }
+                    .tag(Tab.explore)
+                statisticsTab
+                    .tabItem { themedTabItem(.statistics, selected: selection == .statistics) }
+                    .tag(Tab.statistics)
+                profileTab
+                    .tabItem { themedTabItem(.profile, selected: selection == .my) }
+                    .tag(Tab.my)
+            }
+            .readingTabBarBackground(classic: appTheme.customization?.classicTabBar ?? true)
+        }
+    }
+
+    private var shelfTab: some View {
+        ReadingNavigationStack {
+            Group {
+                if ProcessInfo.processInfo.arguments.contains("-uiDemoSourceSwitch") {
+                    SourceSwitchView(
+                        book: DemoContent.books[0],
+                        sources: DemoContent.sources,
+                        demoCandidates: DemoContent.sourceSwitchCandidates
+                    ) { _, _ in }
+                } else if ProcessInfo.processInfo.arguments.contains("-uiDemoBookDetail") {
+                    BookDetailView(
+                        demoBook: DemoContent.books[0],
+                        source: DemoContent.sources[0],
+                        chapters: DemoContent.readerChapters
+                    )
+                } else if requestedDemoPage == "search" {
+                    SearchView(initialKeyword: automationSearchKeyword)
+                } else if requestedDemoPage == "sources" {
+                    SourceManagementView()
+                } else if requestedDemoPage == "rss" {
+                    RSSHomeView()
+                } else if requestedDemoPage == "rss-photo" {
+                    RSSPhotoView(value: "data:image/png;base64,", source: RssSource(sourceUrl: "https://appearance.invalid", sourceName: "图片外观检查"))
+                } else {
+                    BookshelfView()
+                }
+            }
+            .readingNavigationDestination(isPresented: $showsDemoReader) {
+                ReaderView(
+                    demoBook: DemoContent.books[0],
+                    chapters: DemoContent.readerChapters,
+                    initialIndex: 0,
+                    content: DemoContent.readerText
+                )
+            }
+            .task {
+                guard !didOpenDemoReader else { return }
+                didOpenDemoReader = true
+                showsDemoReader = ProcessInfo.processInfo.arguments.contains("-uiDemoReader")
+            }
+        }
+            .environment(\.themePageScope, .shelf)
+    }
+
+    private var exploreTab: some View {
+        ReadingNavigationStack { ExploreView() }
+            .environment(\.themePageScope, .discover)
+    }
+
+    private var statisticsTab: some View {
+        ReadingNavigationStack { ReadingStatisticsView() }
+            .environment(\.themePageScope, .statistics)
+    }
+
+    private var profileTab: some View {
+        ReadingNavigationStack {
+            if ProcessInfo.processInfo.arguments.contains("-uiDemoRules") {
+                ReplaceRuleManagementView()
+            } else if ProcessInfo.processInfo.arguments.contains("-uiDemoHistory") {
+                ReadingHistoryView()
+            } else if ProcessInfo.processInfo.arguments.contains("-uiDemoFiles") {
+                FileManagementView()
+            } else if ProcessInfo.processInfo.arguments.contains("-uiDemoOtherSettings") {
+                OtherSettingsView()
+            } else if ProcessInfo.processInfo.arguments.contains("-uiDemoAbout") {
+                AboutView()
+            } else if ProcessInfo.processInfo.arguments.contains("-uiDemoLogs") {
+                DiagnosticLogView()
+            } else {
+                SettingsView()
+            }
+        }
+            .environment(\.themePageScope, .settings)
     }
 
     /// 底栏标签：跟随主题的「Tab栏」显示方式（图标和文字 / 仅图标 / 仅文字）与自定义图标。

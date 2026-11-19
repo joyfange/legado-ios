@@ -475,7 +475,7 @@ struct ThemeSystemGlassFill<S: InsettableShape>: View {
 }
 
 /// 「系统」界面效果下 List / Form 每一行的玻璃底：和卡片同一种通透玻璃观感（磨砂模糊、不叠卡片色），
-/// 背景图透得出来。行是相邻的直角矩形，用材质而不是一行一块 Liquid Glass（否则每行上下都有一道玻璃亮边）。
+/// 背景图透得出来。iOS 26 每行一块系统 Liquid Glass（与卡片同款），更早的系统用磨砂材质。
 struct ThemeSystemGlassRowFill: View {
     let palette: ResolvedAppPalette
     @Environment(\.colorScheme) private var scheme
@@ -484,11 +484,14 @@ struct ThemeSystemGlassRowFill: View {
     var body: some View {
         if scenePhase == .background {
             ThemeEffectFill.transparentColor(dark: scheme == .dark).opacity(scheme == .dark ? 0.55 : 0.6)
+        } else if #available(iOS 26.0, *) {
+            // iOS 26：和「我的」入口卡片、右上角圆钮完全同一种系统 Liquid Glass（之前用磨砂材质 + 奶白，
+            // 在浅色背景上发灰，看起来不像玻璃）。分组的圆角由列表自己裁出。
+            Color.clear.glassEffect(.regular, in: Rectangle())
         } else {
-            // 纯色页面底上只铺 ultraThinMaterial 几乎看不出来（行像直接贴在背景上），
-            // 叠一层奶白提亮，成为和「我的」入口卡片同一观感的磨砂玻璃；分组圆角由列表自己裁出。
+            // iOS 15–18：磨砂材质叠一层淡奶白提亮，和同系统上的玻璃卡片（磨砂 + 细亮边）观感一致。
             Rectangle().fill(.ultraThinMaterial)
-                .overlay(Color.white.opacity(scheme == .dark ? 0.06 : 0.42))
+                .overlay(Color.white.opacity(scheme == .dark ? 0.06 : 0.28))
         }
     }
 }

@@ -309,8 +309,8 @@ extension View {
 enum ReadingLargeTitleMetrics {
     /// 顶部栏高度（右上角按钮、收起后的小标题都在这一条里）。
     static let barHeight: CGFloat = 48
-    /// 内容滚进顶部栏的这段距离里，顶部栏底色逐渐出现。
-    static let fadeDistance: CGFloat = 20
+    /// 大标题滚进顶部栏的这段距离里，顶部栏的模糊底逐渐出现。
+    static let fadeDistance: CGFloat = 28
 }
 
 struct ReadingLargeTitleBottomKey: PreferenceKey {
@@ -318,16 +318,20 @@ struct ReadingLargeTitleBottomKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
 }
 
-/// 放在主页面滚动内容最上面的占位：只留出顶部栏的高度，不再单独占一行大标题。
-/// 页面名称改为顶部栏左侧的紧凑标题，与右上角按钮同一行，下面的内容整体上移；配合 `readingLargeTitleBar` 使用。
+/// 放在主页面滚动内容最上面的大标题（仿系统「设置」）：上面留出顶部栏的高度（右上角按钮在顶部栏里常驻），
+/// 下面是左对齐的粗体大标题，随内容一起滚动；配合 `readingLargeTitleBar` 使用。
 struct ReadingLargeTitle: View {
     let title: String
 
     var body: some View {
-        Color.clear
-            .frame(maxWidth: .infinity)
-            .frame(height: ReadingLargeTitleMetrics.barHeight)
-            .accessibilityHidden(true)
+        Text(title)
+            .font(AppFontStyle.largeTitle.bold().themed)
+            .foregroundStyle(ReadingTheme.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .accessibilityAddTraits(.isHeader)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, ReadingLargeTitleMetrics.barHeight - 6)
             .background(alignment: .bottom) {
                 GeometryReader { proxy in
                     Color.clear.preference(key: ReadingLargeTitleBottomKey.self,
@@ -337,12 +341,14 @@ struct ReadingLargeTitle: View {
     }
 }
 
-/// 主页面顶部栏：左侧紧凑标题与右上角按钮同一行、始终固定；内容向上滚进顶部栏时，顶部栏铺出与页面背景
-/// 逐像素一致的底色（下沿柔和渐隐），内容像淡出到背景里。下拉时内容跟手，背景不动。
+/// 主页面顶部栏（仿系统大标题导航栏）：右上角按钮始终固定；大标题向上滚进顶部栏时，顶部栏淡入一层
+/// 与页面背景一致、带模糊的底（下沿柔和渐隐，内容在下面朦胧可见）；大标题完全滚进去后，
+/// 居中的小标题淡入，往回滚到大标题露出时小标题淡出。下拉时大标题跟着内容走，背景不动。
 struct ReadingLargeTitleBar<Actions: View>: ViewModifier {
     let title: String
     @ViewBuilder var actions: () -> Actions
     @State private var titleBottom: CGFloat = .greatestFiniteMagnitude
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     func body(content: Content) -> some View {
         content
@@ -358,40 +364,53 @@ struct ReadingLargeTitleBar<Actions: View>: ViewModifier {
                     let barHeight = ReadingLargeTitleMetrics.barHeight
                     let fade = ReadingLargeTitleMetrics.fadeDistance
                     let barBottom = top + barHeight
-                    // 0：内容还没滚到顶部栏下面；1：内容已经滚进顶部栏。
-                    let raw = (barBottom - titleBottom) / fade
+                    // 0：大标题完整露出；1：大标题已经滚进顶部栏下面。
+                    let raw = (barBottom + fade - titleBottom) / fade
                     let progress = raw.isFinite ? min(max(raw, 0), 1) : 0
+                    // 大标题的文字下沿滚过顶部栏下沿：换成居中小标题（和系统一样是一次短淡入，不跟手）。
+                    let collapsed = titleBottom.isFinite && titleBottom < barBottom + 4
                     let height = barBottom
-                    let edge: CGFloat = 18
+                    let edge: CGFloat = 24
                     let full = proxy.size.height + top + proxy.safeAreaInsets.bottom
                     ZStack(alignment: .top) {
-                        // 背景按整屏尺寸绘制、只露出顶部一条：颜色与下面固定不动的页面背景完全一致。
-                        ReadingCanvasBackground()
-                            .frame(width: proxy.size.width, height: full)
-                            .mask(alignment: .top) {
-                                LinearGradient(stops: [
-                                    .init(color: .black, location: 0),
-                                    .init(color: .black, location: height / (height + edge)),
-                                    .init(color: .clear, location: 1)
-                                ], startPoint: .top, endPoint: .bottom)
-                                .frame(height: height + edge)
+                        // 顶部栏底：磨砂模糊 + 按整屏尺寸绘制、只露出顶部一条的页面背景（颜色与下面的页面背景一致），
+                        // 下沿柔和渐隐，内容滑上来时像被雾化到背景里。
+                        ZStack(alignment: .top) {
+                            if !reduceTransparency {
+                                Rectangle().fill(.ultraThinMaterial)
                             }
-                            .frame(height: height + edge, alignment: .top)
-                            .clipped()
-                            .opacity(progress)
-                            .allowsHitTesting(false)
-                        HStack(spacing: 10) {
+                            ReadingCanvasBackground()
+                                .frame(width: proxy.size.width, height: full)
+                                .opacity(reduceTransparency ? 1 : 0.72)
+                        }
+                        .frame(width: proxy.size.width, height: height + edge, alignment: .top)
+                        .mask(alignment: .top) {
+                            LinearGradient(stops: [
+                                .init(color: .black, location: 0),
+                                .init(color: .black, location: height / (height + edge)),
+                                .init(color: .clear, location: 1)
+                            ], startPoint: .top, endPoint: .bottom)
+                            .frame(height: height + edge)
+                        }
+                        .clipped()
+                        .opacity(progress)
+                        .allowsHitTesting(false)
+                        ZStack {
                             Text(title)
-                                .font(AppFontStyle.title2.bold().themed)
+                                .font(AppFontStyle.headline.weight(.semibold).themed)
                                 .foregroundStyle(ReadingTheme.ink)
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.7)
-                                .accessibilityAddTraits(.isHeader)
-                            Spacer(minLength: 0)
-                            actions()
+                                .padding(.horizontal, 110)
+                                .opacity(collapsed ? 1 : 0)
+                                .animation(.easeInOut(duration: 0.18), value: collapsed)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(!collapsed)
+                            HStack(spacing: 10) {
+                                Spacer(minLength: 0)
+                                actions()
+                            }
+                            .padding(.horizontal, 20)
                         }
-                        .padding(.leading, 24)
-                        .padding(.trailing, 20)
                         .frame(height: barHeight)
                         .padding(.top, top)
                     }
