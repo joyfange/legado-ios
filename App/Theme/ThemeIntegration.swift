@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import CoreText
+import UniformTypeIdentifiers
 
 // MARK: - 与本应用对接的部分
 //
@@ -569,5 +570,335 @@ struct AppThemeShell<Content: View>: View {
                 .modifier(AppTypographyRoot())
                 .modifier(AppThemeRoot(store: store))
         }
+    }
+}
+
+// MARK: - 字体管理（「我的」→ 字体管理）
+
+/// 字体管理：导入的字体文件（.ttf / .otf / .ttc）放在同一个字体库里，分两部分使用——
+/// 「书籍字体」决定阅读正文的字体（与阅读设置里的字体是同一个设置），
+/// 「界面字体」决定应用界面的字体（与外观主题「颜色与字体」里的字体是同一个设置）。
+/// 顶部一个分段切换，下面是当前字体预览和可选字体列表；右上角「+」导入，长按导入的字体可删除。
+struct FontManagementView: View {
+    enum Part: String, CaseIterable, Identifiable {
+        case book, interface
+        var id: String { rawValue }
+        var title: String { self == .book ? "书籍字体" : "界面字体" }
+        var icon: String { self == .book ? "book" : "rectangle.3.group" }
+    }
+
+    private struct Option: Identifiable {
+        /// 书籍字体：字体文件名（系统默认为空）；界面字体：PostScript 名（系统默认为空）。
+        let id: String
+        let name: String
+        /// 预览用的 PostScript 名，空为系统字体。
+        let postScriptName: String
+        let fileName: String?
+    }
+
+    @ObservedObject private var fonts = ReadingFontManager.shared
+    @Environment(\.appTheme) private var theme
+    @ThemePalette private var palette
+    @AppStorage("textFont") private var readerFontPath = ""
+    @State private var part: Part = .book
+    @State private var importing = false
+    @State private var message: String?
+    @State private var pendingDelete: String?
+    @Namespace private var segmentAnimation
+
+    private static let sample = "永和九年，岁在癸丑 Aa 123"
+
+    private var importedOptions: [Option] {
+        fonts.importedFonts.compactMap { family in
+            guard let face = family.faces.first else { return nil }
+            return Option(id: family.id, name: face.name, postScriptName: face.id, fileName: family.id)
+        }
+    }
+
+    private var options: [Option] {
+        let system = Option(id: "", name: "系统默认", postScriptName: "", fileName: nil)
+        switch part {
+        case .book:
+            return [system] + importedOptions
+        case .interface:
+            let builtIn = fonts.builtInFonts.map { Option(id: $0.id, name: $0.name, postScriptName: $0.id, fileName: nil) }
+            let imported = importedOptions.map { Option(id: $0.postScriptName, name: $0.name, postScriptName: $0.postScriptName, fileName: $0.fileName) }
+            return [system] + builtIn + imported
+        }
+    }
+
+    private var readerFileName: String {
+        readerFontPath.isEmpty ? "" : URL(fileURLWithPath: readerFontPath).lastPathComponent
+    }
+
+    private var interfaceFontName: String {
+        let name = theme.customization?.fontPostScriptName ?? ""
+        guard !name.isEmpty else { return "" }
+        let known = fonts.builtInFonts.contains { $0.id == name }
+            || importedOptions.contains { $0.postScriptName == name }
+        return known ? name : ""
+    }
+
+    private var selectedID: String {
+        switch part {
+        case .book:
+            let file = readerFileName
+            return importedOptions.contains(where: { $0.id == file }) ? file : ""
+        case .interface:
+            return interfaceFontName
+        }
+    }
+
+    private var selectedOption: Option? { options.first { $0.id == selectedID } }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                segmentedControl
+                previewCard
+                if let message {
+                    Text(message)
+                        .font(AppFontStyle.footnote.themed)
+                        .foregroundStyle(palette.secondary)
+                        .padding(.horizontal, 4)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(part == .book ? "阅读正文使用的字体" : "应用界面使用的字体")
+                        .font(AppFontStyle.footnote.themed)
+                        .foregroundStyle(palette.secondary)
+                        .padding(.leading, 4)
+                    ForEach(options) { option in
+                        row(option)
+                    }
+                }
+                if importedOptions.isEmpty {
+                    emptyCard
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 40)
+        }
+        .readingCanvas()
+        .navigationTitle("字体管理")
+        .navigationBarTitleDisplayMode(.large)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button { importing = true } label: {
+                    Image(systemName: "plus").font(.system(size: 17, weight: .semibold))
+                }
+                .accessibilityLabel("导入字体")
+            }
+        }
+        .fileImporter(isPresented: $importing, allowedContentTypes: Self.fontTypes, allowsMultipleSelection: true) { result in
+            importFonts(result)
+        }
+        .confirmationDialog("删除这个字体？", isPresented: Binding(
+            get: { pendingDelete != nil },
+            set: { if !$0 { pendingDelete = nil } }
+        ), titleVisibility: .visible) {
+            Button("删除", role: .destructive) {
+                if let file = pendingDelete { delete(file) }
+                pendingDelete = nil
+            }
+            Button("取消", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("书籍和界面里正在使用这个字体时会恢复为系统默认。")
+        }
+        .onAppear { fonts.reload() }
+        .readingTabBarHidden()
+    }
+
+    // MARK: 组件
+
+    /// 玻璃分段切换：选中项是一块跟随「界面效果」的玻璃胶囊。
+    private var segmentedControl: some View {
+        HStack(spacing: 4) {
+            ForEach(Part.allCases) { item in
+                Button {
+                    withAnimation(.easeOut(duration: 0.22)) { part = item }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: item.icon).font(.system(size: 13, weight: .medium))
+                        Text(item.title)
+                            .font(AppFontStyle.system(size: 15, weight: part == item ? .semibold : .regular).themed)
+                    }
+                    .foregroundStyle(part == item ? palette.primary : palette.secondary)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 36)
+                    .background {
+                        if part == item {
+                            ThemeSurface(shape: Capsule())
+                                .matchedGeometryEffect(id: "font.part", in: segmentAnimation)
+                                .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(part == item ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background { ThemeSurface(shape: Capsule()) }
+    }
+
+    /// 当前字体预览：大字号示例 + 字体名。
+    private var previewCard: some View {
+        let option = selectedOption
+        let name = option?.postScriptName ?? ""
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 6) {
+                Text(part == .book ? "当前书籍字体" : "当前界面字体")
+                    .font(AppFontStyle.caption.themed)
+                    .foregroundStyle(palette.secondary)
+                Spacer(minLength: 0)
+                Text(option?.name ?? "系统默认")
+                    .font(AppFontStyle.caption.weight(.medium).themed)
+                    .foregroundStyle(palette.accent)
+                    .lineLimit(1)
+            }
+            Text(Self.sample)
+                .font(Self.previewFont(name, size: 24))
+                .foregroundStyle(palette.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            Text(part == .book ? "天朗气清，惠风和畅。仰观宇宙之大，俯察品类之盛。" : "书架 · 发现 · 统计 · 我的")
+                .font(Self.previewFont(name, size: 15))
+                .foregroundStyle(palette.secondary)
+                .lineLimit(2)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { ThemeCardSurface(radius: 18) }
+    }
+
+    private func row(_ option: Option) -> some View {
+        let selected = option.id == selectedID
+        return Button { select(option) } label: {
+            AppearanceCard {
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(option.name)
+                            .font(Self.previewFont(option.postScriptName, size: 17))
+                            .foregroundStyle(palette.primary)
+                            .lineLimit(1)
+                        Text(option.fileName.map { "已导入 · \($0)" } ?? (option.id.isEmpty ? "跟随系统" : "系统内置"))
+                            .font(AppFontStyle.caption.themed)
+                            .foregroundStyle(palette.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 20))
+                        .foregroundStyle(selected ? palette.accent : palette.secondary.opacity(0.4))
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu {
+            if let file = option.fileName {
+                Button(role: .destructive) { pendingDelete = file } label: {
+                    Label("删除字体", systemImage: "trash")
+                }
+            }
+        }
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private var emptyCard: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "textformat")
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(palette.accent)
+            Text("暂无自定义字体")
+                .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                .foregroundStyle(palette.primary)
+            Text("点击右上角导入 .ttf、.otf、.ttc 格式的字体文件")
+                .font(AppFontStyle.caption.themed)
+                .foregroundStyle(palette.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 22)
+        .padding(.horizontal, 16)
+        .background { ThemeCardSurface(radius: 18) }
+        .contentShape(Rectangle())
+        .onTapGesture { importing = true }
+    }
+
+    // MARK: 操作
+
+    private static var fontTypes: [UTType] {
+        var types: [UTType] = [.font]
+        for ext in ["ttf", "otf", "ttc"] {
+            if let type = UTType(filenameExtension: ext), !types.contains(type) { types.append(type) }
+        }
+        return types
+    }
+
+    private static func previewFont(_ postScriptName: String, size: CGFloat) -> Font {
+        guard !postScriptName.isEmpty, UIFont(name: postScriptName, size: size) != nil else {
+            return AppFontStyle.system(size: size).themed
+        }
+        return .custom(postScriptName, size: size)
+    }
+
+    private func select(_ option: Option) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        switch part {
+        case .book:
+            readerFontPath = option.fileName.map { ReaderFontStore.directory.appendingPathComponent($0).path } ?? ""
+        case .interface:
+            setInterfaceFont(option.id)
+        }
+    }
+
+    /// 界面字体写进当前外观主题（与外观主题「颜色与字体」同一个设置），保存后整个应用立即生效。
+    private func setInterfaceFont(_ name: String) {
+        let current = theme.customization?.fontPostScriptName ?? ""
+        guard current != name else { return }
+        let model = AppearanceLiveModel.shared
+        model.resync()
+        model.custom { $0.fontPostScriptName = name }
+        model.commit()
+        AppThemeRuntime.invalidateFont()
+        if let error = model.message { message = error }
+    }
+
+    private func importFonts(_ result: Result<[URL], Error>) {
+        guard case .success(let urls) = result, !urls.isEmpty else {
+            if case .failure(let error) = result { message = error.localizedDescription }
+            return
+        }
+        var installed = 0
+        var failed = 0
+        for url in urls {
+            do {
+                _ = try ReaderFontStore.install(from: url)
+                installed += 1
+            } catch {
+                failed += 1
+            }
+        }
+        fonts.reload()
+        AppThemeRuntime.invalidateFont()
+        if failed == 0 {
+            message = "已导入 \(installed) 个字体"
+        } else {
+            message = installed > 0 ? "已导入 \(installed) 个字体，\(failed) 个文件无法识别" : "无法识别这个字体文件"
+        }
+    }
+
+    private func delete(_ file: String) {
+        let faces = fonts.importedFonts.first { $0.id == file }?.faces.map(\.id) ?? []
+        if readerFileName == file { readerFontPath = "" }
+        if let name = theme.customization?.fontPostScriptName, faces.contains(name) {
+            setInterfaceFont("")
+        }
+        try? FileManager.default.removeItem(at: ReaderFontStore.directory.appendingPathComponent(file))
+        fonts.reload()
+        AppThemeRuntime.invalidateFont()
+        message = "已删除字体"
     }
 }

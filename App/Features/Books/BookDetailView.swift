@@ -738,6 +738,7 @@ private struct BookTableOfContentsView: View {
         ReadingNavigationStack {
             ScrollViewReader { proxy in
             List(displayedChapters) { chapter in
+                Group {
                 if chapter.isVolume {
                     Text(chapter.title).font(AppFontStyle.headline.themed).foregroundStyle(ReadingTheme.accent)
                 } else {
@@ -756,6 +757,8 @@ private struct BookTableOfContentsView: View {
                         }
                     }
                 }
+                }
+                .readingRowBackground()
             }.readingThemedListBackground()
             .readingInlineSearch(text: $searchText, prompt: "搜索目录")
             .navigationTitle("目录")

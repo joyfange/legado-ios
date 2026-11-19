@@ -28,7 +28,7 @@ struct SourceLoginView: View {
                 if isChecking { ProgressView().controlSize(.small) }
             }
             .padding(.horizontal, 14).padding(.vertical, 10)
-            .background(Color(uiColor: .secondarySystemBackground))
+            .background { ThemeSurface(shape: Rectangle()) }
 
             if let request = loginRequest {
                 SourceLoginWebView(

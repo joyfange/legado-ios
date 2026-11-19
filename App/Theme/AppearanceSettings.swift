@@ -82,6 +82,8 @@ final class AppearanceLiveModel: ObservableObject {
 
     func resetToDefault() {
         dirty = false
+        // 重置为默认＝「系统」玻璃：全局玻璃总开关一并恢复为开启，否则卡片仍是实色。
+        UserDefaults.standard.set(true, forKey: AppGlassMode.storageKey)
         do { try store.apply(id: AppTheme.defaultID) } catch { message = error.localizedDescription }
         resync()
     }

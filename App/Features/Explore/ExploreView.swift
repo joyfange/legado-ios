@@ -435,14 +435,10 @@ struct ExploreView: View {
     var body: some View {
         // 标题栏固定、只滚内容（仿 bookon）：上滑内容在标题下沿直接裁掉，下拉时背景不动。
         VStack(alignment: .leading, spacing: 0) {
-            ReadingPageHeader(title: "发现", subtitle: "下一本好书，在这里遇见", bottomPadding: 0) {
-                NavigationLink { SearchView() } label: {
-                    ReadingToolbarIcon(systemName: "magnifyingglass")
-                }
-                .accessibilityLabel("搜索")
-            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    ReadingLargeTitle(title: "发现")
+                        .padding(.bottom, -10)
                     HStack(spacing: 16) {
                         Image(systemName: "safari")
                             .font(AppFontStyle.system(size: 30, weight: .ultraLight).themed)
@@ -514,13 +510,17 @@ struct ExploreView: View {
                     .accessibilityIdentifier("explore.manageSources")
                 }
                 .padding(.horizontal, 24)
-                // 标题与内容之间的间距放进滚动区：卡片阴影不会在滚动区上沿被切出横线。
-                .padding(.top, 20)
                 .padding(.bottom, 32)
             }
             .readingTopScrollEdgeHidden()
         }
         .readingCanvas()
+        .readingLargeTitleBar(title: "发现") {
+            NavigationLink { SearchView() } label: {
+                ReadingToolbarIcon(systemName: "magnifyingglass")
+            }
+            .accessibilityLabel("搜索")
+        }
         .navigationBarHidden(true)
     }
 }

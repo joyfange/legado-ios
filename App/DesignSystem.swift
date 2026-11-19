@@ -304,6 +304,124 @@ extension View {
     }
 }
 
+// MARK: - 主页面大标题（仿系统大标题导航栏的上滑效果）
+
+enum ReadingLargeTitleMetrics {
+    /// 顶部栏高度（右上角按钮、收起后的小标题都在这一条里）。
+    static let barHeight: CGFloat = 48
+    /// 大标题滚进顶部栏的这段距离里，顶部栏底色和小标题逐渐出现。
+    static let fadeDistance: CGFloat = 36
+}
+
+struct ReadingLargeTitleBottomKey: PreferenceKey {
+    static let defaultValue: CGFloat = .greatestFiniteMagnitude
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
+}
+
+/// 放在主页面滚动内容最上面的大标题：只有标题本身，没有副标题，随内容一起滚动。
+/// 上面留出顶部栏的高度，右上角按钮在顶部栏里常驻；配合 `readingLargeTitleBar` 使用。
+struct ReadingLargeTitle: View {
+    let title: String
+
+    var body: some View {
+        Text(title)
+            .font(AppFontStyle.largeTitle.bold().themed)
+            .foregroundStyle(ReadingTheme.ink)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .accessibilityAddTraits(.isHeader)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, ReadingLargeTitleMetrics.barHeight)
+            .background(alignment: .bottom) {
+                GeometryReader { proxy in
+                    Color.clear.preference(key: ReadingLargeTitleBottomKey.self,
+                                           value: proxy.frame(in: .global).maxY)
+                }
+            }
+    }
+}
+
+/// 主页面顶部栏：右上角按钮始终固定；大标题向上滚进顶部栏时，顶部栏铺出与页面背景逐像素一致的底色
+/// （下沿柔和渐隐），居中的小标题淡入——和系统「设置」「图书」的大标题上滑效果一致。
+/// 下拉时大标题跟着内容走，背景不动。
+struct ReadingLargeTitleBar<Actions: View>: ViewModifier {
+    let title: String
+    @ViewBuilder var actions: () -> Actions
+    @State private var titleBottom: CGFloat = .greatestFiniteMagnitude
+
+    func body(content: Content) -> some View {
+        content
+            .onPreferenceChange(ReadingLargeTitleBottomKey.self) { value in
+                let rounded = (value / 2).rounded() * 2
+                Task { @MainActor in
+                    if titleBottom != rounded { titleBottom = rounded }
+                }
+            }
+            .overlay(alignment: .top) {
+                GeometryReader { proxy in
+                    let top = proxy.safeAreaInsets.top
+                    let barHeight = ReadingLargeTitleMetrics.barHeight
+                    let fade = ReadingLargeTitleMetrics.fadeDistance
+                    let barBottom = top + barHeight
+                    // 0：大标题完整露出；1：大标题已经滚进顶部栏下面。
+                    let raw = (barBottom + fade - titleBottom) / fade
+                    let progress = raw.isFinite ? min(max(raw, 0), 1) : 0
+                    let height = barBottom
+                    let edge: CGFloat = 18
+                    let full = proxy.size.height + top + proxy.safeAreaInsets.bottom
+                    ZStack(alignment: .top) {
+                        // 背景按整屏尺寸绘制、只露出顶部一条：颜色与下面固定不动的页面背景完全一致，
+                        // 内容从下面滑上来时像淡出到背景里。
+                        ReadingCanvasBackground()
+                            .frame(width: proxy.size.width, height: full)
+                            .mask(alignment: .top) {
+                                LinearGradient(stops: [
+                                    .init(color: .black, location: 0),
+                                    .init(color: .black, location: height / (height + edge)),
+                                    .init(color: .clear, location: 1)
+                                ], startPoint: .top, endPoint: .bottom)
+                                .frame(height: height + edge)
+                            }
+                            .frame(height: height + edge, alignment: .top)
+                            .clipped()
+                            .opacity(progress)
+                            .allowsHitTesting(false)
+                        ZStack {
+                            Text(title)
+                                .font(AppFontStyle.headline.weight(.semibold).themed)
+                                .foregroundStyle(ReadingTheme.ink)
+                                .lineLimit(1)
+                                .padding(.horizontal, 110)
+                                .opacity(max(0, (progress - 0.55) / 0.45))
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(progress < 1)
+                            HStack(spacing: 10) {
+                                Spacer(minLength: 0)
+                                actions()
+                            }
+                            .padding(.horizontal, 20)
+                        }
+                        .frame(height: barHeight)
+                        .padding(.top, top)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .top)
+                    .ignoresSafeArea(edges: .top)
+                }
+            }
+    }
+}
+
+extension View {
+    /// 配合滚动内容最上面的 `ReadingLargeTitle` 使用。
+    func readingLargeTitleBar<Actions: View>(title: String, @ViewBuilder actions: @escaping () -> Actions) -> some View {
+        modifier(ReadingLargeTitleBar(title: title, actions: actions))
+    }
+
+    func readingLargeTitleBar(title: String) -> some View {
+        modifier(ReadingLargeTitleBar(title: title) { EmptyView() })
+    }
+}
+
 struct ReadingToolbarIcon: View {
     let systemName: String
 

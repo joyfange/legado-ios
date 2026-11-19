@@ -57,7 +57,9 @@ struct ResolvedAppPalette {
         usesOpaqueSurfaces = colors.hasCustomTextOrSelection
         if glass == true {
             // 主题没指定时按玻璃；主题明确选了透明 / 不透明就照主题来（不透明＝实色卡片）。
-            interfaceEffect = theme.customization?.effect ?? .frosted
+            // 主题没有自定义界面效果（如「重置为默认」后的经典黑白）时按「系统」玻璃，
+            // 与「界面效果」页显示的「系统」、列表行的玻璃底一致（之前按毛玻璃 85% 绘制，看起来是一块实色白卡）。
+            interfaceEffect = theme.customization?.effect ?? .opaque
         } else {
             interfaceEffect = theme.customization?.effect
         }
@@ -281,10 +283,8 @@ struct AppGlassModifier<S: InsettableShape>: ViewModifier {
     var tintOpacity: Double = 0.10
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {
-        content.background {
-            AppGlassSurface(shape: shape, tint: tint, tintOpacity: tintOpacity,
-                            reduceTransparency: reduceTransparency)
-        }
+        // 跟随「界面效果」三种模式（系统玻璃 / 透明 / 毛玻璃）与全局玻璃开关，和其它卡片同一种底。
+        content.background { ThemeSurface(shape: shape) }
     }
 }
 
@@ -341,7 +341,7 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
         self.reduceTransparency = reduceTransparency
     }
 
-    private var effect: ThemeInterfaceEffect { palette.interfaceEffect ?? .frosted }
+    private var effect: ThemeInterfaceEffect { palette.interfaceEffect ?? .opaque }
 
     var body: some View {
         ZStack {

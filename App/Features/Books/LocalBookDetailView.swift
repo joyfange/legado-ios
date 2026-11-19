@@ -141,6 +141,7 @@ private struct LocalBookTableOfContentsView: View {
                         }
                     }
                 }
+                .readingRowBackground()
             }.readingThemedListBackground()
             .readingInlineSearch(text: $query, prompt: "搜索目录")
             .navigationTitle("目录")

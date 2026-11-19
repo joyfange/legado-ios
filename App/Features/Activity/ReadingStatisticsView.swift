@@ -155,16 +155,13 @@ struct ReadingStatisticsView: View {
     var body: some View {
         let digest = ReadingStatsDigest(records: activity.readRecords)
         // 日期标题固定在顶部，只滚下面的卡片（仿 bookon）：卡片不会再滑进状态栏底下，下拉时背景不动。
+        // 顶部只有大标题（随内容滚动），上滑后顶部栏淡入小标题；今天读了多久在「今日阅读」卡片里。
         VStack(spacing: 0) {
-            header(digest)
-                .padding(.top, 14)
-                .padding(.bottom, 4)
-                .padding(.horizontal, 20)
-                .frame(maxWidth: 680)
-                .frame(maxWidth: .infinity)
             ScrollView {
             VStack(alignment: .leading, spacing: 0) {
+                ReadingLargeTitle(title: "阅读统计")
                 sectionTitle("阅读目标")
+                    .padding(.top, -12)
                 dailyCard(digest)
                 streakCard(digest).padding(.top, 14)
                 yearlyCard(digest).padding(.top, 14)
@@ -181,6 +178,7 @@ struct ReadingStatisticsView: View {
             .readingTopScrollEdgeHidden()
         }
         .readingCanvas()
+        .readingLargeTitleBar(title: "阅读统计")
         .foregroundStyle(ReadingTheme.ink)
         .navigationBarHidden(true)
         .alert("连续阅读", isPresented: $showStreakInfo) {
@@ -749,8 +747,7 @@ struct ReadingStatsRangePicker: View {
                         .frame(height: 32)
                         .background {
                             if range == item {
-                                Capsule()
-                                    .fill(ReadingTheme.surface)
+                                ThemeSurface(shape: Capsule())
                                     .matchedGeometryEffect(id: "stats.range", in: animation)
                                     .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
                             }

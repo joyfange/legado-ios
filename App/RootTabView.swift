@@ -255,6 +255,11 @@ private struct BookshelfView: View {
             .first
     }
 
+    /// 大标题：平时是「书架」，多选时显示已选数量。
+    private var shelfTitle: String {
+        selection.isActive ? "已选 \(selection.urls.count) 本" : "书架"
+    }
+
     /// 右侧竖向切换条已取消：书架切换统一用顶部的切换条。
     private var showsSideSwitcher: Bool { false }
 
@@ -265,15 +270,12 @@ private struct BookshelfView: View {
         // 仿 bookon：标题栏固定在顶部，只有下面的内容滚动；上滑时内容在标题栏下沿直接裁掉，
         // 下拉时背景和标题都不动，只有书本身被拉下来，不会露出一截主题色。
         VStack(spacing: 0) {
-            ReadingPageHeader(title: "书架", subtitle: selection.isActive ? "已选 \(selection.urls.count) 本" : "阅读，让时间有了形状",
-                              bottomPadding: 0) {
-                if selection.isActive {
-                    selectionHeaderButtons
-                } else {
-                    normalHeaderButtons
-                }
-            }
             ScrollView {
+                // 大标题放在懒加载列表外面：滚得很远时标题也不会被回收，顶部栏状态保持正确。
+                VStack(alignment: .leading, spacing: 0) {
+                ReadingLargeTitle(title: shelfTitle)
+                    .padding(.horizontal, 24)
+                    .padding(.bottom, 14)
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !library.hasLoaded {
                         // 书架还没读完：保持空白，不闪「空书架」占位。
@@ -324,14 +326,20 @@ private struct BookshelfView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                // 标题下沿到第一张卡片仍是 20pt，但这段留在滚动区里：卡片阴影完整显示，
-                // 不会在滚动区上沿被切出一道横线（看起来像标题区和内容是两块拼起来的）。
-                .padding(.top, 20)
+                .padding(.top, 6)
                 .padding(.bottom, 32)
+                }
             }
             .readingTopScrollEdgeHidden()
         }
         .readingCanvas()
+        .readingLargeTitleBar(title: shelfTitle) {
+            if selection.isActive {
+                selectionHeaderButtons
+            } else {
+                normalHeaderButtons
+            }
+        }
         .overlay(alignment: .trailing) {
             if showsSideSwitcher {
                 sideSwitcherBar
@@ -2791,6 +2799,7 @@ private struct SearchBookRow: View {
 
 private struct SettingsView: View {
     @ThemePalette private var palette
+    @ObservedObject private var fonts = ReadingFontManager.shared
     @EnvironmentObject private var activity: ReadingActivityModel
     @EnvironmentObject private var library: BookLibraryModel
     @Environment(\.colorScheme) private var colorScheme
@@ -2800,10 +2809,12 @@ private struct SettingsView: View {
     var body: some View {
         // 标题固定在顶部、只滚下面的设置（与书架 / 发现 / 统计一致，仿 bookon）：
         // 不再铺装饰插画和渐变色带，下拉时背景纹丝不动，不会露出主题色，照片背景也不会被插画盖住。
+        // 顶部只保留大标题（随内容滚动），上滑后顶部栏淡入小标题，仿系统大标题导航的上滑效果。
         VStack(alignment: .leading, spacing: 0) {
-            ReadingPageHeader(title: "我的", subtitle: "按照你的方式阅读", bottomPadding: 0) { }
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 24) {
+                    ReadingLargeTitle(title: "我的")
+                        .padding(.bottom, -10)
                     profileCard
                     readingSection
                     rulesSection
@@ -2815,14 +2826,13 @@ private struct SettingsView: View {
                     supportSection
                 }
                 .padding(.horizontal, 24)
-                // 名片卡片的阴影留在滚动区内，不在标题下沿被切出硬边。
-                .padding(.top, 20)
                 .padding(.bottom, 32)
             }
             .readingTopScrollEdgeHidden()
             .accessibilityIdentifier("profile.scroll")
         }
         .readingCanvas()
+        .readingLargeTitleBar(title: "我的")
         .navigationBarHidden(true)
     }
 
@@ -2923,6 +2933,12 @@ private struct SettingsView: View {
     private var readingSection: some View {
         settingSection("阅读") {
             settingLink("阅读设置", icon: "textformat.size") { ReadingPreferencesView() }
+            // 字体管理：书籍字体 + 界面字体，右侧显示已导入的字体数量。
+            NavigationLink { FontManagementView() } label: {
+                settingRow("字体管理", icon: "textformat", value: "\(fonts.importedFonts.count) 个")
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("profile.fonts")
             appearanceEntry
             .accessibilityLabel("外观")
             .accessibilityValue(appearanceTitle)
@@ -7818,7 +7834,7 @@ struct BookshelfShelfSettingsSheet: View {
                 .font(AppFontStyle.system(size: 14, weight: .medium).themed)
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: 36, height: 30)
-                .background(selected ? Color(UIColor.systemBackground) : Color.clear, in: Capsule())
+                .background { if selected { ThemeSurface(shape: Capsule()) } }
                 .shadow(color: .black.opacity(selected ? 0.1 : 0), radius: 2, y: 1)
         }
         .buttonStyle(.plain)
@@ -7832,7 +7848,7 @@ struct BookshelfShelfSettingsSheet: View {
                 .font(AppFontStyle.system(size: 13, weight: selected ? .semibold : .regular).themed)
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: width, height: 30)
-                .background(selected ? Color(UIColor.systemBackground) : Color.clear, in: Capsule())
+                .background { if selected { ThemeSurface(shape: Capsule()) } }
                 .shadow(color: .black.opacity(selected ? 0.1 : 0), radius: 2, y: 1)
         }
         .buttonStyle(.plain)

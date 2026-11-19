@@ -154,7 +154,7 @@ struct FileManagementView: View {
             }
         }
         .disabled(model.isWorking)
-        .overlay { if model.isWorking { ProgressView("正在处理文件…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .overlay { if model.isWorking { ProgressView("正在处理文件…").padding().background { ThemeCardSurface(radius: 12) } } }
         .task { await model.reload(library) }
         .onChange(of: library.books) { _ in Task { await model.reload(library) } }
         .onChange(of: query) { _ in selection.removeAll() }

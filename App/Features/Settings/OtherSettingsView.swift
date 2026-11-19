@@ -55,7 +55,7 @@ struct OtherSettingsView: View {
         .navigationTitle("其他设置")
         .navigationBarTitleDisplayMode(.inline)
         .disabled(isWorking)
-        .overlay { if isWorking { ProgressView("正在处理…").padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+        .overlay { if isWorking { ProgressView("正在处理…").padding().background { ThemeCardSurface(radius: 12) } } }
         .onAppear { settings = ApplicationSettingsStore.shared.settings }
         .confirmationDialog(maintenance?.rawValue ?? "", isPresented: Binding(
             get: { maintenance != nil }, set: { if !$0 { maintenance = nil } }

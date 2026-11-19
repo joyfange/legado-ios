@@ -267,7 +267,8 @@ struct ThemeCustomization: Codable, Equatable {
     var pageBackgroundImage: String? = nil
     /// nil follows the existing font manager; an empty string explicitly means system.
     var fontPostScriptName: String? = nil
-    var effect: ThemeInterfaceEffect = .frosted
+    /// 默认「系统」玻璃（透明模式、毛玻璃都不开）：重置为默认、新建外观时都是这一种。
+    var effect: ThemeInterfaceEffect = .opaque
     var cardBackground: Bool = true
     /// Optional per-tab icon override. Keys are LibraryTab raw names
     /// ("shelf"/"statistics"/"profile"); values are either an SF Symbol name

@@ -98,6 +98,7 @@ struct RSSHomeView: View {
                     NavigationLink { RSSSourceEditorView(source: source) } label: { Label("编辑", systemImage: "pencil") }
                 }
                 .moveDisabled(!searchText.isEmpty)
+                .readingRowBackground()
             }
             .onMove { offsets, destination in Task { await library.moveSources(from: offsets, to: destination) } }
         }.readingThemedListBackground().listStyle(.plain)
@@ -111,6 +112,7 @@ struct RSSHomeView: View {
                         NavigationLink { RSSArticleDetailView(article: star.article, source: source) } label: { RSSArticleRow(article: star.article) }
                     } else { RSSArticleRow(article: star.article) }
                 }.swipeActions(edge: .leading) { Button("编辑", systemImage: "pencil") { editingStar = star }.tint(.blue) }
+                .readingRowBackground()
             }.onDelete { offsets in
                 let values = offsets.map { filteredStars[$0] }
                 Task { for value in values { await library.removeStar(value) } }
@@ -119,9 +121,12 @@ struct RSSHomeView: View {
     }
     private var recordList: some View {
         List(filteredRecords) { record in
-            if let source = library.sources.first(where: { $0.sourceUrl == record.origin }) {
-                NavigationLink { RSSArticleDetailView(article: record.article, source: source) } label: { RSSArticleRow(article: record.article) }
-            } else { RSSArticleRow(article: record.article) }
+            Group {
+                if let source = library.sources.first(where: { $0.sourceUrl == record.origin }) {
+                    NavigationLink { RSSArticleDetailView(article: record.article, source: source) } label: { RSSArticleRow(article: record.article) }
+                } else { RSSArticleRow(article: record.article) }
+            }
+            .readingRowBackground()
         }.readingThemedListBackground().overlay { if filteredRecords.isEmpty { ReadingUnavailableView("没有阅读记录", systemImage: "clock") } }.listStyle(.plain)
     }
     private var filteredSources: [RssSource] { library.sources.filter { searchText.isEmpty || $0.sourceName.localizedCaseInsensitiveContains(searchText) || $0.sourceUrl.localizedCaseInsensitiveContains(searchText) || ($0.sourceGroup ?? "").localizedCaseInsensitiveContains(searchText) } }
@@ -177,6 +182,7 @@ private struct RSSArticleListView: View {
         if source.articleStyle == 0 {
             List(library.articles) { article in
                 NavigationLink { RSSArticleDetailView(article: article, source: source) } label: { RSSArticleRow(article: article) }
+                    .readingRowBackground()
             }.readingThemedListBackground().listStyle(.plain)
         } else {
             ScrollView {
@@ -292,9 +298,9 @@ private struct RSSArticleCard: View {
                     .padding(.horizontal, style == 1 ? 12 : 6).padding(.top, 8).padding(.bottom, 10)
             } else { Spacer().frame(height: 10) }
         }
-        .background(style == 3 ? Color(.secondarySystemBackground) : .clear)
+        // 卡片样式跟随「界面效果」（系统玻璃 / 透明 / 毛玻璃），不再是写死的系统灰底。
+        .background { if style == 3 { ThemeCardSurface(radius: 12) } }
         .clipShape(RoundedRectangle(cornerRadius: style == 3 ? 12 : 0, style: .continuous))
-        .overlay { if style == 3 { RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.08)) } }
     }
 
     @ViewBuilder private var articleImage: some View {
