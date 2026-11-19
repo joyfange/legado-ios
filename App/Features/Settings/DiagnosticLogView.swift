@@ -33,6 +33,7 @@ struct DiagnosticLogView: View {
             }.readingRowBackground()
             if filtered.isEmpty {
                 ReadingUnavailableView(query.isEmpty ? "暂无日志" : "没有匹配的日志", systemImage: "doc.text.magnifyingglass")
+                    .readingRowBackground()
             } else {
                 ForEach(filtered) { entry in
                     VStack(alignment: .leading, spacing: 6) {
@@ -47,6 +48,7 @@ struct DiagnosticLogView: View {
                         Text(entry.message).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                     }.padding(.vertical, 3)
                 }
+                .readingRowBackground()
             }
         }.readingThemedListBackground()
         .navigationTitle("日志与诊断")

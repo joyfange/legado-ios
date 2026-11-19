@@ -376,12 +376,21 @@ struct ThemeSurfaceRendering<S: InsettableShape>: View {
                             shape.fill(palette.surface)
                         }
                     case .opaque:
-                        shape.fill(palette.surface)
+                        // 「系统」（透明模式、毛玻璃都没开）：恢复第二轮之前的默认玻璃卡片；
+                        // 全局玻璃总开关关闭时仍是主题实色卡片。
+                        if glassEnabled {
+                            ThemeSystemGlassFill(shape: shape, palette: palette)
+                        } else {
+                            shape.fill(palette.surface)
+                        }
                     }
                 }
                 if !isCard || palette.cardBorder {
                     // 毛玻璃、透明模式都不画亮边（参考应用卡片没有描边）；只有实色卡片保留细分隔线。
-                    if reduceTransparency || effect == .opaque || (effect == .frosted && !glassEnabled) {
+                    if !reduceTransparency, effect == .opaque, glassEnabled {
+                        // 「系统」默认玻璃：和第二轮之前一样的受光亮边。
+                        shape.strokeBorder(Color.white.opacity(scheme == .dark ? 0.14 : 0.45), lineWidth: 0.6)
+                    } else if reduceTransparency || effect == .opaque || (effect == .frosted && !glassEnabled) {
                         shape.strokeBorder(palette.border.opacity(0.6), lineWidth: 0.5)
                     }
                 }
@@ -426,6 +435,68 @@ struct ThemeFrostedFill<S: Shape>: View {
             }
         }
         .opacity(amount)
+    }
+}
+
+/// 「系统」界面效果（透明模式、毛玻璃都没开）的默认玻璃卡片：与第二轮改动之前未设置界面效果时的
+/// 默认玻璃完全一致——iOS 26 用系统 Liquid Glass，更早的系统用磨砂材质 + 细边，
+/// 卡片色按 85% 着色，再叠一层受光高光和主题色光晕。只给「系统」用，透明模式和毛玻璃不受影响。
+struct ThemeSystemGlassFill<S: InsettableShape>: View {
+    let shape: S
+    let palette: ResolvedAppPalette
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// 第二轮之前默认玻璃的着色不透明度。
+    static var tintOpacity: Double { 0.85 }
+
+    init(shape: S, palette: ResolvedAppPalette) {
+        self.shape = shape
+        self.palette = palette
+    }
+
+    var body: some View {
+        let tint = palette.surface
+        let tintOpacity = Self.tintOpacity
+        ZStack {
+            Group {
+                if scenePhase == .background {
+                    // 多任务截图拍不到实时模糊：后台时画接近玻璃观感的半透明底，回到 App 时不会由暗转亮。
+                    shape.fill(tint.opacity(min(0.92, tintOpacity + 0.5)))
+                        .overlay { shape.fill(Color.white.opacity(0.18)) }
+                } else if #available(iOS 26.0, *) {
+                    Color.clear.glassEffect(.regular.tint(tint.opacity(tintOpacity)), in: shape)
+                } else {
+                    shape.fill(.ultraThinMaterial)
+                        .overlay { shape.fill(tint.opacity(tintOpacity)) }
+                        .overlay { shape.strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5) }
+                }
+            }
+            shape.fill(LinearGradient(
+                colors: [Color.white.opacity(scheme == .dark ? 0.07 : 0.2), .clear],
+                startPoint: .topLeading, endPoint: .center))
+            if palette.glowIntensity > 0 {
+                shape.fill(RadialGradient(
+                    colors: [palette.accent.opacity(0.12 * palette.glowIntensity), .clear],
+                    center: .topLeading, startRadius: 0, endRadius: 220))
+            }
+        }
+    }
+}
+
+/// 「系统」界面效果下 List / Form 每一行的默认玻璃底：与第二轮之前未设置界面效果时的列表行一致
+/// （磨砂材质 + 85% 卡片色 + 顶部淡淡高光）。
+struct ThemeSystemGlassRowFill: View {
+    let palette: ResolvedAppPalette
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        ZStack {
+            Rectangle().fill(.ultraThinMaterial)
+            palette.surface.opacity(ThemeSystemGlassFill<Rectangle>.tintOpacity)
+            LinearGradient(colors: [Color.white.opacity(scheme == .dark ? 0.05 : 0.16), .clear],
+                           startPoint: .top, endPoint: .bottom)
+        }
     }
 }
 

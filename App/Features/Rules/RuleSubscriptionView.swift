@@ -10,7 +10,7 @@ struct RuleSubscriptionView: View {
 
     var body: some View {
         List {
-            if visibleValues.isEmpty { ReadingUnavailableView("没有规则订阅", systemImage: "link.badge.plus") }
+            if visibleValues.isEmpty { ReadingUnavailableView("没有规则订阅", systemImage: "link.badge.plus").readingRowBackground() }
             ForEach(visibleValues) { value in
                 Button { open(value) } label: {
                     HStack(spacing: 12) {
@@ -26,6 +26,7 @@ struct RuleSubscriptionView: View {
                 let sourceOffsets = IndexSet(model.values.indices.filter { ids.contains(model.values[$0].id) })
                 Task { await model.remove(at: sourceOffsets) }
             }
+            .readingRowBackground()
         }.readingThemedListBackground()
         .navigationTitle("规则订阅")
         .toolbar { ToolbarItem(placement: .primaryAction) { Button("新建", systemImage: "plus") { editing = RuleSub() } }; ToolbarItem(placement: .primaryAction) { EditButton() } }
@@ -55,14 +56,16 @@ private struct RuleSubscriptionEditView: View {
     var body: some View {
         ReadingNavigationStack {
             Form {
-                Picker("类型", selection: $value.type) { Text("书源").tag(0); Text("净化规则").tag(2) }
-                TextField("名称", text: $value.name)
-                ReadingTextField("订阅URL", text: $value.url, axis: .vertical).textInputAutocapitalization(.never).disableAutocorrection(true)
-                Toggle("自动更新", isOn: $value.autoUpdate)
-                if value.autoUpdate {
-                    Stepper("更新间隔：\(value.updateInterval) 小时", value: $value.updateInterval, in: 1...720)
-                    Toggle("静默更新", isOn: $value.silentUpdate)
-                }
+                Group {
+                    Picker("类型", selection: $value.type) { Text("书源").tag(0); Text("净化规则").tag(2) }
+                    TextField("名称", text: $value.name)
+                    ReadingTextField("订阅URL", text: $value.url, axis: .vertical).textInputAutocapitalization(.never).disableAutocorrection(true)
+                    Toggle("自动更新", isOn: $value.autoUpdate)
+                    if value.autoUpdate {
+                        Stepper("更新间隔：\(value.updateInterval) 小时", value: $value.updateInterval, in: 1...720)
+                        Toggle("静默更新", isOn: $value.silentUpdate)
+                    }
+                }.readingRowBackground()
             }.readingThemedListBackground().navigationTitle("规则订阅").toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button(saving ? "保存中…" : "保存") { saving = true; Task { if await save(value) { dismiss() }; saving = false } }.disabled(saving || value.url.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }

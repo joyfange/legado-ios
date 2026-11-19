@@ -45,6 +45,7 @@ struct QRCodeImportView: View {
                 if values.count > 1 {
                     List(values, id: \.self) { value in
                         Button { accept(value) } label: { Text(value).font(AppFontStyle.caption.themed).lineLimit(3) }
+                            .readingRowBackground()
                     }.readingThemedListBackground().frame(maxHeight: 220)
                 }
             }

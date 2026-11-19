@@ -21,8 +21,10 @@ struct ReplaceRuleManagementView: View {
     var body: some View {
         List {
             if library.rules.isEmpty {
-                ReadingUnavailableView("还没有净化规则", systemImage: "wand.and.stars", description: Text("新建规则，或导入 Legado 净化规则。"))
-                Button("新建规则", systemImage: "plus") { edit(library.newRule()) }
+                Group {
+                    ReadingUnavailableView("还没有净化规则", systemImage: "wand.and.stars", description: Text("新建规则，或导入 Legado 净化规则。"))
+                    Button("新建规则", systemImage: "plus") { edit(library.newRule()) }
+                }.readingRowBackground()
             } else {
                 Section {
                     ReadingLabeledContent("已启用", value: "\(library.rules.filter(\.isEnabled).count) / \(library.rules.count)")

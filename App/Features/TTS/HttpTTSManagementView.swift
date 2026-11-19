@@ -111,6 +111,7 @@ struct HttpTTSManagementView: View {
                 }
             }
             .onDelete { offsets in Task { await model.delete(at: offsets) } }
+            .readingRowBackground()
         }.readingThemedListBackground()
         .overlay {
             if model.engines.isEmpty {
@@ -293,6 +294,7 @@ private struct HttpTTSLoginView: View {
         Form {
             if rows.isEmpty, errorMessage == nil {
                 ProgressView("正在生成登录表单…")
+                    .readingRowBackground()
             }
             ForEach(rows) { row in
                 switch row.type {
@@ -317,7 +319,7 @@ private struct HttpTTSLoginView: View {
                         .onChange(of: values[row.name]) { _ in scheduleFieldAction(row.action) }
                 }
             }.readingRowBackground()
-            if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(AppFontStyle.footnote.themed) }
+            if let errorMessage { Text(errorMessage).foregroundStyle(.red).font(AppFontStyle.footnote.themed).readingRowBackground() }
         }.readingThemedListBackground()
         .navigationTitle("登录 · \(engine.name)")
         .navigationBarTitleDisplayMode(.inline)

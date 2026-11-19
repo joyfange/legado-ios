@@ -386,7 +386,12 @@ struct ThemeListRowBackground: View {
                         palette.surface
                     }
                 case .opaque:
-                    palette.surface
+                    // 「系统」（透明模式、毛玻璃都没开）：恢复第二轮之前的默认玻璃行底；玻璃总开关关闭时仍是实色。
+                    if glassEnabled {
+                        ThemeSystemGlassRowFill(palette: palette)
+                    } else {
+                        palette.surface
+                    }
                 }
             }
         }
@@ -429,9 +434,31 @@ private struct ReadingInlineSearchModifier: ViewModifier {
     let prompt: String
     let submit: (() -> Void)?
     @FocusState private var focused: Bool
+    /// 页面背景（整屏，含导航栏和底部）在全局坐标里的位置：搜索区按它绘制同一张背景再裁出来。
+    @State private var canvasFrame: CGRect = .zero
 
     func body(content: Content) -> some View {
-        content.safeAreaInset(edge: .top, spacing: 0) {
+        content
+            // 整页只有一张页面背景：和列表自己的背景位置、尺寸完全相同（都铺满整屏），
+            // 列表为空 / 页面没有自带背景时（如阅读记录为空）也保证搜索区上下是同一张背景。
+            .background {
+                ReadingCanvasBackground(grouped: true)
+                    .overlay {
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: ReadingInlineSearchCanvasFrameKey.self,
+                                                   value: proxy.frame(in: .named(ReadingInlineSearchCanvasFrameKey.space)))
+                        }
+                    }
+                    .ignoresSafeArea()
+            }
+            .onPreferenceChange(ReadingInlineSearchCanvasFrameKey.self) { value in
+                Task { @MainActor in
+                    if canvasFrame != value { canvasFrame = value }
+                }
+            }
+            // iOS 26 不在列表上沿叠系统的滚动边缘模糊（否则搜索区下面多出一条朦胧色带）。
+            .readingTopScrollEdgeHidden()
+            .safeAreaInset(edge: .top, spacing: 0) {
             HStack(spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
@@ -473,9 +500,38 @@ private struct ReadingInlineSearchModifier: ViewModifier {
             .padding(.horizontal, 16)
             .padding(.top, 6)
             .padding(.bottom, 8)
-            .background { ReadingCanvasBackground(grouped: true).ignoresSafeArea(edges: .horizontal) }
+            // 搜索区不再单独画一块背景（单独按这一条的尺寸绘制时，渐变被压扁、背景图裁到别的位置，
+            // 看起来像另一块屏幕）：按整屏尺寸画同一张页面背景，只露出导航栏到搜索框下沿这一段，
+            // 和下面列表的背景逐像素对齐；列表内容滑上来在搜索区下沿直接裁掉（与书架 / 发现 / 统计 / 我的一致）。
+            .background {
+                GeometryReader { proxy in
+                    let band = proxy.frame(in: .named(ReadingInlineSearchCanvasFrameKey.space))
+                    if canvasFrame.width > 0, canvasFrame.height > 0 {
+                        ReadingCanvasBackground(grouped: true)
+                            .frame(width: canvasFrame.width, height: canvasFrame.height)
+                            .offset(x: canvasFrame.minX - band.minX, y: canvasFrame.minY - band.minY)
+                    } else {
+                        ReadingCanvasBackground(grouped: true)
+                    }
+                }
+                .clipped()
+                .ignoresSafeArea(edges: [.horizontal, .top])
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
             .animation(.easeOut(duration: 0.15), value: focused)
         }
+        // 两块背景都在同一个坐标系里量位置：推入 / 返回动画时两者一起移动，不会错位。
+        .coordinateSpace(name: ReadingInlineSearchCanvasFrameKey.space)
+    }
+}
+
+private struct ReadingInlineSearchCanvasFrameKey: PreferenceKey {
+    static let space = "reading.inlineSearch.page"
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if next != .zero { value = next }
     }
 }
 

@@ -30,6 +30,7 @@ struct ReadingHistoryView: View {
                     }.readingRowBackground()
                     if displayedRecords.isEmpty {
                         ReadingUnavailableView.search(text: searchText)
+                            .readingRowBackground()
                     } else {
                         ForEach(displayedRecords) { record in
                             NavigationLink {
@@ -59,6 +60,8 @@ struct ReadingHistoryView: View {
                                 Button("删除", role: .destructive) { pendingDelete = record }
                             }
                         }
+                        // 记录列表与上面的统计卡片同一种主题卡片底（跟随界面效果），不再是系统白底。
+                        .readingRowBackground()
                     }
                 }.readingThemedListBackground()
                 .listStyle(.insetGrouped)

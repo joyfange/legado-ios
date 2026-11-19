@@ -160,7 +160,6 @@ struct SourceManagementView: View {
             }
         }
         .navigationTitle("书源")
-        .background(ReadingTheme.groupedCanvas)
         .readingInlineSearch(text: $searchText, prompt: "名称、地址或分组")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {

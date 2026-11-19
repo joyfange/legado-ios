@@ -96,6 +96,7 @@ struct TxtTocRuleManagementView: View {
         List {
             if model.rules.isEmpty {
                 ReadingUnavailableView("没有TXT目录规则", systemImage: "list.bullet.rectangle")
+                    .readingRowBackground()
             }
             ForEach(model.rules) { rule in
                 Button { editing = rule } label: {
@@ -115,6 +116,7 @@ struct TxtTocRuleManagementView: View {
             }
             .onDelete { offsets in Task { await model.remove(at: offsets) } }
             .onMove { offsets, destination in Task { await model.move(from: offsets, to: destination) } }
+            .readingRowBackground()
         }.readingThemedListBackground()
         .navigationTitle("TXT目录规则")
         .toolbar {
@@ -184,13 +186,15 @@ private struct TxtTocRuleEditView: View {
     var body: some View {
         ReadingNavigationStack {
             Form {
-                TextField("名称", text: $value.name)
-                ReadingTextField("目录正则", text: $value.rule, axis: .vertical)
-                    .font(.body.monospaced()).textInputAutocapitalization(.never).disableAutocorrection(true)
-                ReadingTextField("标题处理JavaScript（可选）", text: Binding(
-                    get: { value.replacement }, set: { value.replacement = $0 }
-                ), axis: .vertical).font(.body.monospaced())
-                Toggle("启用", isOn: $value.enable)
+                Group {
+                    TextField("名称", text: $value.name)
+                    ReadingTextField("目录正则", text: $value.rule, axis: .vertical)
+                        .font(.body.monospaced()).textInputAutocapitalization(.never).disableAutocorrection(true)
+                    ReadingTextField("标题处理JavaScript（可选）", text: Binding(
+                        get: { value.replacement }, set: { value.replacement = $0 }
+                    ), axis: .vertical).font(.body.monospaced())
+                    Toggle("启用", isOn: $value.enable)
+                }.readingRowBackground()
                 Section("测试文本") {
                     TextEditor(text: $sample).frame(minHeight: 130)
                     Text(testResult).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)

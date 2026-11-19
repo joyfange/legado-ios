@@ -1726,6 +1726,7 @@ private struct BookGroupSelectView: View {
                         if selected.contains(group.id) { Image(systemName: "checkmark").foregroundStyle(ReadingTheme.accent) }
                     }
                 }
+                .readingRowBackground()
             }.readingThemedListBackground()
             .overlay {
                 if customGroups.isEmpty {
@@ -1780,6 +1781,7 @@ private struct LocalBookImportReviewView: View {
                         }
                     }
                 }
+                .readingRowBackground()
             }.readingThemedListBackground()
             .overlay { if isImporting { ProgressView("正在导入…") } }
             .navigationTitle("导入本地书")
@@ -2976,13 +2978,8 @@ private struct SettingsView: View {
                 .font(AppFontStyle.body.themed)
                 .foregroundStyle(ProfileTheme.secondary)
                 .accessibilityAddTraits(.isHeader)
-            VStack(spacing: 0, content: content)
-                .background {
-                    ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: 18), style: .continuous),
-                                 isCard: true)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: palette.cornerRadius(default: 18), style: .continuous))
-                .shadow(color: .black.opacity(palette.cardBackground ? 0.025 : 0), radius: 20, x: 0, y: 8)
+            // 和「外观主题」页一样：每一项是一条独立的圆角小卡片，项与项之间留 8pt 间距（不再整组装进一张卡片）。
+            VStack(spacing: 8, content: content)
         }
     }
 
@@ -3007,47 +3004,37 @@ private struct SettingsView: View {
         isExternal: Bool = false,
         showsSeparator: Bool = true
     ) -> some View {
-        HStack(spacing: 18) {
-            ProfileSettingIcon(systemName: icon)
-                .frame(width: 26, height: 24)
-                .accessibilityHidden(true)
-            Text(title)
-                .font(AppFontStyle.body.themed)
-                .foregroundStyle(ProfileTheme.ink)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-            if let value {
-                Text(value)
-                    .font(AppFontStyle.footnote.themed)
-                    .foregroundStyle(ProfileTheme.secondary)
-                    .multilineTextAlignment(.trailing)
+        // 外观主题同款行卡片（AppearanceCard）：圆角、高度、内边距和卡片底一致，跟随「界面效果」三种模式。
+        AppearanceCard {
+            HStack(spacing: 18) {
+                ProfileSettingIcon(systemName: icon)
+                    .frame(width: 26, height: 24)
+                    .accessibilityHidden(true)
+                Text(title)
+                    .font(AppFontStyle.body.themed)
+                    .foregroundStyle(ProfileTheme.ink)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, showsValuePill ? 10 : 0)
-                    .padding(.vertical, showsValuePill ? 4 : 0)
-                    .overlay {
-                        if showsValuePill {
-                            Capsule().strokeBorder(ProfileTheme.separator, lineWidth: 0.5)
+                Spacer(minLength: 0)
+                if let value {
+                    Text(value)
+                        .font(AppFontStyle.footnote.themed)
+                        .foregroundStyle(ProfileTheme.secondary)
+                        .multilineTextAlignment(.trailing)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, showsValuePill ? 10 : 0)
+                        .padding(.vertical, showsValuePill ? 4 : 0)
+                        .overlay {
+                            if showsValuePill {
+                                Capsule().strokeBorder(ProfileTheme.separator, lineWidth: 0.5)
+                            }
                         }
-                    }
-            }
-            Image(systemName: isExternal ? "arrow.up.right" : "chevron.right")
-                .font(AppFontStyle.caption.weight(.medium).themed)
-                .foregroundStyle(ProfileTheme.secondary.opacity(0.65))
-                .accessibilityHidden(true)
-        }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .frame(minHeight: rowHeight)
-        .contentShape(Rectangle())
-        .overlay(alignment: .bottom) {
-            if showsSeparator {
-                Rectangle()
-                    .fill(ProfileTheme.separator)
-                    .frame(height: 0.5)
-                    .padding(.leading, 62)
-                    .padding(.trailing, 18)
+                }
+                Image(systemName: isExternal ? "arrow.up.right" : "chevron.right")
+                    .font(AppFontStyle.caption.weight(.medium).themed)
+                    .foregroundStyle(ProfileTheme.secondary.opacity(0.65))
                     .accessibilityHidden(true)
             }
+            .frame(minHeight: max(0, rowHeight - 22))
         }
         .accessibilityElement(children: .combine)
     }
@@ -3180,6 +3167,7 @@ private struct AllBookmarksView: View {
                     systemImage: "bookmark.slash",
                     description: Text("阅读时可从菜单或点击区域添加书签。")
                 )
+                .readingRowBackground()
             } else {
                 ForEach(sections) { section in
                     Section("\(section.bookName)(\(section.author))") {
