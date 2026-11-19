@@ -44,12 +44,14 @@ struct ThemeEditorView: View {
                         .onTapGesture { nameFocused = true }
                         .accessibilityLabel("主题名称").accessibilityIdentifier("theme.editor.name")
                 } header: { Text("主题名称") }
+                .readingRowBackground()
                 if draft.customization == nil {
                     Section {
                         Text("此主题保留原有布局；首次修改界面设置时，将启用自定义默认值：图标与文字、3列、112pt、玻璃。颜色编辑不会启用这些设置。")
                             .appFont(.footnote).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
+                    .readingRowBackground()
                 }
                 Section("界面") {
                     row(.tab, value: draft.customization == nil ? "图标和文字 · 原有" : tabSummary)
@@ -57,12 +59,14 @@ struct ThemeEditorView: View {
                     row(.cover, value: imageSummary(settings.defaultCoverImage, empty: "系统默认"))
                     row(.launch, value: imageSummary(settings.launchImage, empty: "关"))
                 }
+                .readingRowBackground()
                 Section("外观") {
                     row(.colors, value: ThemeEditorFonts.name(settings.fontPostScriptName, manager: fonts))
                     row(.background, value: imageSummary(settings.pageBackgroundImage, empty: draft.backgroundStyle.title))
                     row(.effect, value: draft.customization == nil ? "原有样式" : effectSummary)
                     row(.cards, value: settings.cardBackground ? "已开启" : "已关闭")
                 }
+                .readingRowBackground()
                 Section {
                     DisclosureGroup("当前主题预览") {
                         ThemeEditorSchemePicker(selection: $previewScheme)
@@ -76,6 +80,7 @@ struct ThemeEditorView: View {
                          ? "保存后更新正在使用的主题。返回各设置页不会丢失草稿。"
                          : "保存到主题列表后，可点按“使用主题”应用。")
                 }
+                .readingRowBackground()
                 if let message = errorMessage ?? draft.validationMessage {
                     Section {
                         Label(message, systemImage: "exclamationmark.circle")
@@ -83,6 +88,7 @@ struct ThemeEditorView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("theme.editor.error")
                     }
+                    .readingRowBackground()
                 }
             }
             .environment(\.defaultMinListRowHeight, 48)

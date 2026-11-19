@@ -3,7 +3,7 @@ import SwiftUI
 import LegadoCore
 #endif
 
-// MARK: - 统计页（版式参考 joyfange/bookon：今日目标环 / 连续阅读热力图 / 今年在读 / 趋势图 / 常读书籍）
+// MARK: - 统计页（今日目标环 / 趋势与环比 / 阅读日历 / 年度 / 个人纪录 / 书籍排行，全部玻璃卡片）
 
 enum ReadingStatsRange: String, CaseIterable, Identifiable {
     case week, month
@@ -12,31 +12,40 @@ enum ReadingStatsRange: String, CaseIterable, Identifiable {
     var title: String { self == .week ? "近 7 天" : "近 30 天" }
 }
 
+enum ReadingStatsSettings {
+    static let dailyGoalKey = "stats.dailyGoalMinutes"
+    static let yearlyGoalKey = "stats.yearlyGoalBooks"
+    static let streakMinimumKey = "stats.streakMinimumMinutes"
+}
+
 /// 从阅读记录（每本书每天的阅读毫秒数）汇总出统计页需要的全部数字。纯计算，不改数据。
 struct ReadingStatsDigest {
     let calendar: Calendar
     let today: Date
     /// 每天（当天 0 点）的阅读毫秒数。
     let daily: [Date: Int64]
-    /// 每天读过的书。
-    let booksByDay: [Date: Set<String>]
+    /// 每天每本书的阅读毫秒数。
+    let bookTimesByDay: [Date: [String: Int64]]
     let totalReadTime: Int64
     let bookCount: Int
+    /// 一天读满这么久才计入连续天数 / 阅读天数（毫秒）。
+    let minimumDailyTime: Int64
 
-    init(records: [ReadRecord], now: Date = Date(), calendar: Calendar = .current) {
+    init(records: [ReadRecord], now: Date = Date(), calendar: Calendar = .current, minimumDailyMinutes: Int = 0) {
         self.calendar = calendar
         today = calendar.startOfDay(for: now)
+        minimumDailyTime = Int64(max(minimumDailyMinutes, 0)) * 60_000
         var daily: [Date: Int64] = [:]
-        var books: [Date: Set<String>] = [:]
+        var books: [Date: [String: Int64]] = [:]
         for record in records {
             for (key, value) in record.dailyReadTimes where value > 0 {
                 guard let day = Self.date(fromKey: key, calendar: calendar) else { continue }
                 daily[day, default: 0] += value
-                if !record.bookName.isEmpty { books[day, default: []].insert(record.bookName) }
+                if !record.bookName.isEmpty { books[day, default: [:]][record.bookName, default: 0] += value }
             }
         }
         self.daily = daily
-        booksByDay = books
+        bookTimesByDay = books
         totalReadTime = records.reduce(0) { $0 + max($1.readTime, 0) }
         bookCount = Set(records.lazy.map(\.bookName).filter { !$0.isEmpty }).count
     }
@@ -51,15 +60,21 @@ struct ReadingStatsDigest {
     func readTime(on day: Date) -> Int64 { daily[calendar.startOfDay(for: day)] ?? 0 }
     var todayReadTime: Int64 { readTime(on: today) }
 
-    private func shift(_ date: Date, by days: Int) -> Date {
+    /// 这一天是否算「读过」：有阅读时长，且达到连续天数的最低计入时长。
+    func isActive(_ day: Date) -> Bool {
+        let value = readTime(on: day)
+        return value > 0 && value >= minimumDailyTime
+    }
+
+    func shift(_ date: Date, by days: Int) -> Date {
         calendar.date(byAdding: .day, value: days, to: date) ?? date
     }
 
     /// 当前连续：今天没读时保留到昨天为止。
     var currentStreak: Int {
-        var cursor: Date? = readTime(on: today) > 0 ? today : (readTime(on: shift(today, by: -1)) > 0 ? shift(today, by: -1) : nil)
+        var cursor: Date? = isActive(today) ? today : (isActive(shift(today, by: -1)) ? shift(today, by: -1) : nil)
         var count = 0
-        while let day = cursor, readTime(on: day) > 0 {
+        while let day = cursor, isActive(day) {
             count += 1
             cursor = shift(day, by: -1)
         }
@@ -67,7 +82,7 @@ struct ReadingStatsDigest {
     }
 
     var longestStreak: Int {
-        let days = daily.filter { $0.value > 0 }.keys.sorted()
+        let days = daily.keys.filter { isActive($0) }.sorted()
         var best = 0, run = 0
         var previous: Date?
         for day in days {
@@ -82,6 +97,15 @@ struct ReadingStatsDigest {
         return best
     }
 
+    var activeDayCount: Int { daily.keys.filter { isActive($0) }.count }
+
+    /// 读得最久的一天。
+    var bestDay: (date: Date, time: Int64)? {
+        guard let best = daily.max(by: { $0.value == $1.value ? $0.key > $1.key : $0.value < $1.value }),
+              best.value > 0 else { return nil }
+        return (date: best.key, time: best.value)
+    }
+
     /// 最近 n 天（含今天），从早到晚。
     func days(_ count: Int) -> [(date: Date, time: Int64)] {
         (0..<max(count, 1)).reversed().map { offset in
@@ -90,52 +114,78 @@ struct ReadingStatsDigest {
         }
     }
 
-    /// 热力图：weeks 列，每列周一到周日；未来的日子为 -1。
-    func heatmap(weeks: Int, goalMinutes: Int) -> [[Int]] {
-        let weekday = calendar.component(.weekday, from: today) // 1 = 周日
-        let mondayOffset = (weekday + 5) % 7
-        let thisMonday = shift(today, by: -mondayOffset)
-        let goal = Double(max(goalMinutes, 1)) * 60_000
-        return (0..<weeks).map { column in
-            let monday = shift(thisMonday, by: -7 * (weeks - 1 - column))
-            return (0..<7).map { row in
-                let day = shift(monday, by: row)
-                if day > today { return -1 }
-                let value = Double(readTime(on: day))
-                guard value > 0 else { return 0 }
-                let ratio = value / goal
-                if ratio < 0.25 { return 1 }
-                if ratio < 0.6 { return 2 }
-                if ratio < 1 { return 3 }
-                return 4
-            }
-        }
+    /// 从 start 起 count 天的总时长。
+    func total(from start: Date, days count: Int) -> Int64 {
+        (0..<max(count, 0)).reduce(0) { $0 + readTime(on: shift(start, by: $1)) }
     }
 
-    var todayRow: Int { (calendar.component(.weekday, from: today) + 5) % 7 }
+    func activeDays(from start: Date, days count: Int) -> Int {
+        (0..<max(count, 0)).filter { isActive(shift(start, by: $0)) }.count
+    }
 
-    /// 今年每月读过的书（本数）与今年读过的书总数。
-    func yearlyBooks() -> (monthly: [Int], total: Int) {
+    /// 从 start 起 count 天里读过的书。
+    func books(from start: Date, days count: Int) -> Set<String> {
+        var result = Set<String>()
+        for offset in 0..<max(count, 0) {
+            if let names = bookTimesByDay[shift(start, by: offset)]?.keys { result.formUnion(names) }
+        }
+        return result
+    }
+
+    /// 某天读过的书，按时长从多到少。
+    func books(on day: Date) -> [(name: String, time: Int64)] {
+        (bookTimesByDay[calendar.startOfDay(for: day)] ?? [:])
+            .sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
+            .map { (name: $0.key, time: $0.value) }
+    }
+
+    /// 热力等级：0 没读，1～4 越接近每日目标越深。
+    func level(on day: Date, goalMinutes: Int) -> Int {
+        let value = Double(readTime(on: day))
+        guard value > 0 else { return 0 }
+        let ratio = value / (Double(max(goalMinutes, 1)) * 60_000)
+        if ratio < 0.25 { return 1 }
+        if ratio < 0.6 { return 2 }
+        if ratio < 1 { return 3 }
+        return 4
+    }
+
+    func startOfMonth(_ date: Date) -> Date {
+        calendar.date(from: calendar.dateComponents([.year, .month], from: date)) ?? calendar.startOfDay(for: date)
+    }
+
+    /// 月历格子：周一开头，前面补空位，补齐整周。
+    func monthGrid(_ month: Date) -> [Date?] {
+        let first = startOfMonth(month)
+        let count = calendar.range(of: .day, in: .month, for: first)?.count ?? 30
+        let leading = (calendar.component(.weekday, from: first) + 5) % 7
+        var cells: [Date?] = Array(repeating: nil, count: leading)
+        cells += (0..<count).map { Optional(shift(first, by: $0)) }
+        while cells.count % 7 != 0 { cells.append(nil) }
+        return cells
+    }
+
+    /// 今年每月的阅读时长、今年总时长与今年读过的书。
+    func yearly() -> (monthly: [Int64], total: Int64, books: Int) {
         let year = calendar.component(.year, from: today)
-        var months = Array(repeating: Set<String>(), count: 12)
-        var all = Set<String>()
-        for (day, names) in booksByDay where calendar.component(.year, from: day) == year {
+        var months = Array(repeating: Int64(0), count: 12)
+        var names = Set<String>()
+        for (day, value) in daily where calendar.component(.year, from: day) == year {
             let month = calendar.component(.month, from: day) - 1
             guard months.indices.contains(month) else { continue }
-            months[month].formUnion(names)
-            all.formUnion(names)
+            months[month] += value
+            if let books = bookTimesByDay[day]?.keys { names.formUnion(books) }
         }
-        return (months.map(\.count), all.count)
+        return (months, months.reduce(0, +), names.count)
     }
 
     /// 某段时间里读得最多的书。
-    func topBooks(records: [ReadRecord], days count: Int, limit: Int = 3) -> [(name: String, time: Int64)] {
+    func topBooks(days count: Int, limit: Int = 5) -> [(name: String, time: Int64)] {
         let start = shift(today, by: -(count - 1))
         var totals: [String: Int64] = [:]
-        for record in records where !record.bookName.isEmpty {
-            for (key, value) in record.dailyReadTimes where value > 0 {
-                guard let day = Self.date(fromKey: key, calendar: calendar), day >= start, day <= today else { continue }
-                totals[record.bookName, default: 0] += value
+        for offset in 0..<max(count, 1) {
+            for (name, value) in bookTimesByDay[shift(start, by: offset)] ?? [:] {
+                totals[name, default: 0] += value
             }
         }
         return totals.sorted { $0.value == $1.value ? $0.key < $1.key : $0.value > $1.value }
@@ -146,29 +196,29 @@ struct ReadingStatsDigest {
 struct ReadingStatisticsView: View {
     @EnvironmentObject private var activity: ReadingActivityModel
     @ThemePalette private var palette
-    @AppStorage("stats.dailyGoalMinutes") private var dailyGoal = 30
+    @AppStorage(ReadingStatsSettings.dailyGoalKey) private var dailyGoal = 30
+    @AppStorage(ReadingStatsSettings.yearlyGoalKey) private var yearlyGoal = 0
+    @AppStorage(ReadingStatsSettings.streakMinimumKey) private var streakMinimum = 1
     @State private var range: ReadingStatsRange = .week
-    @State private var showStreakInfo = false
-
-    private static let goalChoices = [10, 15, 20, 30, 45, 60, 90, 120]
+    @State private var displayedMonth: Date?
+    @State private var selectedDay: Date?
+    @State private var showsSettings = false
 
     var body: some View {
-        let digest = ReadingStatsDigest(records: activity.readRecords)
-        // 日期标题固定在顶部，只滚下面的卡片（仿 bookon）：卡片不会再滑进状态栏底下，下拉时背景不动。
-        // 顶部只有大标题（随内容滚动），上滑后顶部栏淡入小标题；今天读了多久在「今日阅读」卡片里。
+        let digest = ReadingStatsDigest(records: activity.readRecords, minimumDailyMinutes: streakMinimum)
+        // 顶部只留与右上角按钮同一行的紧凑标题，卡片直接从下面开始；上滑后顶部栏铺出页面背景。
         VStack(spacing: 0) {
             ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
                 ReadingLargeTitle(title: "阅读统计")
-                sectionTitle("阅读目标")
-                    .padding(.top, -12)
-                dailyCard(digest)
-                streakCard(digest).padding(.top, 14)
-                yearlyCard(digest).padding(.top, 14)
-                sectionTitle("阅读趋势")
+                    .padding(.bottom, -6)
+                todayCard(digest)
                 trendCard(digest)
-                topBooksCard(digest).padding(.top, 14)
-                historyLink.padding(.top, 14)
+                calendarCard(digest)
+                yearlyCard(digest)
+                recordsCard(digest)
+                topBooksCard(digest)
+                historyLink
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 44)
@@ -178,13 +228,18 @@ struct ReadingStatisticsView: View {
             .readingTopScrollEdgeHidden()
         }
         .readingCanvas()
-        .readingLargeTitleBar(title: "阅读统计")
+        .readingLargeTitleBar(title: "阅读统计") {
+            Button { showsSettings = true } label: {
+                ReadingToolbarIcon(systemName: "gearshape")
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("统计设置")
+            .accessibilityIdentifier("statistics.settings")
+        }
         .foregroundStyle(ReadingTheme.ink)
         .navigationBarHidden(true)
-        .alert("连续阅读", isPresented: $showStreakInfo) {
-            Button("好", role: .cancel) {}
-        } message: {
-            Text("一天里读过正文就算连续。今天还没读时，记录会保留到昨天为止。热力图颜色越深，离每日目标越近。")
+        .sheet(isPresented: $showsSettings) {
+            ReadingStatsSettingsView()
         }
     }
 
@@ -194,235 +249,435 @@ struct ReadingStatisticsView: View {
         AppFontStyle.system(size: size, weight: weight).themed
     }
 
-    private func header(_ digest: ReadingStatsDigest) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(Self.weekdayName(digest.today, calendar: digest.calendar))
-                .font(font(15, .medium))
-                .foregroundStyle(ReadingTheme.secondaryInk)
-            Text("\(digest.calendar.component(.month, from: digest.today))月\(digest.calendar.component(.day, from: digest.today))日")
-                .font(font(34, .bold))
-            Text(digest.todayReadTime < 30_000 ? "今天还没开始读" : "今天已读 \(Self.minutesText(digest.todayReadTime))")
-                .font(font(17))
-                .foregroundStyle(ReadingTheme.secondaryInk)
-                .padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-    }
-
-    private func sectionTitle(_ text: String) -> some View {
-        Text(text)
-            .font(font(20, .bold))
-            .padding(.top, 30)
-            .padding(.bottom, 12)
-            .accessibilityAddTraits(.isHeader)
-    }
-
     private func card<Content: View>(@ViewBuilder content: () -> Content) -> some View {
         content()
             .padding(18)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
-                ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: 26), style: .continuous),
+                ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: 24), style: .continuous),
                              isCard: true)
             }
     }
 
-    private var dotsLabel: some View {
-        Image(systemName: "ellipsis")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundStyle(ReadingTheme.secondaryInk)
-            .frame(width: 32, height: 32)
-            .contentShape(Rectangle())
+    private func cardTitle(_ text: String, icon: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(ReadingTheme.accent)
+            Text(text).font(font(17, .semibold))
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 
-    // MARK: 今日阅读
+    /// 卡片里的一列数字：数字在上、说明在下。
+    private func figure(_ value: String, unit: String = "", title: String, alignment: HorizontalAlignment = .leading) -> some View {
+        VStack(alignment: alignment, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 2) {
+                Text(value).font(font(19, .bold).monospacedDigit())
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                if !unit.isEmpty {
+                    Text(unit).font(font(12)).foregroundStyle(ReadingTheme.secondaryInk)
+                }
+            }
+            Text(title).font(font(12)).foregroundStyle(ReadingTheme.secondaryInk).lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: Alignment(horizontal: alignment, vertical: .center))
+        .accessibilityElement(children: .combine)
+    }
 
-    private func dailyCard(_ digest: ReadingStatsDigest) -> some View {
+    private var softFill: Color { ReadingTheme.ink.opacity(0.05) }
+
+    // MARK: 今日
+
+    private func todayCard(_ digest: ReadingStatsDigest) -> some View {
         let today = digest.todayReadTime
         let goal = Double(max(dailyGoal, 1)) * 60_000
         let progress = min(Double(today) / goal, 1)
-        let week = digest.days(7).reduce(0) { $0 + $1.time }
+        let weekStart = digest.shift(digest.today, by: -6)
+        let todayBooks = digest.books(on: digest.today).count
         return card {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 8) {
-                    Text("今日阅读").font(font(17, .semibold))
+                    cardTitle("今日阅读", icon: "sun.max")
                     Spacer(minLength: 0)
-                    Menu {
-                        Picker("每日目标", selection: $dailyGoal) {
-                            ForEach(Self.goalChoices, id: \.self) { value in
-                                Text("\(value) 分钟").tag(value)
-                            }
-                        }
-                    } label: {
+                    Button { showsSettings = true } label: {
                         HStack(spacing: 4) {
-                            Text("目标 \(dailyGoal) 分钟").font(font(14))
-                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+                            Text("目标 \(dailyGoal) 分钟").font(font(13))
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
                         }
                         .foregroundStyle(ReadingTheme.secondaryInk)
-                        .frame(minHeight: 32)
+                        .frame(minHeight: 30)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
                     .accessibilityLabel("调整每日目标")
                 }
                 HStack(alignment: .center, spacing: 18) {
                     ReadingGoalRing(progress: progress)
-                        .frame(width: 104, height: 104)
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(Self.clockText(today))
-                            .font(font(38, .bold).monospacedDigit())
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.7)
-                        HStack(spacing: 22) {
-                            miniStat(icon: "flame", title: "本周", value: Self.minutesText(week))
-                            miniStat(icon: "books.vertical", title: "累计", value: Self.minutesText(digest.totalReadTime))
+                        .frame(width: 100, height: 100)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(Self.durationNumber(today))
+                                .font(font(36, .bold).monospacedDigit())
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.6)
+                            Text(Self.durationUnit(today)).font(font(14)).foregroundStyle(ReadingTheme.secondaryInk)
                         }
+                        Text(progress >= 1 ? "今日目标已达成" : "距目标还差 \(Self.minutesText(max(Int64(goal) - today, 0)))")
+                            .font(font(13))
+                            .foregroundStyle(progress >= 1 ? ReadingTheme.accent : ReadingTheme.secondaryInk)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
                     Spacer(minLength: 0)
                 }
+                HStack(spacing: 0) {
+                    figure(Self.durationNumber(digest.total(from: weekStart, days: 7)),
+                           unit: Self.durationUnit(digest.total(from: weekStart, days: 7)), title: "近 7 天", alignment: .center)
+                    divider
+                    figure("\(digest.currentStreak)", unit: "天", title: "连续阅读", alignment: .center)
+                    divider
+                    figure("\(todayBooks)", unit: "本", title: "今日读过", alignment: .center)
+                }
+                .padding(.vertical, 10)
+                .background { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(softFill) }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("statistics.todayCard")
     }
 
-    private func miniStat(icon: String, title: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 5) {
-                Image(systemName: icon).font(.system(size: 13, weight: .medium))
-                Text(title).font(font(14))
-            }
-            .foregroundStyle(ReadingTheme.secondaryInk)
-            Text(value)
-                .font(font(14, .semibold).monospacedDigit())
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-        }
-        .accessibilityElement(children: .combine)
+    private var divider: some View {
+        Rectangle().fill(ReadingTheme.separator.opacity(0.7)).frame(width: 0.5, height: 26)
     }
 
-    // MARK: 连续阅读
-
-    private func streakCard(_ digest: ReadingStatsDigest) -> some View {
-        card {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack {
-                    Text("连续阅读").font(font(17, .semibold))
-                    Spacer(minLength: 0)
-                    Button { showStreakInfo = true } label: { dotsLabel }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("连续阅读怎么算")
-                }
-                HStack(alignment: .top, spacing: 12) {
-                    bigNumber(title: "当前连续", value: "\(digest.currentStreak)", unit: "天")
-                    bigNumber(title: "最长纪录", value: "\(digest.longestStreak)", unit: "天")
-                    bigNumber(title: "读过", value: "\(digest.bookCount)", unit: "本")
-                }
-                ReadingHeatmap(levels: digest.heatmap(weeks: 18, goalMinutes: dailyGoal), todayRow: digest.todayRow)
-                HStack(spacing: 0) {
-                    Text("近 18 周").font(font(12)).foregroundStyle(ReadingTheme.secondaryInk)
-                    Spacer(minLength: 8)
-                    ReadingHeatmapLegend()
-                }
-            }
-        }
-    }
-
-    private func bigNumber(title: String, value: String, unit: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(title).font(font(13)).foregroundStyle(ReadingTheme.secondaryInk)
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(value).font(font(30, .bold).monospacedDigit())
-                    .lineLimit(1).minimumScaleFactor(0.6)
-                Text(unit).font(font(13)).foregroundStyle(ReadingTheme.secondaryInk)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-    }
-
-    // MARK: 今年在读
-
-    private func yearlyCard(_ digest: ReadingStatsDigest) -> some View {
-        let yearly = digest.yearlyBooks()
-        return card {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("今年在读").font(font(17, .semibold))
-                HStack(alignment: .firstTextBaseline, spacing: 5) {
-                    Text("\(yearly.total)").font(font(38, .bold).monospacedDigit())
-                    Text("本书").font(font(17)).foregroundStyle(ReadingTheme.secondaryInk)
-                }
-                ReadingYearlyBars(counts: yearly.monthly,
-                                  currentMonth: digest.calendar.component(.month, from: digest.today) - 1)
-                    .frame(height: 110)
-                Text("每月读过（打开阅读过正文）的书本数，同一本书在不同月份分别计算。")
-                    .font(font(13))
-                    .foregroundStyle(ReadingTheme.secondaryInk)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    // MARK: 趋势
+    // MARK: 趋势（含环比）
 
     private func trendCard(_ digest: ReadingStatsDigest) -> some View {
-        let days = digest.days(range.days)
+        let count = range.days
+        let days = digest.days(count)
+        let start = digest.shift(digest.today, by: -(count - 1))
         let total = days.reduce(0) { $0 + $1.time }
-        let average = total / Int64(max(range.days, 1))
+        let previous = digest.total(from: digest.shift(start, by: -count), days: count)
+        let average = total / Int64(max(count, 1))
+        let active = digest.activeDays(from: start, days: count)
         return card {
             VStack(alignment: .leading, spacing: 16) {
-                ReadingStatsRangePicker(range: $range)
-                HStack(alignment: .bottom) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("日均").font(font(13)).foregroundStyle(ReadingTheme.secondaryInk)
-                        HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text("\(Int((Double(average) / 60_000).rounded()))")
-                                .font(font(32, .bold).monospacedDigit())
-                            Text("分钟").font(font(13)).foregroundStyle(ReadingTheme.secondaryInk)
-                        }
-                    }
+                HStack {
+                    cardTitle("阅读趋势", icon: "chart.bar")
                     Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("合计").font(font(13)).foregroundStyle(ReadingTheme.secondaryInk)
-                        Text(Self.minutesText(total)).font(font(17, .bold).monospacedDigit())
-                    }
+                    changeBadge(current: total, previous: previous)
+                }
+                ReadingStatsRangePicker(range: $range)
+                HStack(spacing: 0) {
+                    figure(Self.durationNumber(total), unit: Self.durationUnit(total), title: "合计")
+                    figure("\(active)", unit: "天", title: "阅读天数")
+                    figure(Self.durationNumber(average), unit: Self.durationUnit(average), title: "日均")
                 }
                 ReadingTrendChart(days: days.map { (date: $0.date, minutes: Double($0.time) / 60_000) },
                                   goalMinutes: dailyGoal, range: range)
-                    .frame(height: 160)
+                    .frame(height: 150)
                     .animation(.easeInOut(duration: 0.25), value: range)
                 HStack(spacing: 16) {
-                    legend(color: ReadingTheme.accent, title: "阅读时长")
+                    legend(color: ReadingTheme.accent, title: "达成目标")
+                    legend(color: ReadingTheme.accent.opacity(0.5), title: "未达成")
                     legend(color: ReadingTheme.secondaryInk.opacity(0.5), title: "虚线：每日目标")
                 }
             }
         }
     }
 
-    private func legend(color: Color, title: String) -> some View {
-        HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 8, height: 8)
-            Text(title).font(font(12)).foregroundStyle(ReadingTheme.secondaryInk)
+    @ViewBuilder
+    private func changeBadge(current: Int64, previous: Int64) -> some View {
+        if previous > 0 {
+            let change = (Double(current) - Double(previous)) / Double(previous)
+            let up = change >= 0
+            HStack(spacing: 3) {
+                Image(systemName: up ? "arrow.up.right" : "arrow.down.right").font(.system(size: 10, weight: .bold))
+                Text("\(Int((abs(change) * 100).rounded()))%").font(font(12, .semibold).monospacedDigit())
+                Text("较上期").font(font(11)).foregroundStyle(ReadingTheme.secondaryInk)
+            }
+            .foregroundStyle(up ? Color.green : Color.orange)
+            .padding(.horizontal, 8)
+            .frame(height: 24)
+            .background { Capsule().fill(softFill) }
+            .accessibilityElement(children: .combine)
+        } else if current > 0 {
+            Text("新开始").font(font(12, .semibold))
+                .foregroundStyle(ReadingTheme.accent)
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background { Capsule().fill(softFill) }
         }
     }
 
-    // MARK: 常读
+    private func legend(color: Color, title: String) -> some View {
+        HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(title).font(font(11)).foregroundStyle(ReadingTheme.secondaryInk)
+        }
+    }
+
+    // MARK: 阅读日历
+
+    private func calendarCard(_ digest: ReadingStatsDigest) -> some View {
+        let month = digest.startOfMonth(displayedMonth ?? digest.today)
+        let currentMonth = digest.startOfMonth(digest.today)
+        let cells = digest.monthGrid(month)
+        let monthDays = cells.compactMap { $0 }
+        let monthTotal = monthDays.reduce(0) { $0 + digest.readTime(on: $1) }
+        let monthActive = monthDays.filter { digest.isActive($0) }.count
+        let monthBooks = digest.books(from: month, days: monthDays.count).count
+        return card {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 6) {
+                    cardTitle("阅读日历", icon: "calendar")
+                    Spacer(minLength: 0)
+                    monthButton("chevron.left", label: "上个月") {
+                        changeMonth(-1, from: month, digest: digest)
+                    }
+                    Text("\(digest.calendar.component(.year, from: month))年\(digest.calendar.component(.month, from: month))月")
+                        .font(font(14, .semibold).monospacedDigit())
+                        .frame(minWidth: 82)
+                    monthButton("chevron.right", label: "下个月") {
+                        changeMonth(1, from: month, digest: digest)
+                    }
+                    .disabled(month >= currentMonth)
+                    .opacity(month >= currentMonth ? 0.3 : 1)
+                }
+                HStack(spacing: 0) {
+                    ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { symbol in
+                        Text(symbol).font(font(11)).foregroundStyle(ReadingTheme.secondaryInk)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+                VStack(spacing: 6) {
+                    ForEach(0..<(cells.count / 7), id: \.self) { row in
+                        HStack(spacing: 6) {
+                            ForEach(0..<7, id: \.self) { column in
+                                dayCell(cells[row * 7 + column], digest: digest)
+                            }
+                        }
+                    }
+                }
+                calendarFooter(digest, total: monthTotal, active: monthActive, books: monthBooks)
+            }
+        }
+    }
+
+    private func monthButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(ReadingTheme.ink)
+                .frame(width: 30, height: 30)
+                .background { Circle().fill(softFill) }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    private func changeMonth(_ delta: Int, from month: Date, digest: ReadingStatsDigest) {
+        guard let next = digest.calendar.date(byAdding: .month, value: delta, to: month) else { return }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            displayedMonth = min(next, digest.startOfMonth(digest.today))
+            selectedDay = nil
+        }
+    }
+
+    @ViewBuilder
+    private func dayCell(_ day: Date?, digest: ReadingStatsDigest) -> some View {
+        if let day {
+            let level = digest.level(on: day, goalMinutes: dailyGoal)
+            let isToday = day == digest.today
+            let isFuture = day > digest.today
+            let isSelected = selectedDay == day
+            Button {
+                withAnimation(.easeOut(duration: 0.15)) { selectedDay = isSelected ? nil : day }
+            } label: {
+                Text("\(digest.calendar.component(.day, from: day))")
+                    .font(font(13, isToday || isSelected ? .bold : .regular).monospacedDigit())
+                    .foregroundStyle(level >= 3 ? ReadingTheme.onAccent
+                                     : (isFuture ? ReadingTheme.secondaryInk.opacity(0.5) : ReadingTheme.ink))
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 34)
+                    .background {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(level > 0 ? ReadingHeatmap.fill(level) : Color.clear)
+                    }
+                    .overlay {
+                        if isSelected || isToday {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(ReadingTheme.accent, lineWidth: isSelected ? 2 : 1.2)
+                        }
+                    }
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(isFuture)
+            .accessibilityLabel("\(digest.calendar.component(.month, from: day))月\(digest.calendar.component(.day, from: day))日，\(Self.minutesText(digest.readTime(on: day)))")
+        } else {
+            Color.clear.frame(maxWidth: .infinity).frame(height: 34)
+        }
+    }
+
+    @ViewBuilder
+    private func calendarFooter(_ digest: ReadingStatsDigest, total: Int64, active: Int, books: Int) -> some View {
+        if let day = selectedDay {
+            let list = digest.books(on: day)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("\(digest.calendar.component(.month, from: day))月\(digest.calendar.component(.day, from: day))日 \(Self.weekdayName(day, calendar: digest.calendar))")
+                        .font(font(13, .semibold))
+                    Spacer(minLength: 8)
+                    Text(Self.minutesText(digest.readTime(on: day)))
+                        .font(font(13, .semibold).monospacedDigit())
+                        .foregroundStyle(ReadingTheme.accent)
+                }
+                if list.isEmpty {
+                    Text("这一天没有阅读记录").font(font(12)).foregroundStyle(ReadingTheme.secondaryInk)
+                } else {
+                    ForEach(Array(list.prefix(4).enumerated()), id: \.offset) { _, book in
+                        HStack(spacing: 8) {
+                            Circle().fill(ReadingTheme.accent.opacity(0.6)).frame(width: 5, height: 5)
+                            Text(book.name).font(font(13)).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(Self.minutesText(book.time)).font(font(12).monospacedDigit())
+                                .foregroundStyle(ReadingTheme.secondaryInk)
+                        }
+                    }
+                }
+            }
+            .padding(12)
+            .background { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(softFill) }
+            .transition(.opacity)
+        } else {
+            HStack(spacing: 0) {
+                figure(Self.durationNumber(total), unit: Self.durationUnit(total), title: "本月时长", alignment: .center)
+                divider
+                figure("\(active)", unit: "天", title: "阅读天数", alignment: .center)
+                divider
+                figure("\(books)", unit: "本", title: "读过", alignment: .center)
+            }
+            .padding(.vertical, 10)
+            .background { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(softFill) }
+        }
+    }
+
+    // MARK: 年度
+
+    private func yearlyCard(_ digest: ReadingStatsDigest) -> some View {
+        let yearly = digest.yearly()
+        let year = digest.calendar.component(.year, from: digest.today)
+        return card {
+            VStack(alignment: .leading, spacing: 14) {
+                cardTitle("\(String(year)) 年度", icon: "sparkles")
+                HStack(alignment: .firstTextBaseline) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(Self.durationNumber(yearly.total)).font(font(32, .bold).monospacedDigit())
+                        Text(Self.durationUnit(yearly.total)).font(font(14)).foregroundStyle(ReadingTheme.secondaryInk)
+                    }
+                    Spacer(minLength: 8)
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text("\(yearly.books)").font(font(24, .bold).monospacedDigit())
+                        Text("本书").font(font(13)).foregroundStyle(ReadingTheme.secondaryInk)
+                    }
+                }
+                if yearlyGoal > 0 {
+                    let ratio = min(Double(yearly.books) / Double(yearlyGoal), 1)
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("年度目标 \(yearlyGoal) 本").font(font(12)).foregroundStyle(ReadingTheme.secondaryInk)
+                            Spacer()
+                            Text("\(Int((ratio * 100).rounded()))%").font(font(12, .semibold).monospacedDigit())
+                                .foregroundStyle(ReadingTheme.accent)
+                        }
+                        GeometryReader { geometry in
+                            Capsule().fill(ReadingTheme.accent.opacity(0.12))
+                                .overlay(alignment: .leading) {
+                                    Capsule().fill(ReadingTheme.accent)
+                                        .frame(width: max(ratio > 0 ? 6 : 0, geometry.size.width * CGFloat(ratio)))
+                                }
+                        }
+                        .frame(height: 6)
+                    }
+                }
+                ReadingYearlyBars(values: yearly.monthly,
+                                  currentMonth: digest.calendar.component(.month, from: digest.today) - 1)
+                    .frame(height: 110)
+            }
+        }
+    }
+
+    // MARK: 个人纪录
+
+    private func recordsCard(_ digest: ReadingStatsDigest) -> some View {
+        let best = digest.bestDay
+        let bestCaption = best.map { "最佳单日 · \(digest.calendar.component(.month, from: $0.date))/\(digest.calendar.component(.day, from: $0.date))" } ?? "最佳单日"
+        return card {
+            VStack(alignment: .leading, spacing: 14) {
+                cardTitle("个人纪录", icon: "trophy")
+                VStack(spacing: 10) {
+                    HStack(spacing: 10) {
+                        recordTile(icon: "crown", value: Self.minutesText(best?.time ?? 0), title: bestCaption)
+                        recordTile(icon: "flame", value: "\(digest.longestStreak) 天", title: "最长连续")
+                    }
+                    HStack(spacing: 10) {
+                        recordTile(icon: "bolt", value: "\(digest.currentStreak) 天", title: "当前连续")
+                        recordTile(icon: "calendar.badge.clock", value: "\(digest.activeDayCount) 天", title: "累计阅读天数")
+                    }
+                    HStack(spacing: 10) {
+                        recordTile(icon: "hourglass", value: Self.minutesText(digest.totalReadTime), title: "累计阅读时长")
+                        recordTile(icon: "books.vertical", value: "\(digest.bookCount) 本", title: "读过的书")
+                    }
+                }
+            }
+        }
+    }
+
+    private func recordTile(icon: String, value: String, title: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(ReadingTheme.accent)
+                .frame(width: 32, height: 32)
+                .background { Circle().fill(ReadingTheme.accent.opacity(0.12)) }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(value).font(font(15, .bold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.6)
+                Text(title).font(font(11)).foregroundStyle(ReadingTheme.secondaryInk).lineLimit(1).minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { RoundedRectangle(cornerRadius: 14, style: .continuous).fill(softFill) }
+        .accessibilityElement(children: .combine)
+    }
+
+    // MARK: 书籍排行
 
     @ViewBuilder
     private func topBooksCard(_ digest: ReadingStatsDigest) -> some View {
-        let books = digest.topBooks(records: activity.readRecords, days: range.days)
+        let books = digest.topBooks(days: range.days)
         if !books.isEmpty {
             let maximum = max(books.first?.time ?? 1, 1)
             card {
                 VStack(alignment: .leading, spacing: 14) {
-                    Text("\(range.title)常读").font(font(17, .semibold))
+                    HStack {
+                        cardTitle("书籍排行", icon: "list.number")
+                        Spacer(minLength: 8)
+                        Text(range.title).font(font(12)).foregroundStyle(ReadingTheme.secondaryInk)
+                    }
                     ForEach(Array(books.enumerated()), id: \.offset) { index, book in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(spacing: 10) {
                                 Text("\(index + 1)")
-                                    .font(font(13, .bold).monospacedDigit())
-                                    .foregroundStyle(index == 0 ? ReadingTheme.onAccent : ReadingTheme.secondaryInk)
+                                    .font(font(12, .bold).monospacedDigit())
+                                    .foregroundStyle(index < 3 ? ReadingTheme.onAccent : ReadingTheme.secondaryInk)
                                     .frame(width: 22, height: 22)
-                                    .background(Circle().fill(index == 0 ? ReadingTheme.accent : ReadingTheme.separator))
+                                    .background(Circle().fill(index < 3 ? ReadingTheme.accent.opacity(1 - Double(index) * 0.25) : ReadingTheme.separator))
                                 Text(book.name).font(font(15, .medium)).lineLimit(1)
                                 Spacer(minLength: 8)
                                 Text(Self.minutesText(book.time))
@@ -480,9 +735,69 @@ struct ReadingStatisticsView: View {
         return rest == 0 ? "\(hours) 小时" : "\(hours) 小时 \(rest) 分"
     }
 
+    /// 大数字：不足 1 小时按分钟，否则按小时（保留一位小数）。
+    static func durationNumber(_ milliseconds: Int64) -> String {
+        let minutes = Int((Double(max(milliseconds, 0)) / 60_000).rounded())
+        if minutes < 60 { return "\(minutes)" }
+        let hours = Double(minutes) / 60
+        return hours < 100 ? String(format: "%.1f", hours) : "\(Int(hours.rounded()))"
+    }
+
+    static func durationUnit(_ milliseconds: Int64) -> String {
+        Int((Double(max(milliseconds, 0)) / 60_000).rounded()) < 60 ? "分钟" : "小时"
+    }
+
     static func clockText(_ milliseconds: Int64) -> String {
         let total = Int(max(milliseconds, 0) / 60_000)
         return String(format: "%d:%02d", total / 60, total % 60)
+    }
+}
+
+// MARK: - 统计设置
+
+struct ReadingStatsSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(ReadingStatsSettings.dailyGoalKey) private var dailyGoal = 30
+    @AppStorage(ReadingStatsSettings.yearlyGoalKey) private var yearlyGoal = 0
+    @AppStorage(ReadingStatsSettings.streakMinimumKey) private var streakMinimum = 1
+
+    var body: some View {
+        ReadingNavigationStack {
+            Form {
+                Section {
+                    Stepper(value: $dailyGoal, in: 5...240, step: 5) {
+                        ReadingLabeledContent("每日目标", value: "\(dailyGoal) 分钟")
+                    }
+                } header: { Text("每日目标") } footer: {
+                    Text("今日阅读的进度环、日历颜色深浅和趋势图的虚线都按这个目标计算。")
+                }
+                .readingRowBackground()
+                Section {
+                    Stepper(value: $yearlyGoal, in: 0...500, step: 1) {
+                        ReadingLabeledContent("年度阅读目标", value: yearlyGoal == 0 ? "未设定" : "\(yearlyGoal) 本")
+                    }
+                } header: { Text("年度目标") } footer: {
+                    Text("设为 0 表示不启用年度目标；启用后年度卡片会显示完成进度。")
+                }
+                .readingRowBackground()
+                Section {
+                    Stepper(value: $streakMinimum, in: 1...60, step: 1) {
+                        ReadingLabeledContent("最低计入时长", value: "\(streakMinimum) 分钟")
+                    }
+                } header: { Text("连续天数") } footer: {
+                    Text("一天累计阅读超过这个时长，才计入连续阅读和阅读天数。")
+                }
+                .readingRowBackground()
+            }
+            .readingThemedListBackground()
+            .navigationTitle("统计设置")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
     }
 }
 
@@ -579,32 +894,40 @@ struct ReadingHeatmapLegend: View {
     }
 }
 
-// MARK: - 今年每月柱状图
+// MARK: - 今年每月柱状图（阅读时长）
 
 struct ReadingYearlyBars: View {
-    let counts: [Int]
+    let values: [Int64]
     let currentMonth: Int
 
+    private static func label(_ milliseconds: Int64) -> String {
+        let minutes = Int((Double(max(milliseconds, 0)) / 60_000).rounded())
+        if minutes < 60 { return "\(minutes)分" }
+        let hours = Double(minutes) / 60
+        return hours < 10 ? String(format: "%.1f时", hours) : "\(Int(hours.rounded()))时"
+    }
+
     var body: some View {
-        let maximum = max(counts.max() ?? 0, 1)
+        let maximum = max(values.max() ?? 0, 1)
         GeometryReader { geometry in
             let labelHeight: CGFloat = 16
             let area = max(geometry.size.height - labelHeight - 6, 1)
             let slot = geometry.size.width / 12
-            let barWidth = min(20, slot * 0.6)
+            let barWidth = min(18, slot * 0.56)
             HStack(alignment: .bottom, spacing: 0) {
                 ForEach(0..<12, id: \.self) { index in
-                    let value = counts.indices.contains(index) ? counts[index] : 0
-                    VStack(spacing: 6) {
+                    let value = values.indices.contains(index) ? values[index] : 0
+                    VStack(spacing: 4) {
                         Spacer(minLength: 0)
-                        if value > 0 {
-                            Text("\(value)")
-                                .font(AppFontStyle.system(size: 10, weight: .semibold).themed.monospacedDigit())
+                        if value > 0, index == currentMonth || value == maximum {
+                            Text(Self.label(value))
+                                .font(AppFontStyle.system(size: 9, weight: .semibold).themed.monospacedDigit())
                                 .foregroundStyle(ReadingTheme.secondaryInk)
+                                .fixedSize()
                         }
                         RoundedRectangle(cornerRadius: min(barWidth / 2, 6), style: .continuous)
                             .fill(index > currentMonth ? ReadingTheme.separator.opacity(0.5)
-                                  : (value > 0 ? ReadingTheme.accent.opacity(index == currentMonth ? 1 : 0.6)
+                                  : (value > 0 ? ReadingTheme.accent.opacity(index == currentMonth ? 1 : 0.55)
                                      : ReadingTheme.accent.opacity(0.1)))
                             .frame(width: barWidth,
                                    height: value > 0 ? max(6, (area - 16) * CGFloat(value) / CGFloat(maximum)) : 4)
@@ -618,7 +941,7 @@ struct ReadingYearlyBars: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("今年每月读过的书")
+        .accessibilityLabel("今年每月阅读时长")
     }
 }
 

@@ -485,7 +485,10 @@ struct ThemeSystemGlassRowFill: View {
         if scenePhase == .background {
             ThemeEffectFill.transparentColor(dark: scheme == .dark).opacity(scheme == .dark ? 0.55 : 0.6)
         } else {
+            // 纯色页面底上只铺 ultraThinMaterial 几乎看不出来（行像直接贴在背景上），
+            // 叠一层奶白提亮，成为和「我的」入口卡片同一观感的磨砂玻璃；分组圆角由列表自己裁出。
             Rectangle().fill(.ultraThinMaterial)
+                .overlay(Color.white.opacity(scheme == .dark ? 0.06 : 0.42))
         }
     }
 }

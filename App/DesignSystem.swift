@@ -309,8 +309,8 @@ extension View {
 enum ReadingLargeTitleMetrics {
     /// 顶部栏高度（右上角按钮、收起后的小标题都在这一条里）。
     static let barHeight: CGFloat = 48
-    /// 大标题滚进顶部栏的这段距离里，顶部栏底色和小标题逐渐出现。
-    static let fadeDistance: CGFloat = 36
+    /// 内容滚进顶部栏的这段距离里，顶部栏底色逐渐出现。
+    static let fadeDistance: CGFloat = 20
 }
 
 struct ReadingLargeTitleBottomKey: PreferenceKey {
@@ -318,20 +318,16 @@ struct ReadingLargeTitleBottomKey: PreferenceKey {
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = min(value, nextValue()) }
 }
 
-/// 放在主页面滚动内容最上面的大标题：只有标题本身，没有副标题，随内容一起滚动。
-/// 上面留出顶部栏的高度，右上角按钮在顶部栏里常驻；配合 `readingLargeTitleBar` 使用。
+/// 放在主页面滚动内容最上面的占位：只留出顶部栏的高度，不再单独占一行大标题。
+/// 页面名称改为顶部栏左侧的紧凑标题，与右上角按钮同一行，下面的内容整体上移；配合 `readingLargeTitleBar` 使用。
 struct ReadingLargeTitle: View {
     let title: String
 
     var body: some View {
-        Text(title)
-            .font(AppFontStyle.largeTitle.bold().themed)
-            .foregroundStyle(ReadingTheme.ink)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .accessibilityAddTraits(.isHeader)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.top, ReadingLargeTitleMetrics.barHeight)
+        Color.clear
+            .frame(maxWidth: .infinity)
+            .frame(height: ReadingLargeTitleMetrics.barHeight)
+            .accessibilityHidden(true)
             .background(alignment: .bottom) {
                 GeometryReader { proxy in
                     Color.clear.preference(key: ReadingLargeTitleBottomKey.self,
@@ -341,9 +337,8 @@ struct ReadingLargeTitle: View {
     }
 }
 
-/// 主页面顶部栏：右上角按钮始终固定；大标题向上滚进顶部栏时，顶部栏铺出与页面背景逐像素一致的底色
-/// （下沿柔和渐隐），居中的小标题淡入——和系统「设置」「图书」的大标题上滑效果一致。
-/// 下拉时大标题跟着内容走，背景不动。
+/// 主页面顶部栏：左侧紧凑标题与右上角按钮同一行、始终固定；内容向上滚进顶部栏时，顶部栏铺出与页面背景
+/// 逐像素一致的底色（下沿柔和渐隐），内容像淡出到背景里。下拉时内容跟手，背景不动。
 struct ReadingLargeTitleBar<Actions: View>: ViewModifier {
     let title: String
     @ViewBuilder var actions: () -> Actions
@@ -363,15 +358,14 @@ struct ReadingLargeTitleBar<Actions: View>: ViewModifier {
                     let barHeight = ReadingLargeTitleMetrics.barHeight
                     let fade = ReadingLargeTitleMetrics.fadeDistance
                     let barBottom = top + barHeight
-                    // 0：大标题完整露出；1：大标题已经滚进顶部栏下面。
-                    let raw = (barBottom + fade - titleBottom) / fade
+                    // 0：内容还没滚到顶部栏下面；1：内容已经滚进顶部栏。
+                    let raw = (barBottom - titleBottom) / fade
                     let progress = raw.isFinite ? min(max(raw, 0), 1) : 0
                     let height = barBottom
                     let edge: CGFloat = 18
                     let full = proxy.size.height + top + proxy.safeAreaInsets.bottom
                     ZStack(alignment: .top) {
-                        // 背景按整屏尺寸绘制、只露出顶部一条：颜色与下面固定不动的页面背景完全一致，
-                        // 内容从下面滑上来时像淡出到背景里。
+                        // 背景按整屏尺寸绘制、只露出顶部一条：颜色与下面固定不动的页面背景完全一致。
                         ReadingCanvasBackground()
                             .frame(width: proxy.size.width, height: full)
                             .mask(alignment: .top) {
@@ -386,21 +380,18 @@ struct ReadingLargeTitleBar<Actions: View>: ViewModifier {
                             .clipped()
                             .opacity(progress)
                             .allowsHitTesting(false)
-                        ZStack {
+                        HStack(spacing: 10) {
                             Text(title)
-                                .font(AppFontStyle.headline.weight(.semibold).themed)
+                                .font(AppFontStyle.title2.bold().themed)
                                 .foregroundStyle(ReadingTheme.ink)
                                 .lineLimit(1)
-                                .padding(.horizontal, 110)
-                                .opacity(max(0, (progress - 0.55) / 0.45))
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(progress < 1)
-                            HStack(spacing: 10) {
-                                Spacer(minLength: 0)
-                                actions()
-                            }
-                            .padding(.horizontal, 20)
+                                .minimumScaleFactor(0.7)
+                                .accessibilityAddTraits(.isHeader)
+                            Spacer(minLength: 0)
+                            actions()
                         }
+                        .padding(.leading, 24)
+                        .padding(.trailing, 20)
                         .frame(height: barHeight)
                         .padding(.top, top)
                     }

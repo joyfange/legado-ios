@@ -275,7 +275,7 @@ private struct BookshelfView: View {
                 VStack(alignment: .leading, spacing: 0) {
                 ReadingLargeTitle(title: shelfTitle)
                     .padding(.horizontal, 24)
-                    .padding(.bottom, 14)
+                    .padding(.bottom, 6)
                 LazyVStack(alignment: .leading, spacing: 0) {
                     if !library.hasLoaded {
                         // 书架还没读完：保持空白，不闪「空书架」占位。
@@ -299,9 +299,6 @@ private struct BookshelfView: View {
                     } else {
                         if let book = recentBook {
                             VStack(alignment: .leading, spacing: 12) {
-                                Text("继续阅读")
-                                    .font(AppFontStyle.subheadline.weight(.medium).themed)
-                                    .foregroundStyle(.secondary)
                                 NavigationLink {
                                     BookshelfBookDestination(book: book, source: sources.sources.first { $0.bookSourceUrl == book.origin })
                                 } label: {
@@ -2815,7 +2812,6 @@ private struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     ReadingLargeTitle(title: "我的")
                         .padding(.bottom, -10)
-                    profileCard
                     readingSection
                     rulesSection
                     settingSection("文件与存储") {
@@ -2836,106 +2832,12 @@ private struct SettingsView: View {
         .navigationBarHidden(true)
     }
 
-    /// 顶部名片：应用信息 + 三项阅读数据，一张跟随主题的卡片承载，不再叠插画。
-    private var profileCard: some View {
-        let digest = ReadingStatsDigest(records: activity.readRecords)
-        return VStack(spacing: 0) {
-            NavigationLink {
-                AboutView()
-            } label: {
-                HStack(spacing: 14) {
-                    Image("BrandIcon")
-                        .resizable()
-                        .scaledToFit()
-                        .frame(width: 54, height: 54)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(AppIdentity.name)
-                            .font(AppFontStyle.headline.themed)
-                            .foregroundStyle(ProfileTheme.ink)
-                        Text(AppIdentity.slogan)
-                            .font(AppFontStyle.footnote.themed)
-                            .foregroundStyle(ProfileTheme.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(AppFontStyle.system(size: 13, weight: .semibold).themed)
-                        .foregroundStyle(ProfileTheme.secondary)
-                        .accessibilityHidden(true)
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 16)
-                .padding(.bottom, 14)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityElement(children: .combine)
-            .accessibilityHint("查看关于与版本信息")
-            .accessibilityIdentifier("profile.about")
-
-            Rectangle()
-                .fill(palette.border.opacity(0.5))
-                .frame(height: 0.5)
-                .padding(.horizontal, 16)
-
-            HStack(spacing: 0) {
-                profileStat(value: "\(library.books.count)", unit: "本", title: "书架藏书")
-                profileStatDivider
-                profileStat(value: Self.durationValue(digest.todayReadTime), unit: Self.durationUnit(digest.todayReadTime), title: "今日阅读")
-                profileStatDivider
-                profileStat(value: Self.durationValue(digest.totalReadTime), unit: Self.durationUnit(digest.totalReadTime), title: "累计阅读")
-            }
-            .padding(.vertical, 14)
-        }
-        .background { ThemeCardSurface(radius: 20) }
-        .shadow(color: .black.opacity(palette.cardBackground ? 0.04 : 0), radius: 16, x: 0, y: 6)
-    }
-
-    private func profileStat(value: String, unit: String, title: String) -> some View {
-        VStack(spacing: 4) {
-            HStack(alignment: .firstTextBaseline, spacing: 2) {
-                Text(value)
-                    .font(AppFontStyle.system(size: 20, weight: .semibold).themed.monospacedDigit())
-                    .foregroundStyle(ProfileTheme.ink)
-                Text(unit)
-                    .font(AppFontStyle.caption.themed)
-                    .foregroundStyle(ProfileTheme.secondary)
-            }
-            Text(title)
-                .font(AppFontStyle.caption.themed)
-                .foregroundStyle(ProfileTheme.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .accessibilityElement(children: .combine)
-    }
-
-    private var profileStatDivider: some View {
-        Rectangle()
-            .fill(palette.border.opacity(0.5))
-            .frame(width: 0.5, height: 28)
-    }
-
-    /// 毫秒 → 数字部分：不足 1 小时按分钟，否则按小时（10 小时内保留一位小数）。
-    private static func durationValue(_ milliseconds: Int64) -> String {
-        let minutes = max(0, milliseconds) / 60_000
-        if minutes < 60 { return "\(minutes)" }
-        let hours = Double(minutes) / 60
-        return hours < 10 ? String(format: "%.1f", hours) : "\(Int(hours))"
-    }
-
-    private static func durationUnit(_ milliseconds: Int64) -> String {
-        max(0, milliseconds) / 60_000 < 60 ? "分钟" : "小时"
-    }
-
     private var readingSection: some View {
         settingSection("阅读") {
             settingLink("阅读设置", icon: "textformat.size") { ReadingPreferencesView() }
             // 字体管理：书籍字体 + 界面字体，右侧显示已导入的字体数量。
             NavigationLink { FontManagementView() } label: {
-                settingRow("字体管理", icon: "textformat", value: "\(fonts.importedFonts.count) 个")
+                settingRow("字体管理", icon: "f.cursive", value: "\(fonts.importedFonts.count) 个")
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("profile.fonts")
