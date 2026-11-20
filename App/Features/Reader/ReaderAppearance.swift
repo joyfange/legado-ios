@@ -483,7 +483,8 @@ enum ReaderInlineMarkup {
             let capHeight = font.capHeight
             if case .bubble = item {
                 let bounds = CommentBubble.attachmentBounds(fontSize: font.pointSize)
-                attachment.bounds = CGRect(x: 0, y: bounds.minY, width: image.size.width, height: image.size.height)
+                // 用与设备像素无关的排版尺寸：UIGraphicsImageRenderer 会把画布向上取整到整像素（@2x 时 36.33pt → 36.5pt）。
+                attachment.bounds = CGRect(x: 0, y: bounds.minY, width: bounds.width, height: bounds.height)
             } else {
                 attachment.bounds = CGRect(x: 0, y: (capHeight - image.size.height) / 2, width: image.size.width, height: image.size.height)
             }

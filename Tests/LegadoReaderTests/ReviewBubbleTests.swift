@@ -13,8 +13,12 @@ final class ReviewBubbleTests: XCTestCase {
             style.mode = "template"
             style.template = template.id
             let image = BubbleStyleRenderer.image(style: style, label: "42", fontSize: 23, color: .black)
-            XCTAssertEqual(image.size.width, 109.0 / 3, accuracy: 0.01)
-            XCTAssertEqual(image.size.height, 85.0 / 3, accuracy: 0.01)
+            // 画布按设备像素向上取整（@2x 下 109/3pt → 36.5pt），允许一个像素的差。
+            let pixel = 1 / UIGraphicsImageRendererFormat.default().scale + 0.001
+            XCTAssertEqual(image.size.width, 109.0 / 3, accuracy: pixel)
+            XCTAssertEqual(image.size.height, 85.0 / 3, accuracy: pixel)
+            XCTAssertEqual(BubbleStyleRenderer.bounds(style: style, fontSize: 23).width, 109.0 / 3, accuracy: 0.001)
+            XCTAssertEqual(BubbleStyleRenderer.bounds(style: style, fontSize: 23).height, 85.0 / 3, accuracy: 0.001)
             style.mode = "svg"
             style.svg = template.svg
             XCTAssertNil(BubbleStyleStore.validate(style), template.name)
@@ -119,6 +123,7 @@ final class ReviewBubbleTests: XCTestCase {
         let bounds = CommentBubble.attachmentBounds(fontSize: 23)
         XCTAssertGreaterThan(bounds.width, 0)
         let image = CommentBubble.image(label: "12", fontSize: 23, color: .black)
-        XCTAssertEqual(image.size.height, bounds.height, accuracy: 0.01)
+        // 图片画布按设备像素向上取整，最多差一个像素；排版用的是 attachmentBounds。
+        XCTAssertEqual(image.size.height, bounds.height, accuracy: 1 / UIGraphicsImageRendererFormat.default().scale + 0.001)
     }
 }
