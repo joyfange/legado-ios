@@ -45,10 +45,6 @@ struct ReaderView: View {
     @State private var editedContent = ""
     @State private var contentEditError: String?
     @State private var backgroundImage: UIImage?
-    @State private var backgroundError: String?
-    @State private var showsBackgroundPicker = false
-    @State private var showsFontImporter = false
-    @State private var fontError: String?
     @State private var readerJumpPosition: Int?
     @State private var contentSearchQuery = ""
     @State private var readerPosition = 0
@@ -64,6 +60,7 @@ struct ReaderView: View {
     @State private var reviewPage: ReaderReviewPage?
     @AppStorage("showsReviewBubbles") private var showsReviewBubbles = true
     @ObservedObject private var bubbleStyles = BubbleStyleStore.shared
+    @ObservedObject private var highlightRules = ReaderHighlightStore.shared
     @State private var reviewError: String?
     @State private var chapterTurnDirection = 0
     @State private var isWaitingForPreviousChapter = false
@@ -116,6 +113,14 @@ struct ReaderView: View {
     @AppStorage("footerMode") private var footerMode = 0
     @AppStorage("readerTheme") private var theme = "wechat"
     @AppStorage("readerPreviousDayTheme") private var previousDayTheme = "wechat"
+    @AppStorage("readerDarkTheme") private var darkTheme = "night"
+    @AppStorage("readerFollowSystemDark") private var followSystemDark = false
+    @AppStorage("readerFullScreenTurn") private var fullScreenTurn = false
+    @AppStorage("readerSwipeUpExit") private var swipeUpExit = false
+    @AppStorage("readerTextCenter") private var centerText = false
+    @AppStorage("readerParagraphBlankLines") private var paragraphBlankLines = 0
+    @AppStorage("readerTipCustomFont") private var tipCustomFont = false
+    @AppStorage("readerBackgroundRevision") private var backgroundRevision = 0
     @AppStorage("autoReadSpeed") private var autoReadSpeed = 10
     @AppStorage("ttsFollowSys") private var ttsFollowSystem = true
     @AppStorage("ttsSpeechRate") private var ttsSpeechRate = 5
@@ -216,7 +221,7 @@ struct ReaderView: View {
 
     private var textReaderBody: some View {
         readerCanvas
-        .preferredColorScheme(resolvedStyle.id == "night" ? .dark : .light)
+        .preferredColorScheme(resolvedStyle.isDark ? .dark : .light)
         .readingTabBarHidden()
         .navigationBarBackButtonHidden(true)
         .background {
@@ -456,6 +461,10 @@ struct ReaderView: View {
         }
         .onChange(of: screenOrientation) { value in
             ReaderScreenOrientation.apply(value)
+        }
+        .onChange(of: backgroundRevision) { _ in
+            // 阅读设置里换了 / 删了背景图，或套用了带背景图的主题。
+            backgroundImage = ReaderBackgroundStore.load()
         }
         .onChange(of: themeMode) { _ in
             isAutoReading = false
@@ -732,14 +741,18 @@ struct ReaderView: View {
             reviewBubbleStyle: 0,
             reviewBubbleAccent: false,
             reviewBubbleImageRevision: bubbleStyles.revision,
-            onLongPressText: { pick in quickReplacePick = pick }
+            onLongPressText: { pick in quickReplacePick = pick },
+            highlightRevision: highlightRules.revision,
+            paragraphBlankLines: paragraphBlankLines,
+            centerText: centerText,
+            onSwipeUp: swipeUpExit ? { leaveReader() } : nil
         )
     }
 
     @ViewBuilder private var readerMenuDismissOverlay: some View {
         if showsReaderMenu {
             Color.black
-                .opacity(resolvedStyle.id == "night" ? 0.08 : 0.03)
+                .opacity(resolvedStyle.isDark ? 0.08 : 0.03)
                 .ignoresSafeArea()
                 .contentShape(ReaderMenuDismissShape())
                 .onTapGesture { showsReaderMenu = false }
@@ -788,11 +801,32 @@ struct ReaderView: View {
     private var resolvedStyle: ReaderStylePreset {
         if themeMode == "3" { return .eInk }
         if let bound = ReaderStylePreset.boundToAppTheme(themeMode: themeMode) { return bound }
-        if theme == ReaderStylePreset.customID {
-            _ = (customBackgroundHex, customForegroundHex)
-            return ReaderStylePreset.custom()
+        _ = (customBackgroundHex, customForegroundHex)
+        if followSystemDark {
+            // 「跟随系统深色模式」：系统深色用选中的深色主题，浅色时用浅色主题。
+            if systemPrefersDark {
+                return ReaderStylePreset.darkIDs.contains(darkTheme) ? ReaderStylePreset.resolve(darkTheme) : ReaderStylePreset.resolve("night")
+            }
+            if ReaderStylePreset.darkIDs.contains(theme) {
+                return ReaderStylePreset.darkIDs.contains(previousDayTheme) ? ReaderStylePreset.resolve("wechat") : preset(previousDayTheme)
+            }
         }
-        return ReaderStylePreset.resolve(theme)
+        return preset(theme)
+    }
+
+    private func preset(_ id: String) -> ReaderStylePreset {
+        id == ReaderStylePreset.customID ? ReaderStylePreset.custom() : ReaderStylePreset.resolve(id)
+    }
+
+    /// 系统（窗口场景）是否深色；「显示模式」强制深 / 浅时以它为准。
+    private var systemPrefersDark: Bool {
+        switch themeMode {
+        case "2": return true
+        case "1", "3": return false
+        default:
+            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            return (scene?.traitCollection.userInterfaceStyle ?? .light) == .dark
+        }
     }
 
     private var headerVisible: Bool {
@@ -841,7 +875,7 @@ struct ReaderView: View {
     private func readerTipRow(_ values: [Int], date: Date, showDivider: Bool, isHeader: Bool) -> some View {
         let texts = values.map { readerTipText($0, date: date) }
         return ReaderTipRowLayout(left: texts[0], middle: texts[1], right: texts[2])
-        .font(.system(size: 12))
+        .font(ReaderTipFont.font(path: fontPath, enabled: tipCustomFont))
         .foregroundStyle(foregroundColor)
         .padding(.leading, isHeader ? headerPaddingLeft : footerPaddingLeft)
         .padding(.trailing, isHeader ? headerPaddingRight : footerPaddingRight)
@@ -961,17 +995,17 @@ struct ReaderView: View {
         if followsPanelTheme {
             // 外观主题「阅读半屏卡片跟随外观」：阅读页的菜单卡片也用主题卡片（界面效果 / 卡片背景）。
             ThemeSurface(shape: shape, isCard: true)
-                .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
+                .environment(\.colorScheme, resolvedStyle.isDark ? .dark : .light)
         } else {
             AppGlassSurface(shape: shape, tint: backgroundColor, tintOpacity: 0.32,
                             reduceTransparency: reduceTransparency)
-                .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
+                .environment(\.colorScheme, resolvedStyle.isDark ? .dark : .light)
         }
     }
 
     private var followsPanelTheme: Bool { appTheme.customization?.readerPanelFollowsTheme == true }
 
-    private var readerIsDark: Bool { resolvedStyle.id == "night" }
+    private var readerIsDark: Bool { resolvedStyle.isDark }
 
     /// 外观主题「阅读工具栏图标 → 图标大小」（未自定义时沿用原来的大小）。
     private var readerToolbarIconPointSize: CGFloat {
@@ -1183,8 +1217,8 @@ struct ReaderView: View {
                                 afterBookActions { showsAutoReadControls = true }
                             }
                         }
-                        bookAction(resolvedStyle.id == "night" ? "sun.max" : "moon",
-                                   resolvedStyle.id == "night" ? "切换为日间" : "切换为夜间",
+                        bookAction(resolvedStyle.isDark ? "sun.max" : "moon",
+                                   resolvedStyle.isDark ? "切换为日间" : "切换为夜间",
                                    enabled: themeMode != "3") {
                             toggleNightTheme()
                         }
@@ -1395,11 +1429,13 @@ struct ReaderView: View {
     }
 
     private func toggleNightTheme() {
-        if resolvedStyle.id == "night" {
-            theme = previousDayTheme == "night" ? "wechat" : previousDayTheme
+        if resolvedStyle.isDark {
+            // 跟随系统深色时手动切回日间：关掉跟随，否则下一次刷新又会变回深色。
+            if followSystemDark { followSystemDark = false }
+            theme = ReaderStylePreset.darkIDs.contains(previousDayTheme) ? "wechat" : previousDayTheme
         } else {
             previousDayTheme = resolvedStyle.id
-            theme = "night"
+            theme = ReaderStylePreset.darkIDs.contains(darkTheme) ? darkTheme : "night"
         }
     }
 
@@ -1567,352 +1603,93 @@ struct ReaderView: View {
     }
 
 
-    private var styleControls: some View {
-        ReadingNavigationStack {
-            Form {
-                Section("快速排版") {
-                    HStack(spacing: 12) {
-                        Button {
-                            fontSize = max(5, fontSize - 1)
-                        } label: {
-                            Image(systemName: "textformat.size.smaller")
-                                .frame(width: 38, height: 32)
-                        }
-                        .readingSecondaryButtonStyle()
+    /// 「外观」与「阅读设置」打开同一个阅读设置面板（主题 / 显示 / 朗读），分别停在「主题」「显示」。
+    private var styleControls: some View { readerSettingsPanel(.theme) }
 
-                        VStack(spacing: 2) {
-                            Text("字号")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text("\(Int(fontSize))")
-                                .font(.headline.monospacedDigit())
-                        }
-                        .frame(maxWidth: .infinity)
+    private var readerSettings: some View { readerSettingsPanel(.display) }
 
-                        Button {
-                            fontSize = min(50, fontSize + 1)
-                        } label: {
-                            Image(systemName: "textformat.size.larger")
-                                .frame(width: 38, height: 32)
-                        }
-                        .readingSecondaryButtonStyle()
-                    }
-
-                    HStack(spacing: 8) {
-                        Text("行距")
-                            .font(.subheadline)
-                        Spacer(minLength: 8)
-                        readerChoiceChip("紧凑", selected: lineSpacing <= 7) { lineSpacing = 6 }
-                        readerChoiceChip("标准", selected: lineSpacing > 7 && lineSpacing < 18) { lineSpacing = 12 }
-                        readerChoiceChip("宽松", selected: lineSpacing >= 18) { lineSpacing = 22 }
-                    }
-                    Toggle("两端对齐", isOn: $fullJustify)
-                }
-
-                Section("阅读背景") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(ReaderStylePreset.legadoDefaults) { preset in
-                                let isSelected = resolvedStyle.id == preset.id && activeBackgroundImage == nil
-                                Button {
-                                    useBackgroundImage = false
-                                    theme = preset.id
-                                } label: {
-                                    VStack(spacing: 6) {
-                                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                            .fill(Color(uiColor: preset.background))
-                                            .frame(width: 54, height: 72)
-                                            .overlay {
-                                                Text("文字")
-                                                    .font(.caption)
-                                                    .foregroundStyle(Color(uiColor: preset.foreground))
-                                            }
-                                            .overlay {
-                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                                    .strokeBorder(
-                                                        Color(uiColor: preset.foreground).opacity(isSelected ? 0.4 : 0.12),
-                                                        lineWidth: isSelected ? 1.25 : 0.75
-                                                    )
-                                            }
-                                            .overlay(alignment: .topTrailing) {
-                                                if isSelected {
-                                                    Image(systemName: "checkmark")
-                                                        .font(.system(size: 10, weight: .semibold))
-                                                        .foregroundStyle(Color(uiColor: preset.foreground))
-                                                        .padding(6)
-                                                }
-                                            }
-                                        Text(preset.name)
-                                            .font(.caption2)
-                                            .foregroundStyle(isSelected ? .primary : .secondary)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(preset.name)
-                                .accessibilityAddTraits(isSelected ? .isSelected : [])
-                            }
-                        }
-                    }
-                    Button {
-                        useBackgroundImage = false
-                        theme = ReaderStylePreset.customID
-                    } label: {
-                        HStack {
-                            Label("自定义颜色", systemImage: "paintpalette")
-                            Spacer()
-                            if resolvedStyle.id == ReaderStylePreset.customID && activeBackgroundImage == nil {
-                                Image(systemName: "checkmark").foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    if theme == ReaderStylePreset.customID {
-                        ColorPicker("背景颜色", selection: hexColorBinding($customBackgroundHex, fallback: ReaderStylePreset.defaultCustomBackground), supportsOpacity: false)
-                        ColorPicker("文字颜色", selection: hexColorBinding($customForegroundHex, fallback: ReaderStylePreset.defaultCustomForeground), supportsOpacity: false)
-                        Button("恢复自定义默认颜色") {
-                            customBackgroundHex = ReaderStylePreset.defaultCustomBackground
-                            customForegroundHex = ReaderStylePreset.defaultCustomForeground
-                        }
-                    }
-                    Button("选择背景图片", systemImage: "photo") {
-                        backgroundError = nil
-                        showsBackgroundPicker = true
-                    }
-                    if backgroundImage != nil {
-                        HStack(spacing: 0) {
-                            Text("使用背景图片")
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .contentShape(Rectangle())
-                                .onTapGesture { useBackgroundImage.toggle() }
-                                .accessibilityHidden(true)
-                            Toggle("使用背景图片", isOn: $useBackgroundImage)
-                                .labelsHidden()
-                                .fixedSize()
-                        }
-                        Button("删除背景图片", systemImage: "trash", role: .destructive) {
-                            ReaderBackgroundStore.remove()
-                            backgroundImage = nil
-                            useBackgroundImage = false
-                        }
-                    }
-                    if let backgroundError {
-                        Text(backgroundError).font(.footnote).foregroundStyle(.red)
-                    }
-                }
-
-                Section("文字") {
-                    valueSlider("字号", value: $fontSize, range: 5...50, format: { "\(Int($0))" })
-                    valueSlider("字间距", value: $letterSpacing, range: -0.5...0.5, step: 0.01, format: { String(format: "%.2f", $0) })
-                    valueSlider("行间距", value: $lineSpacing, range: 0...50, format: { "\(Int($0))" })
-                    valueSlider("段距", value: $paragraphSpacing, range: 0...50, format: { String(format: "%.1f", $0) })
-                    Picker("字重", selection: $fontWeight) {
-                        Text("正常").tag(0)
-                        Text("粗体").tag(1)
-                        Text("细体").tag(2)
-                    }
-                    ParagraphIndentControl(indent: $paragraphIndent)
-                    Button(fontPath.isEmpty ? "选择字体文件" : "更换字体文件", systemImage: "textformat") {
-                        showsFontImporter = true
-                    }
-                    if !fontPath.isEmpty {
-                        HStack {
-                            Text("当前字体")
-                            Spacer()
-                            Text(URL(fileURLWithPath: fontPath).lastPathComponent)
-                                .foregroundStyle(.secondary)
-                        }
-                        Button("恢复默认字体", role: .destructive) { fontPath = "" }
-                    }
-                    if let fontError {
-                        Text(fontError).font(.footnote).foregroundStyle(.red)
-                    }
-                    Picker("下划线", selection: $underlineMode) {
-                        Text("关闭").tag(0)
-                        Text("实线").tag(1)
-                        Text("虚线").tag(2)
-                    }
-                }
-
-                Section("章节标题") {
-                    Picker("标题模式", selection: $titleMode) {
-                        Text("左对齐").tag(0)
-                        Text("居中").tag(1)
-                        Text("隐藏").tag(2)
-                    }
-                    .pickerStyle(.segmented)
-                    valueSlider("标题字号增量", value: $titleSize, range: -10...30, format: { String(format: "%+.0f", $0) })
-                    Toggle("标题加粗", isOn: $titleBold)
-                    ColorPicker(
-                        "标题颜色",
-                        selection: hexColorBinding($titleColorHex, fallback: resolvedStyle.foreground.readerHex),
-                        supportsOpacity: false
-                    )
-                    if !titleColorHex.isEmpty {
-                        Button("标题颜色跟随正文") { titleColorHex = "" }
-                    }
-                    valueSlider("标题上间距", value: $titleTopSpacing, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("标题下间距", value: $titleBottomSpacing, range: 0...100, format: { "\(Int($0))" })
-                }
-
-                Section {
-                    Toggle("显示段评气泡", isOn: $showsReviewBubbles)
-                    if showsReviewBubbles {
-                        if #available(iOS 16.0, *) {
-                            NavigationLink {
-                                BubbleStyleSettingsView()
-                            } label: {
-                                HStack {
-                                    Text("段评气泡")
-                                    Spacer()
-                                    Text(bubbleStyles.styles.first { $0.id == bubbleStyles.selectedID }?.name ?? "默认气泡")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("段评")
-                } footer: {
-                    Text("书源提供段评时，气泡显示在段落末尾，轻点打开段评页。气泡样式应用到所有书源；书源指定的气泡颜色优先。")
-                }
-
-                Section("翻页动画") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(Self.pageAnimationChoices, id: \.0) { choice in
-                                Button {
-                                    pageAnimation = choice.value
-                                } label: {
-                                    VStack(spacing: 6) {
-                                        Image(systemName: choice.icon)
-                                            .font(.headline)
-                                        Text(choice.title)
-                                            .font(.caption2)
-                                    }
-                                    .foregroundStyle(pageAnimation == choice.value ? ReadingTheme.onAccent : Color.primary)
-                                    .frame(width: 58, height: 54)
-                                    .background(
-                                        pageAnimation == choice.value ? ReadingTheme.accentFill : Color.secondary.opacity(0.1),
-                                        in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    )
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                            .strokeBorder(pageAnimation == choice.value ? ReadingTheme.selectionBorder : .clear, lineWidth: 1)
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityAddTraits(pageAnimation == choice.value ? .isSelected : [])
-                            }
-                        }
-                    }
-                    Text(pageAnimation == 3
-                         ? "滚动模式连续滚动；其余模式按整屏翻页。左右滑动或点击左右三分之一区域翻页，点击中间区域打开菜单。"
-                         : "当前模式按整屏翻页；左右滑动或点击左右三分之一区域翻页，点击中间区域打开菜单。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("正文边距") {
-                    valueSlider("左边距", value: $paddingLeft, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("右边距", value: $paddingRight, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("上边距", value: $paddingTop, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("下边距", value: $paddingBottom, range: 0...100, format: { "\(Int($0))" })
-                }
-
-                Section("页眉页脚") {
-                    Picker("页眉显示", selection: $headerMode) {
-                        Text("状态栏显示时隐藏").tag(0)
-                        Text("显示").tag(1)
-                        Text("隐藏").tag(2)
-                    }
-                    Picker("页脚显示", selection: $footerMode) {
-                        Text("显示").tag(0)
-                        Text("隐藏").tag(1)
-                    }
-                    tipPicker("页眉左", selection: $tipHeaderLeft)
-                    tipPicker("页眉中", selection: $tipHeaderMiddle)
-                    tipPicker("页眉右", selection: $tipHeaderRight)
-                    tipPicker("页脚左", selection: $tipFooterLeft)
-                    tipPicker("页脚中", selection: $tipFooterMiddle)
-                    tipPicker("页脚右", selection: $tipFooterRight)
-                    Toggle("页眉分隔线", isOn: $showHeaderLine)
-                    Toggle("页脚分隔线", isOn: $showFooterLine)
-                }
-
-                Section("页眉边距") {
-                    valueSlider("左边距", value: $headerPaddingLeft, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("右边距", value: $headerPaddingRight, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("上边距", value: $headerPaddingTop, range: -40...100, format: { "\(Int($0))" })
-                    valueSlider("下边距", value: $headerPaddingBottom, range: 0...100, format: { "\(Int($0))" })
-                }
-
-                Section("页脚边距") {
-                    valueSlider("左边距", value: $footerPaddingLeft, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("右边距", value: $footerPaddingRight, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("上边距", value: $footerPaddingTop, range: 0...100, format: { "\(Int($0))" })
-                    valueSlider("下边距", value: $footerPaddingBottom, range: -40...100, format: { "\(Int($0))" })
-                    Text("调到负数可让页脚继续往屏幕底边靠，进入底部安全区。")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .navigationTitle("阅读样式")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { showsStyleControls = false }
-                }
-            }
-        }
-        .readingPhotoPicker(isPresented: $showsBackgroundPicker) { data in
-            backgroundError = nil
-            do {
-                backgroundImage = try ReaderBackgroundStore.save(data)
-                useBackgroundImage = true
-            } catch {
-                backgroundError = error.localizedDescription
-            }
-        } onError: { error in
-            backgroundError = error.localizedDescription
-        }
-        .fileImporter(
-            isPresented: $showsFontImporter,
-            allowedContentTypes: [.font, .data],
-            allowsMultipleSelection: false
-        ) { result in
-            fontError = nil
-            do {
-                guard let source = try result.get().first else { return }
-                fontPath = try ReaderFontStore.install(from: source)
-            } catch {
-                fontError = error.localizedDescription
-            }
-        }
+    private func readerSettingsPanel(_ tab: ReaderSettingsPage.Tab) -> some View {
+        ReaderSettingsPage(initialTab: tab, context: ReaderSettingsPage.ReaderContext(
+            pageAnimation: $pageAnimation,
+            displayExtras: AnyView(readerDisplayExtras),
+            speechExtras: AnyView(readerSpeechExtras),
+            close: closeSettingsPanels
+        ))
+        // 固定半屏、不压暗正文：调整时直接看到后面正文的变化。
         .readingLivePreviewSheet()
         .readingPresentationDragIndicator()
     }
 
-    private static let pageAnimationChoices: [(value: Int, title: String, icon: String)] = [
-        (0, "覆盖", "rectangle.on.rectangle"),
-        (1, "滑动", "rectangle.portrait.and.arrow.right"),
-        (2, "仿真", "book.pages"),
-        (3, "滚动", "arrow.up.and.down"),
-        (4, "无动画", "rectangle")
-    ]
+    private func closeSettingsPanels() {
+        showsStyleControls = false
+        showsReaderSettings = false
+    }
 
-    private func readerChoiceChip(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(selected ? ReadingTheme.onAccent : Color.primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(selected ? ReadingTheme.accentFill : Color.secondary.opacity(0.1), in: Capsule())
-                .overlay {
-                    Capsule().strokeBorder(selected ? ReadingTheme.selectionBorder : .clear, lineWidth: 1)
-                }
+    /// 只在阅读页才有的显示项：本章正文、自动阅读、点击区域、亮度。
+    @ViewBuilder private var readerDisplayExtras: some View {
+        AppearanceGroup("正文", prominent: true) {
+            Button {
+                editedContent = model.content
+                contentEditError = nil
+                closeSettingsPanels()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { showsContentEditor = true }
+            } label: { AppearanceRowLabel(title: "编辑本章正文", icon: "square.and.pencil") }
+            .buttonStyle(.plain)
+            .disabled(!model.canEditContent || model.content.isEmpty)
+            .opacity(!model.canEditContent || model.content.isEmpty ? 0.45 : 1)
+            Button {
+                closeSettingsPanels()
+                refreshCurrentChapter()
+            } label: { AppearanceRowLabel(title: "重新获取本章", icon: "arrow.clockwise") }
+            .buttonStyle(.plain)
+            .disabled(model.isLoading || !model.canEditContent)
+            .opacity(model.isLoading || !model.canEditContent ? 0.45 : 1)
+            if !model.canEditContent {
+                ReaderSettingsFootnote(text: "本地 TXT / EPUB 直接读取原文件。本章编辑与网络刷新仅对网络书籍开放。")
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(selected ? .isSelected : [])
+        AppearanceGroup("操作", prominent: true) {
+            Button {
+                closeSettingsPanels()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { showsAutoReadControls = true }
+            } label: { AppearanceRowLabel(title: "自动阅读设置", icon: "play.circle", chevron: true) }
+            .buttonStyle(.plain)
+            Button {
+                closeSettingsPanels()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { showsClickActionSettings = true }
+            } label: { AppearanceRowLabel(title: "点击区域设置", icon: "square.grid.3x3", chevron: true) }
+            .buttonStyle(.plain)
+            Button {
+                followsSystemBrightness = true
+                storedReaderBrightness = 0
+                UIScreen.main.brightness = CGFloat(brightnessBeforeReading)
+                readerBrightness = brightnessBeforeReading
+            } label: { AppearanceRowLabel(title: "跟随系统亮度", icon: "sun.max") }
+            .buttonStyle(.plain)
+        }
+    }
+
+    /// 只在阅读页才有的朗读项：本书单独的朗读引擎、本次定时、朗读状态。
+    @ViewBuilder private var readerSpeechExtras: some View {
+        AppearanceGroup("本书", prominent: true) {
+            AppearancePickerRow(
+                title: "本书朗读引擎",
+                options: [("__global__", "跟随全局"), ("", "系统 TTS")] + httpTTSEngines.map { (String($0.id), $0.name) },
+                selection: bookTTSEngineBinding
+            )
+            if speechTimerRemaining > 0 {
+                ReaderSettingsFootnote(text: "本次朗读还剩 \(speechTimerRemaining) 分钟")
+            }
+            if let status = speech.roleStatus {
+                ReaderSettingsFootnote(text: status)
+            }
+            if let error = speech.errorMessage {
+                Text(error)
+                    .font(AppFontStyle.footnote.themed)
+                    .foregroundStyle(Color.red)
+                    .padding(.horizontal, 6)
+            }
+        }
     }
 
     /// 执行书源回调脚本（书评、章评、作家说、作品功能），拿到网址后半屏打开。
@@ -1942,7 +1719,6 @@ struct ReaderView: View {
         """
     }
 
-    /// Binds a stored "RRGGBB" string to a ColorPicker.
     /// 段评气泡 / 插图点击：网址直接半屏打开；书源回调先在后台执行拿到网址。
     private func openReviewLink(_ url: URL) {
         guard let script = ReaderInlineMarkup.script(from: url) else {
@@ -1958,42 +1734,13 @@ struct ReaderView: View {
         )
     }
 
-    private func hexColorBinding(_ hex: Binding<String>, fallback: String) -> Binding<Color> {
-        Binding(
-            get: { Color(uiColor: UIColor(readerHex: hex.wrappedValue) ?? UIColor(readerHex: fallback) ?? .label) },
-            set: { hex.wrappedValue = UIColor($0).readerHex }
-        )
-    }
-
-    private func valueSlider(
-        _ title: String,
-        value: Binding<Double>,
-        range: ClosedRange<Double>,
-        step: Double = 1,
-        format: @escaping (Double) -> String
-    ) -> some View {
-        AdjustableSlider(title: title, value: value, range: range, step: step, format: format)
-    }
-
-    private static let readerTipChoices: [(Int, String)] = [
-        (0, "无"), (7, "书名"), (1, "标题"), (2, "时间"), (3, "电量"),
-        (10, "电量%"), (4, "页数"), (5, "进度(%)"), (11, "进度(xx/yyy)"),
-        (6, "页数及进度"), (8, "时间及电量"), (9, "时间及电量%")
-    ]
-
-    private func tipPicker(_ title: String, selection: Binding<Int>) -> some View {
-        Picker(title, selection: selection) {
-            ForEach(Self.readerTipChoices, id: \.0) { value, name in
-                Text(name).tag(value)
-            }
-        }
-    }
-
 
     private var clickActions: [Int] {
         // Keep persisted action IDs stable; the removed sync action becomes a no-op.
+        // 「全屏翻页」：左侧的「上一页」也翻到下一页，单手点哪都往后翻。
         [clickActionTL, clickActionTC, clickActionTR, clickActionML, 0, clickActionMR, clickActionBL, clickActionBC, clickActionBR]
             .map { $0 == 12 ? -1 : $0 }
+            .map { fullScreenTurn && $0 == 2 ? 1 : $0 }
     }
 
     private static let tapActionChoices: [(Int, String)] = [
@@ -2099,123 +1846,6 @@ struct ReaderView: View {
             }
         default: break
         }
-    }
-
-
-    private var readerSettings: some View {
-        ReadingNavigationStack {
-            Form {
-                Section {
-                    Toggle("两端对齐", isOn: $fullJustify)
-                    Button("编辑本章正文", systemImage: "square.and.pencil") {
-                        editedContent = model.content
-                        contentEditError = nil
-                        showsReaderSettings = false
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { showsContentEditor = true }
-                    }
-                    .disabled(!model.canEditContent || model.content.isEmpty)
-                    Button("重新获取本章", systemImage: "arrow.clockwise") {
-                        showsReaderSettings = false
-                        refreshCurrentChapter()
-                    }
-                    .disabled(model.isLoading || !model.canEditContent)
-                } header: {
-                    Text("正文")
-                } footer: {
-                    if !model.canEditContent {
-                        Text("本地 TXT / EPUB 直接读取原文件。本章编辑与网络刷新仅对网络书籍开放。")
-                    }
-                }
-
-                Section("屏幕") {
-                    Picker("屏幕方向", selection: $screenOrientation) {
-                        Text("跟随系统").tag("0")
-                        Text("竖向").tag("1")
-                        Text("横向").tag("2")
-                        Text("跟随传感器").tag("3")
-                        Text("反向竖屏").tag("4")
-                        Text("反向横屏").tag("5")
-                    }
-                    Toggle("阅读时不自动锁屏", isOn: $keepScreenOn)
-                    if #available(iOS 16.0, *) {
-                        Toggle("阅读时隐藏小横条", isOn: $hideHomeIndicator)
-                    }
-                    Toggle("隐藏状态栏", isOn: $hideStatusBar)
-                    Toggle("显示亮度调节", isOn: $showBrightness)
-                    Button("跟随系统亮度", systemImage: "sun.max") {
-                        followsSystemBrightness = true
-                        storedReaderBrightness = 0
-                        UIScreen.main.brightness = CGFloat(brightnessBeforeReading)
-                        readerBrightness = brightnessBeforeReading
-                    }
-                }
-
-                Section("朗读") {
-                    Picker("全局朗读引擎", selection: $appTTSEngine) {
-                        Text("系统 TTS").tag("")
-                        ForEach(httpTTSEngines) { engine in
-                            Text(engine.name).tag(String(engine.id))
-                        }
-                    }
-                    Picker("本书朗读引擎", selection: bookTTSEngineBinding) {
-                        Text("跟随全局").tag("__global__")
-                        Text("系统 TTS").tag("")
-                        ForEach(httpTTSEngines) { engine in
-                            Text(engine.name).tag(String(engine.id))
-                        }
-                    }
-                    Picker("系统声音", selection: $systemTTSVoice) {
-                        Text("系统默认中文声音").tag("")
-                        ForEach(systemTTSVoices, id: \.identifier) { voice in
-                            Text("\(voice.name)（\(voice.language)）").tag(voice.identifier)
-                        }
-                    }
-                    Toggle("跟随系统语速", isOn: $ttsFollowSystem)
-                    Stepper("朗读语速：\(ttsSpeechRate)", value: $ttsSpeechRate, in: 0...45)
-                        .disabled(ttsFollowSystem)
-                    Toggle("按页朗读", isOn: $readAloudByPage)
-                    Toggle("流式播放在线音频", isOn: $streamReadAloudAudio)
-                    Toggle("朗读时保持亮屏", isOn: $readAloudWakeLock)
-                    Toggle("忽略音频焦点", isOn: $ignoreAudioFocus)
-                    Toggle("忽略焦点时仍在来电时暂停", isOn: $pauseReadAloudWhilePhoneCalls)
-                        .disabled(!ignoreAudioFocus)
-                    Toggle("媒体上一首/下一首切换章节", isOn: $mediaButtonPerNext)
-                    Stepper("默认定时：\(ttsTimer) 分钟", value: $ttsTimer, in: 0...180)
-                    if speechTimerRemaining > 0 {
-                        Text("本次朗读还剩 \(speechTimerRemaining) 分钟")
-                            .font(.footnote.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    if let status = speech.roleStatus {
-                        Text(status).font(.footnote).foregroundStyle(.secondary)
-                    }
-                    if let error = speech.errorMessage {
-                        Text(error).font(.footnote).foregroundStyle(.red)
-                    }
-                }
-
-                Section("操作") {
-                    Button("自动阅读设置", systemImage: "play.circle") {
-                        showsReaderSettings = false
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { showsAutoReadControls = true }
-                    }
-                    Button("点击区域设置", systemImage: "square.grid.3x3") {
-                        showsReaderSettings = false
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { showsClickActionSettings = true }
-                    }
-                }
-            }
-            .navigationTitle("阅读设置")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { showsReaderSettings = false }
-                }
-            }
-        }
-        // 和「外观」一样：固定半屏、不压暗正文，列表在面板里滚动而不是把面板拉满全屏。
-        .readingLivePreviewSheet()
-        .readingPresentationDragIndicator()
     }
 
 

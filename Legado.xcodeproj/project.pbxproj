@@ -51,6 +51,9 @@
 		7E3A00000000000000000291 /* ReaderTableOfContents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7E3A00000000000000000191 /* ReaderTableOfContents.swift */; };
 		A100000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift */; };
 		A100000000000000000000B1 /* ReviewBubbleStyle.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000000000000000000B1 /* ReviewBubbleStyle.swift */; };
+		C5A100000000000000000001 /* ReaderHighlight.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5A200000000000000000001 /* ReaderHighlight.swift */; };
+		C5A100000000000000000002 /* ReaderHighlightSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5A200000000000000000002 /* ReaderHighlightSettingsView.swift */; };
+		C5A100000000000000000003 /* ReaderSettingsPage.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5A200000000000000000003 /* ReaderSettingsPage.swift */; };
 		A10000000000000000000025 /* ReaderViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002C /* ReaderViewModel.swift */; };
 		A10000000000000000000026 /* ReadingStatisticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002D /* ReadingStatisticsView.swift */; };
 		CC1500000000000000000001 /* Compatibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC1500000000000000000002 /* Compatibility.swift */; };
@@ -207,6 +210,9 @@
 		7E3A00000000000000000191 /* ReaderTableOfContents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderTableOfContents.swift; sourceTree = "<group>"; };
 		A200000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewBubbleStyleSettingsView.swift; sourceTree = "<group>"; };
 		A200000000000000000000B1 /* ReviewBubbleStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewBubbleStyle.swift; sourceTree = "<group>"; };
+		C5A200000000000000000001 /* ReaderHighlight.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderHighlight.swift; sourceTree = "<group>"; };
+		C5A200000000000000000002 /* ReaderHighlightSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderHighlightSettingsView.swift; sourceTree = "<group>"; };
+		C5A200000000000000000003 /* ReaderSettingsPage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSettingsPage.swift; sourceTree = "<group>"; };
 		A2000000000000000000002C /* ReaderViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderViewModel.swift; sourceTree = "<group>"; };
 		A2000000000000000000002D /* ReadingStatisticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingStatisticsView.swift; sourceTree = "<group>"; };
 		CC1500000000000000000002 /* Compatibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Compatibility.swift; sourceTree = "<group>"; };
@@ -459,6 +465,9 @@
 				7E3A00000000000000000191 /* ReaderTableOfContents.swift */,
 				A200000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift */,
 				A200000000000000000000B1 /* ReviewBubbleStyle.swift */,
+				C5A200000000000000000001 /* ReaderHighlight.swift */,
+				C5A200000000000000000002 /* ReaderHighlightSettingsView.swift */,
+				C5A200000000000000000003 /* ReaderSettingsPage.swift */,
 				EB2000000000000000000003 /* EPUBIllustrationsView.swift */,
 			);
 			path = Features/Reader;
@@ -863,6 +872,9 @@
 				7E3A00000000000000000291 /* ReaderTableOfContents.swift in Sources */,
 				A100000000000000000000B2 /* ReviewBubbleStyleSettingsView.swift in Sources */,
 				A100000000000000000000B1 /* ReviewBubbleStyle.swift in Sources */,
+				C5A100000000000000000001 /* ReaderHighlight.swift in Sources */,
+				C5A100000000000000000002 /* ReaderHighlightSettingsView.swift in Sources */,
+				C5A100000000000000000003 /* ReaderSettingsPage.swift in Sources */,
 				A10000000000000000000025 /* ReaderViewModel.swift in Sources */,
 				A10000000000000000000026 /* ReadingStatisticsView.swift in Sources */,
 				CC1500000000000000000001 /* Compatibility.swift in Sources */,

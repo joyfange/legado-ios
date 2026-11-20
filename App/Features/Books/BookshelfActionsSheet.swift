@@ -18,6 +18,8 @@ struct BookshelfBookActionsSheet: View {
     @ObservedObject private var cacheCenter = BookshelfCacheCenter.shared
     let bookURL: String
     let fallback: Book
+    /// 长按时所在的书架（分组 id）：「分组」把书放进这个书架里的文件夹。
+    var groupID: Int64 = BookGroup.idAll
 
     @State private var cachedCount: Int?
     @State private var running: Set<BookAction> = []
@@ -451,15 +453,10 @@ struct BookshelfBookActionsSheet: View {
         case .edit:
             BookInfoEditView(book: book).environmentObject(library).environmentObject(sources)
         case .group:
-            BookShelfPickerSheet(book: book, inLibrary: false, title: "移至书架") { groupIDs, reading in
-                Task {
-                    guard let stored = library.books.first(where: { $0.bookUrl == bookURL }) else { return }
-                    await library.setBook(stored, groupIDs: groupIDs)
-                    if let latest = library.books.first(where: { $0.bookUrl == bookURL }) {
-                        await library.setReadingStatus(latest, reading: reading)
-                    }
-                }
-            } onRemove: {}
+            // 「分组」＝书架上的文件夹（与拖书合并、多选「加入分组」同一份数据）；移到别的书架在面板底部。
+            BookshelfBookFolderSheet(book: book, groupID: groupID) { text in
+                showNotice(text)
+            }
             .environmentObject(library)
             .readingPresentationDetents([.medium, .large])
         case .sourceVariable:
@@ -1728,5 +1725,155 @@ struct BookshelfQuickDetailSheet: View {
             guard !Task.isCancelled else { return }
             withAnimation(.easeIn(duration: 0.2)) { notice = nil }
         }
+    }
+}
+
+
+// MARK: - 分组（书架文件夹）
+
+/// 长按面板「分组」：把这本书放进当前书架的某个分组（文件夹），或新建一个分组；也可以移出分组。
+/// 面板底部保留「移至其他书架」（正在读 / 想读 / 自定义书架）。
+struct BookshelfBookFolderSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var library: BookLibraryModel
+    @ObservedObject private var folderStore = BookshelfFolderStore.shared
+    let book: Book
+    let groupID: Int64
+    let onNotice: (String) -> Void
+    @State private var newName = ""
+    @State private var showsShelfPicker = false
+    @FocusState private var nameFocused: Bool
+
+    private var folders: [BookshelfFolder] { folderStore.folders(inGroup: groupID) }
+    private var current: BookshelfFolder? { folders.first { $0.bookURLs.contains(book.bookUrl) } }
+    private var shelfName: String {
+        library.visibleGroups.first { $0.groupId == groupID }?.groupName ?? "当前书架"
+    }
+    private var trimmedName: String { newName.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        ReadingNavigationStack {
+            List {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "folder.badge.plus").foregroundStyle(ReadingTheme.accent)
+                        TextField(folderStore.nextName(inGroup: groupID), text: $newName)
+                            .focused($nameFocused)
+                            .submitLabel(.done)
+                            .onSubmit(createFolder)
+                        Button("新建", action: createFolder)
+                            .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                            .foregroundStyle(ReadingTheme.accent)
+                            .buttonStyle(.borderless)
+                    }
+                } header: {
+                    Text("新建分组")
+                } footer: {
+                    Text("《\(book.name)》会放进新分组，显示在「\(shelfName)」书架上。名称留空时自动命名。")
+                }
+                .readingRowBackground()
+
+                if !folders.isEmpty {
+                    Section {
+                        ForEach(folders) { folder in
+                            Button {
+                                move(to: folder)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    Image(systemName: current?.id == folder.id ? "folder.fill" : "folder")
+                                        .foregroundStyle(ReadingTheme.accent)
+                                    Text(folder.name).foregroundStyle(ReadingTheme.ink)
+                                    Spacer()
+                                    Text("\(folder.bookURLs.count) 本").foregroundStyle(ReadingTheme.secondaryInk)
+                                    if current?.id == folder.id {
+                                        Image(systemName: "checkmark").foregroundStyle(ReadingTheme.accent)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityAddTraits(current?.id == folder.id ? .isSelected : [])
+                        }
+                    } header: {
+                        Text("已有分组")
+                    }
+                    .readingRowBackground()
+                }
+
+                if let current {
+                    Section {
+                        Button(role: .destructive) {
+                            folderStore.remove([book.bookUrl], from: current.id)
+                            finish("已移出分组「\(current.name)」")
+                        } label: {
+                            Label("移出分组「\(current.name)」", systemImage: "folder.badge.minus")
+                        }
+                    } footer: {
+                        Text("分组里只剩这一本书时，移出后分组会自动解散。")
+                    }
+                    .readingRowBackground()
+                }
+
+                Section {
+                    Button {
+                        showsShelfPicker = true
+                    } label: {
+                        HStack {
+                            Label("移至其他书架", systemImage: "books.vertical")
+                                .foregroundStyle(ReadingTheme.ink)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(AppFontStyle.system(size: 12, weight: .semibold).themed)
+                                .foregroundStyle(ReadingTheme.tertiaryInk)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                } footer: {
+                    Text("分组是书架里的文件夹；「正在读」「想读」和自定义书架在这里切换。")
+                }
+                .readingRowBackground()
+            }
+            .readingThemedListBackground()
+            .navigationTitle("分组")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+            }
+        }
+        .sheet(isPresented: $showsShelfPicker) {
+            BookShelfPickerSheet(book: book, inLibrary: false, title: "移至书架") { groupIDs, reading in
+                Task {
+                    guard let stored = library.books.first(where: { $0.bookUrl == book.bookUrl }) else { return }
+                    await library.setBook(stored, groupIDs: groupIDs)
+                    if let latest = library.books.first(where: { $0.bookUrl == book.bookUrl }) {
+                        await library.setReadingStatus(latest, reading: reading)
+                    }
+                }
+            } onRemove: {}
+            .environmentObject(library)
+            .readingPresentationDetents([.medium, .large])
+        }
+    }
+
+    private func move(to folder: BookshelfFolder) {
+        guard current?.id != folder.id else {
+            dismiss()
+            return
+        }
+        folderStore.add(book.bookUrl, to: folder.id)
+        finish("已放进分组「\(folder.name)」")
+    }
+
+    private func createFolder() {
+        let folder = folderStore.makeFolder(groupID: groupID, bookURLs: [book.bookUrl],
+                                            name: trimmedName.isEmpty ? nil : trimmedName)
+        finish("已新建分组「\(folder.name)」")
+    }
+
+    private func finish(_ text: String) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        onNotice(text)
+        dismiss()
     }
 }

@@ -508,7 +508,7 @@ struct ReaderScrollBlock {
 final class ReaderScrollChapterLayout {
     let chapter: ReaderScrollChapter
     let storage: NSTextStorage
-    let manager = NSLayoutManager()
+    let manager: NSLayoutManager = ReaderHighlightLayoutManager()
     let container: NSTextContainer
     let bodyStart: Int
     let left: CGFloat
@@ -545,6 +545,8 @@ final class ReaderScrollChapterLayout {
                 customBubbleRevision: configuration.reviewBubbleImageRevision
             )
         }
+        ReaderHighlighter.apply(to: attributed, in: NSRange(location: bodyLocation, length: attributed.length - bodyLocation),
+                                foreground: configuration.foregroundColor)
         storage = NSTextStorage(attributedString: attributed)
         storage.addLayoutManager(manager)
         manager.addTextContainer(container)
@@ -623,7 +625,11 @@ struct ReaderTypography {
         paragraph.firstLineHeadIndent = (c.paragraphIndent as NSString).size(withAttributes: [
             .font: font, .kern: CGFloat(c.letterSpacing * c.fontSize)
         ]).width
-        paragraph.alignment = c.fullJustify ? .justified : .natural
+        paragraph.alignment = c.centerText ? .center : (c.fullJustify ? .justified : .natural)
+        if c.paragraphBlankLines > 0 {
+            // 段落间空行：每空一行加一行的高度（字体行高 + 行间距）。
+            paragraph.paragraphSpacing += CGFloat(min(c.paragraphBlankLines, 3)) * (font.lineHeight + CGFloat(c.lineSpacing))
+        }
         var body: [NSAttributedString.Key: Any] = [
             .font: font, .kern: CGFloat(c.letterSpacing * c.fontSize),
             .foregroundColor: c.foregroundColor, .paragraphStyle: paragraph
@@ -649,6 +655,6 @@ struct ReaderTypography {
 
 extension ReaderTextView {
     var scrollTypographyKey: String {
-        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)|\(reviewBubbleImageRevision)"
+        "\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(fullJustify)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)|\(reviewBubbleImageRevision)|\(highlightRevision)|\(paragraphBlankLines)|\(centerText)"
     }
 }

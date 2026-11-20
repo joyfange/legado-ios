@@ -508,7 +508,7 @@ private struct BookshelfView: View {
             case .editInfo(let book):
                 BookInfoEditView(book: book).environmentObject(library).environmentObject(sources)
             case .actions(let book):
-                BookshelfBookActionsSheet(bookURL: book.bookUrl, fallback: book)
+                BookshelfBookActionsSheet(bookURL: book.bookUrl, fallback: book, groupID: selectedGroup.groupId)
                     .environmentObject(library)
                     .environmentObject(sources)
             }
@@ -1829,7 +1829,7 @@ private struct ReaderOpeningPlaceholder: View {
                 .transition(.opacity)
             }
         }
-        .preferredColorScheme(style.id == "night" ? .dark : .light)
+        .preferredColorScheme(style.isDark ? .dark : .light)
         .navigationBarBackButtonHidden(true)
         .readingTabBarHidden()
         .task {
@@ -2746,7 +2746,7 @@ private struct SettingsView: View {
 
     private var readingSection: some View {
         settingSection("阅读") {
-            settingLink("阅读设置", icon: "textformat.size") { ReadingPreferencesView() }
+            settingLink("阅读设置", icon: "textformat.size") { ReaderSettingsPage() }
             // 字体管理：书籍字体 + 界面字体，右侧显示已导入的字体数量。
             NavigationLink { FontManagementView() } label: {
                 settingRow("字体管理", icon: "f.cursive", value: "\(fonts.importedFonts.count) 个")

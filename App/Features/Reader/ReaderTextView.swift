@@ -176,6 +176,14 @@ struct ReaderTextView: UIViewRepresentable {
     var reviewBubbleImageRevision: Int = 0
     /// 长按正文：回传按住处的词语和所在段落，用于快速新建净化（替换）规则。
     var onLongPressText: ((ReaderTextPick) -> Void)? = nil
+    /// 正则高亮规则的版本：规则改了就重新排版。
+    var highlightRevision: Int = 0
+    /// 段落间空行（0～3 行）：用段后间距实现，不改正文内容，阅读位置不变。
+    var paragraphBlankLines: Int = 0
+    /// 正文居中对齐（优先于两端对齐）。
+    var centerText: Bool = false
+    /// 翻页模式下上滑退出阅读；为 nil 时不响应。
+    var onSwipeUp: (() -> Void)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -200,6 +208,10 @@ struct ReaderTextView: UIViewRepresentable {
             coordinator?.replaceSelection(in: view)
         }
         view.accessibilityIdentifier = "reader.text"
+        // 正则高亮的圆角 / 渐变背景、背景图、渐变文字、波浪线由自绘排版器补画；没有高亮时与系统排版器一致。
+        if view.textContainer.layoutManager != nil, !(view.layoutManager is ReaderHighlightLayoutManager) {
+            view.textContainer.replaceLayoutManager(ReaderHighlightLayoutManager())
+        }
         let effectivePageAnimation = isEInkMode ? 4 : pageAnimation
         view.backgroundColor = backgroundColor
         view.isOpaque = backgroundColor != .clear
@@ -258,7 +270,7 @@ struct ReaderTextView: UIViewRepresentable {
         let adjacentContentKey = "\(showsPrevious)|\(previousTitle ?? "")|\(previousText)|\(showsContinuation)|\(continuationTitle ?? "")|\(continuationText)".hashValue
         let displaysTitle = titleMode != 2 || isVolume
         let titlePrefix = displaysTitle && !title.isEmpty ? title + "\n" : ""
-        let styleKey = "\(contentKey)|\(adjacentContentKey)|\(title)|\(isVolume)|\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(headerInset)|\(footerInset)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(isSelectable)|\(fullJustify)|\(effectivePageAnimation)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)|\(reviewBubbleImageRevision)"
+        let styleKey = "\(contentKey)|\(adjacentContentKey)|\(title)|\(isVolume)|\(fontSize)|\(fontPath)|\(letterSpacing)|\(lineSpacing)|\(paragraphSpacing)|\(paragraphIndent)|\(paddingLeft)|\(paddingRight)|\(paddingTop)|\(paddingBottom)|\(headerInset)|\(footerInset)|\(fontWeight)|\(titleMode)|\(titleSize)|\(titleTopSpacing)|\(titleBottomSpacing)|\(underlineMode)|\(isSelectable)|\(fullJustify)|\(effectivePageAnimation)|\(foregroundColor.hash)|\(titleColor?.readerHex ?? "")|\(titleBold)|\(showsReviewBubbles)|\(reviewBubbleStyle)|\(reviewBubbleAccent)|\(reviewBubbleImageRevision)|\(highlightRevision)|\(paragraphBlankLines)|\(centerText)"
         if context.coordinator.styleKey != styleKey {
             if context.coordinator.shouldDeferRender(in: view) {
                 context.coordinator.needsDeferredRender = true
@@ -327,6 +339,18 @@ struct ReaderTextView: UIViewRepresentable {
                     bubbleAccent: reviewBubbleAccent,
                     customBubbleRevision: reviewBubbleImageRevision
                 )
+            }
+            // 正则高亮只作用于正文（不含章节标题）。
+            var bodyRanges = [NSRange(location: context.coordinator.renderedPrefixLength,
+                                      length: context.coordinator.currentBodyEnd - context.coordinator.renderedPrefixLength)]
+            if let start = context.coordinator.previousBodyStart, let end = context.coordinator.previousBodyEnd {
+                bodyRanges.append(NSRange(location: start, length: end - start))
+            }
+            if let start = context.coordinator.continuationBodyStart {
+                bodyRanges.append(NSRange(location: start, length: rendered.length - start))
+            }
+            for range in bodyRanges where range.length > 0 && NSMaxRange(range) <= rendered.length {
+                ReaderHighlighter.apply(to: rendered, in: range, foreground: foregroundColor)
             }
             context.coordinator.updatePageBreaker(in: view, invalidate: false)
             context.coordinator.isApplyingContent = true
@@ -522,6 +546,7 @@ struct ReaderTextView: UIViewRepresentable {
         private weak var autoPageOverlay: UIImageView?
         private var pageRangeRetryCount = 0
         private weak var nextSwipe: UISwipeGestureRecognizer?
+        private weak var upSwipe: UISwipeGestureRecognizer?
         private weak var previousSwipe: UISwipeGestureRecognizer?
         private weak var readerTap: UITapGestureRecognizer?
         private weak var loadingFooter: UIView?
@@ -551,6 +576,11 @@ struct ReaderTextView: UIViewRepresentable {
             view.addGestureRecognizer(previous)
             nextSwipe = next
             previousSwipe = previous
+            let up = UISwipeGestureRecognizer(target: self, action: #selector(swipedUp(_:)))
+            up.direction = .up
+            up.isEnabled = false
+            view.addGestureRecognizer(up)
+            upSwipe = up
             let press = UILongPressGestureRecognizer(target: self, action: #selector(longPressed(_:)))
             press.minimumPressDuration = 0.45
             view.addGestureRecognizer(press)
@@ -676,6 +706,7 @@ struct ReaderTextView: UIViewRepresentable {
             // pan before the user reaches the end of a long chapter.
             nextSwipe?.isEnabled = !isScrollMode && !isSelectingText
             previousSwipe?.isEnabled = !isScrollMode && !isSelectingText
+            upSwipe?.isEnabled = !isScrollMode && !isSelectingText && parent.onSwipeUp != nil
             view.panGestureRecognizer.isEnabled = isScrollMode
             view.alwaysBounceVertical = isScrollMode
             view.isPagingEnabled = !isScrollMode
@@ -1274,6 +1305,14 @@ struct ReaderTextView: UIViewRepresentable {
             let character = manager.characterIndexForGlyph(at: glyph)
             guard character < view.textStorage.length else { return nil }
             return view.textStorage.attribute(.readerLink, at: character, effectiveRange: nil) as? URL
+        }
+
+        /// 「上滑退出阅读」：只在按页翻的模式里生效（滚动模式上滑是滚动）。
+        @objc private func swipedUp(_ gesture: UISwipeGestureRecognizer) {
+            guard !isSelectingText, let exit = parent.onSwipeUp else { return }
+            let effective = parent.isEInkMode ? 4 : parent.pageAnimation
+            guard effective != 3 else { return }
+            exit()
         }
 
         @objc private func swiped(_ gesture: UISwipeGestureRecognizer) {

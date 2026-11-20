@@ -135,17 +135,44 @@ final class AppearanceLiveModel: ObservableObject {
     }
 
     /// 导出主题：设置 + 所有用到的图片（背景、封面、启动图、Tab 与工具栏图标、卡片背景图）打成一个文件。
+    /// 导出的是当前正在使用的主题（先保存页面上未保存的改动）；主题名和文件名用用户看到的名字：
+    /// 选了「主题切换」配色时是配色名（如「琥珀金」），而不是内置主题自动生成的「经典黑白 · 我的外观」。
     func exportURL() -> URL? {
+        commit()
+        var theme = dirty ? draft : store.selectedTheme
+        theme.name = Self.displayName(of: theme)
         var assets: [String: String] = [:]
-        for id in draft.assetIDs {
+        for id in theme.assetIDs {
             if let data = ThemeAssetStore.shared.data(for: id) { assets[id] = data.base64EncodedString() }
         }
-        let package = ThemeExportPackage(format: ThemeExportPackage.formatID, version: 2, theme: draft,
+        let package = ThemeExportPackage(format: ThemeExportPackage.formatID, version: 2, theme: theme,
                                          assets: assets.isEmpty ? nil : assets)
         guard let data = try? JSONEncoder().encode(package) else { return nil }
-        let name = draft.name.replacingOccurrences(of: "/", with: "-")
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).json")
-        do { try data.write(to: url, options: .atomic); return url } catch { return nil }
+        let name = theme.name
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        // 每次导出放进单独的临时目录：同名旧文件不会被分享面板复用。
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("theme-export-" + UUID().uuidString)
+        let url = folder.appendingPathComponent("\(name).json")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            return url
+        } catch {
+            return nil
+        }
+    }
+
+    /// 用户看到的主题名：所选配色名（单独设置深色时「亮 · 深」），否则主题名去掉自动加的「· 我的外观」。
+    static func displayName(of theme: AppTheme) -> String {
+        if let custom = theme.customization, let light = ThemeColorPreset.find(custom.colorThemeID, in: custom) {
+            if custom.separateDarkTheme, let dark = ThemeColorPreset.find(custom.darkColorThemeID, in: custom), dark.id != light.id {
+                return "\(light.name) · \(dark.name)"
+            }
+            return light.name
+        }
+        let name = theme.name.replacingOccurrences(of: " · 我的外观", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? theme.name : name
     }
 }
 
@@ -229,7 +256,6 @@ struct AppearanceSettingsView: View {
             }
             AppearanceGroup {
                 Button {
-                    model.commit()
                     exportURL = model.exportURL()
                 } label: { AppearanceRowLabel(title: "导出主题", icon: "square.and.arrow.up") }
                 .buttonStyle(.plain)

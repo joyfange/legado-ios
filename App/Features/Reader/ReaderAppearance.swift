@@ -20,8 +20,18 @@ struct ReaderStylePreset: Identifiable {
         .init(id: "preset3", name: "预设3", background: UIColor(hex: 0xC2D8AA), foreground: UIColor(hex: 0x596C44)),
         .init(id: "preset4", name: "预设4", background: UIColor(hex: 0xDBB8E2), foreground: UIColor(hex: 0x68516C)),
         .init(id: "preset5", name: "预设5", background: UIColor(hex: 0xABCEE0), foreground: UIColor(hex: 0x3D4C54)),
-        .init(id: "night", name: "夜间", background: UIColor(hex: 0x000000), foreground: UIColor(hex: 0xADADAD))
+        .init(id: "warmWhite", name: "暖白", background: UIColor(hex: 0xFAF6EE), foreground: UIColor(hex: 0x37322B)),
+        .init(id: "parchment", name: "羊皮纸", background: UIColor(hex: 0xF1E4C6), foreground: UIColor(hex: 0x4A3A22)),
+        .init(id: "night", name: "夜间", background: UIColor(hex: 0x000000), foreground: UIColor(hex: 0xADADAD)),
+        .init(id: "deepBlue", name: "深蓝", background: UIColor(hex: 0x111B2A), foreground: UIColor(hex: 0xA9B8CB)),
+        .init(id: "inkGreen", name: "墨绿", background: UIColor(hex: 0x0F2018), foreground: UIColor(hex: 0xA8C4B2))
     ]
+
+    /// 深色阅读主题（夜间、深蓝、墨绿）：阅读页的系统控件随之用深色外观。
+    static let darkIDs: Set<String> = ["night", "deepBlue", "inkGreen"]
+    var isDark: Bool { Self.darkIDs.contains(id) }
+    static var lightPresets: [ReaderStylePreset] { legadoDefaults.filter { !$0.isDark } }
+    static var darkPresets: [ReaderStylePreset] { legadoDefaults.filter(\.isDark) }
     static let eInk = ReaderStylePreset(
         id: "eink",
         name: "E-Ink",
