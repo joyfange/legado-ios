@@ -1025,7 +1025,6 @@ private struct SourceLoginToast: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.35), lineWidth: 0.5)
             }
-            .shadow(color: .black.opacity(0.12), radius: 18, y: 6)
             .padding(32)
             .accessibilityAddTraits(.isStaticText)
     }

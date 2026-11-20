@@ -962,12 +962,10 @@ struct ReaderView: View {
             // 外观主题「阅读半屏卡片跟随外观」：阅读页的菜单卡片也用主题卡片（界面效果 / 卡片背景）。
             ThemeSurface(shape: shape, isCard: true)
                 .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
-                .shadow(color: .black.opacity(resolvedStyle.id == "night" ? 0.25 : 0.08), radius: 10, x: 0, y: 4)
         } else {
             AppGlassSurface(shape: shape, tint: backgroundColor, tintOpacity: 0.32,
                             reduceTransparency: reduceTransparency)
                 .environment(\.colorScheme, resolvedStyle.id == "night" ? .dark : .light)
-                .shadow(color: .black.opacity(resolvedStyle.id == "night" ? 0.25 : 0.08), radius: 10, x: 0, y: 4)
         }
     }
 

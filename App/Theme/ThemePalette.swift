@@ -265,10 +265,16 @@ struct AppGlassSurface<S: InsettableShape>: View {
                 // 回到 App 时就看到「由暗转亮」。后台时改画接近玻璃观感的半透明底，截图和实际一致。
                 shape.fill(tint.opacity(min(0.92, tintOpacity + 0.5)))
                     .overlay { shape.fill(Color.white.opacity(0.18)) }
+            } else if #available(iOS 26.0, *) {
+                // 默认就是和外观主题卡片同一种系统玻璃（Liquid Glass）：阅读页工具栏、顶部胶囊都用它。
+                // 只叠很淡的阅读底色，让玻璃和纸色融在一起；同样按形状裁掉玻璃外圈的投影。
+                Color.clear.glassEffect(.regular.tint(tint.opacity(min(tintOpacity, 0.12))), in: shape)
+                    .clipShape(shape)
             } else {
-                // 毛玻璃（磨砂模糊 + 淡淡底色），不用 iOS 26 的 Liquid Glass，没有高光和亮边。
+                // 更早的系统：磨砂模糊 + 淡淡底色 + 细亮边。
                 shape.fill(.ultraThinMaterial)
                     .overlay { shape.fill(tint.opacity(tintOpacity)) }
+                    .overlay { shape.strokeBorder(Color.white.opacity(0.4), lineWidth: 0.6) }
             }
         }
         // 作为按钮背景时整块都能点（之前不参与点击，卡片空白处点了没反应，比如「管理书源」）。
@@ -470,7 +476,11 @@ struct ThemeSystemGlassFill<S: InsettableShape>: View {
             // 多任务截图拍不到实时模糊：后台时画接近玻璃观感的半透明底，回到 App 时不会由暗转亮。
             shape.fill(ThemeEffectFill.transparentColor(dark: scheme == .dark).opacity(scheme == .dark ? 0.55 : 0.6))
         } else if #available(iOS 26.0, *) {
+            // Liquid Glass 默认会在玻璃外圈投下一圈柔和阴影（单独浮起的按钮才需要）；卡片贴在页面上，
+            // 这圈阴影在浅色背景上就是卡片下沿一道明显的灰影。玻璃按自身形状裁一刀：
+            // 折射、高光、亮边都在形状以内，保留不变；只有画到形状外面的阴影被裁掉。
             Color.clear.glassEffect(.regular, in: shape)
+                .clipShape(shape)
         } else {
             shape.fill(.ultraThinMaterial)
         }

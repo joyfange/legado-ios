@@ -481,6 +481,8 @@ private struct BookshelfView: View {
         .onReceive(BookshelfFolderStore.shared.$openRequest) { request in
             guard let request else { return }
             BookshelfFolderStore.shared.openRequest = nil
+            // 长按刚弹出操作面板时不再打开书（轻点与长按同时触发时的兜底）。
+            if case .read = request, case .actions? = sheetRouter.sheet { return }
             shelfDestination = request
         }
         .sheet(isPresented: $showsGroupManager) {
@@ -869,9 +871,7 @@ private struct BookshelfView: View {
             }
         }
         .padding(3)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.secondary.opacity(0.15), lineWidth: 0.5))
-        .shadow(color: .black.opacity(0.08), radius: 4, x: -1, y: 1)
+        .background { ThemeSurface(shape: Capsule()) }
         .padding(.trailing, 2)
     }
 
@@ -1061,6 +1061,7 @@ private struct BookshelfBookLink: View {
             .zIndex(lifted ? 10 : 0)
             .animation(.spring(response: 0.26, dampingFraction: 0.78), value: lifted)
             .onTapGesture {
+                guard BookshelfLongPressGuard.allowsTap, !lifted else { return }
                 BookshelfFolderStore.shared.openRequest = .read(book)
             }
             .gesture(pressAndDrag)
@@ -1085,6 +1086,7 @@ private struct BookshelfBookLink: View {
                 guard case .second(true, let drag) = value else { return }
                 if !lifted {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    BookshelfLongPressGuard.lift()
                     lifted = true
                     session.begin(url: book.bookUrl, groupID: groupID)
                 }
@@ -1097,6 +1099,7 @@ private struct BookshelfBookLink: View {
 
     private func finish() {
         guard lifted else { return }
+        BookshelfLongPressGuard.end()
         let outcome = session.end()
         withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
             dragOffset = .zero
@@ -4509,6 +4512,32 @@ struct BookshelfFolderIcon: View {
 /// - 浮起后直接拖动：书跟着手指走；停到另一本书中间 → 那本书缩小、身后浮出底板（文件夹成形），
 ///   松手两本书装进一个新文件夹；停到文件夹上 → 松手放进这个文件夹；拖到空白处松手 → 回到原位。
 /// 系统拖放（onDrag / onDrop）和系统长按菜单抢同一个长按手势，长按菜单与拖动会互相打断，所以全部改成自己处理。
+/// 长按与轻点的仲裁：SwiftUI 的轻点手势按住多久都会在松手时触发，
+/// 长按浮起后原地松手会同时弹出操作面板和打开书（「长按有时进入书籍」）。
+/// 浮起期间、以及松手后的短暂时间内，打开书的轻点一律忽略。
+@MainActor
+enum BookshelfLongPressGuard {
+    private static var liftedAt: Date?
+    private static var endedAt: Date = .distantPast
+
+    /// 长按浮起（书、文件夹、摆件被拿起）。
+    static func lift() {
+        liftedAt = Date()
+    }
+
+    /// 长按手势结束（松手、取消）。
+    static func end() {
+        liftedAt = nil
+        endedAt = Date()
+    }
+
+    /// 这次轻点能不能打开书：正在长按、或刚松手 0.5 秒内都不算轻点。
+    static var allowsTap: Bool {
+        if let liftedAt, Date().timeIntervalSince(liftedAt) < 30 { return false }
+        return Date().timeIntervalSince(endedAt) > 0.5
+    }
+}
+
 @MainActor
 final class BookshelfDragSession: ObservableObject {
     static let shared = BookshelfDragSession()
@@ -5415,6 +5444,7 @@ private struct BookshelfShelfView: View {
                 guard case .second(true, let drag) = value else { return }
                 if draggingID == nil {
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    BookshelfLongPressGuard.lift()
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) {
                         selectedURL = nil
                         showsPicker = false
@@ -5504,6 +5534,7 @@ private struct BookshelfShelfView: View {
     }
 
     private func finishDrag() {
+        BookshelfLongPressGuard.end()
         guard let draggingID else { return }
         if !dragMoved {
             // 原地长按松手：书弹出整本书的操作面板；文件夹打开文件夹；摆件打开大小调整。
@@ -5643,6 +5674,7 @@ private struct BookshelfShelfView: View {
         .frame(width: size.width, height: size.height)
         .contentShape(Rectangle())
         .onTapGesture {
+            guard BookshelfLongPressGuard.allowsTap, draggingID == nil else { return }
             if hasSelection { deselect() } else { editingOrnament = ornament }
         }
         .gesture(drag)
@@ -5689,6 +5721,7 @@ private struct BookshelfShelfView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            guard BookshelfLongPressGuard.allowsTap, draggingID == nil else { return }
             if isSelected {
                 // 第二下：打开文件夹。
                 UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -5723,6 +5756,7 @@ private struct BookshelfShelfView: View {
             withAnimation(.easeOut(duration: 0.18)) { showsPicker.toggle() }
         }
             .onTapGesture {
+                guard BookshelfLongPressGuard.allowsTap, draggingID == nil else { return }
                 if isSelected {
                     onOpen(.read(book))
                 } else {
@@ -7467,6 +7501,7 @@ private struct BookshelfFolderPanel: View {
             if selecting {
                 if isChecked { selected.remove(book.bookUrl) } else { selected.insert(book.bookUrl) }
             } else {
+                guard BookshelfLongPressGuard.allowsTap, draggingURL == nil else { return }
                 store.openRequest = .read(book)
                 close()
             }
@@ -7478,6 +7513,7 @@ private struct BookshelfFolderPanel: View {
                     guard case .second(true, let drag) = value else { return }
                     if draggingURL == nil, let drag {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        BookshelfLongPressGuard.lift()
                         dragLocation = drag.location
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.8)) { draggingURL = book.bookUrl }
                     }
@@ -7488,6 +7524,7 @@ private struct BookshelfFolderPanel: View {
                     }
                 }
                 .onEnded { _ in
+                    BookshelfLongPressGuard.end()
                     let remove = isOutside
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
                         draggingURL = nil
@@ -7786,7 +7823,6 @@ struct BookshelfShelfSettingsSheet: View {
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: 36, height: 30)
                 .background { if selected { ThemeSurface(shape: Capsule()) } }
-                .shadow(color: .black.opacity(selected ? 0.1 : 0), radius: 2, y: 1)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -7800,7 +7836,6 @@ struct BookshelfShelfSettingsSheet: View {
                 .foregroundStyle(selected ? Color.primary : Color.secondary)
                 .frame(width: width, height: 30)
                 .background { if selected { ThemeSurface(shape: Capsule()) } }
-                .shadow(color: .black.opacity(selected ? 0.1 : 0), radius: 2, y: 1)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -9505,7 +9540,7 @@ private struct BookshelfSelectionBar: View {
                     .font(AppFontStyle.system(size: 16, weight: .medium).themed)
                     .foregroundStyle(selection.urls.isEmpty ? Color.secondary : ReadingTheme.coral)
                     .frame(width: 46, height: 46)
-                    .background(.regularMaterial, in: Circle())
+                    .background { ThemeSurface(shape: Circle()) }
             }
             .accessibilityLabel("移出书架")
             Spacer()
@@ -9515,7 +9550,7 @@ private struct BookshelfSelectionBar: View {
                     .foregroundStyle(selection.urls.isEmpty ? Color.secondary : ReadingTheme.accent)
                     .padding(.horizontal, 20)
                     .frame(height: 46)
-                    .background(.regularMaterial, in: Capsule())
+                    .background { ThemeSurface(shape: Capsule()) }
             }
             Spacer()
             Button { selection.end() } label: {
@@ -9523,7 +9558,7 @@ private struct BookshelfSelectionBar: View {
                     .font(AppFontStyle.subheadline.weight(.semibold).themed)
                     .foregroundStyle(.primary)
                     .frame(width: 58, height: 46)
-                    .background(.regularMaterial, in: Capsule())
+                    .background { ThemeSurface(shape: Capsule()) }
             }
         }
         .buttonStyle(.plain)

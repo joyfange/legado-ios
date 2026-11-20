@@ -789,7 +789,6 @@ struct FontManagementView: View {
                         if part == item {
                             ThemeSurface(shape: Capsule())
                                 .matchedGeometryEffect(id: "font.part", in: segmentAnimation)
-                                .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
                         }
                     }
                     .contentShape(Capsule())

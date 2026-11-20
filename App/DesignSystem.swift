@@ -400,7 +400,6 @@ struct ReadingToolbarIcon: View {
             .frame(width: 44, height: 44)
             // 玻璃圆钮（跟随外观主题的玻璃/实色/透明设置），和 bookon 右上角按钮一致。
             .background { ThemeSurface(shape: Circle()) }
-            .shadow(color: .black.opacity(0.06), radius: 4, y: 2)
             .contentShape(Circle())
             .accessibilityHidden(true)
     }

@@ -28,7 +28,7 @@ struct BookshelfBookActionsSheet: View {
     @State private var confirmsCache = false
 
     enum Route: String, Identifiable {
-        case switchSource, changeCover, searchCover, edit, group, sourceVariable, bookVariable, editSource, roleVoice
+        case detail, switchSource, changeCover, searchCover, edit, group, sourceVariable, bookVariable, editSource, roleVoice
         var id: String { rawValue }
     }
 
@@ -429,6 +429,14 @@ struct BookshelfBookActionsSheet: View {
     @ViewBuilder
     private func routeView(_ route: Route) -> some View {
         switch route {
+        case .detail:
+            BookshelfQuickDetailSheet(bookURL: bookURL, fallback: book, open: { destination in
+                closeAll(then: destination)
+            }, switchSource: { newBook in
+                applySourceSwitch(newBook)
+            })
+            .environmentObject(library)
+            .environmentObject(sources)
         case .switchSource:
             ReadingNavigationStack {
                 SourceSwitchView(book: book, sources: sources.sources) { report, _ in
@@ -507,12 +515,17 @@ struct BookshelfBookActionsSheet: View {
         showNotice(wasPinned ? "已取消置顶" : "已置顶")
     }
 
+    /// 「详情」：在操作面板上面再叠一层「作品详情」卡片面板（操作面板留在后面），关掉回到操作面板。
     private func openDetail() {
-        let target = book
-        dismiss()
+        route = .detail
+    }
+
+    /// 从详情里开始阅读 / 打开完整详情页：整叠面板一起收起，再打开。
+    private func closeAll(then destination: BookshelfShelfDestination) {
+        BookshelfSheetRouter.shared.sheet = nil
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            BookshelfFolderStore.shared.openRequest = .info(target)
+            try? await Task.sleep(nanoseconds: 450_000_000)
+            BookshelfFolderStore.shared.openRequest = destination
         }
     }
 
@@ -1186,6 +1199,534 @@ struct BookRoleVoiceSheet: View {
             Image(systemName: "chevron.up.chevron.down")
                 .font(AppFontStyle.system(size: 11).themed)
                 .foregroundStyle(ReadingTheme.tertiaryInk)
+        }
+    }
+}
+
+// MARK: - 作品详情（叠在长按操作面板上的卡片面板）
+
+/// 长按面板里点「详情」弹出的作品详情：叠在操作面板上面（操作面板留在后面），左上角关掉回到操作面板。
+/// 书籍信息卡 → 开始阅读 / 已在书架 → 分组、类型、更新 → 简介（可展开）→ 目录（前几章，点章节从该章开始读）→ 来源（换源）。
+struct BookshelfQuickDetailSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var library: BookLibraryModel
+    @EnvironmentObject private var sources: SourceLibraryModel
+    let bookURL: String
+    let fallback: Book
+    /// 开始阅读、从某章阅读、完整详情页：由操作面板收起整叠面板后打开。
+    let open: (BookshelfShelfDestination) -> Void
+    /// 换源：交给操作面板的换源流程（文件夹、置顶跟着换到新链接，阅读进度保留）。
+    let switchSource: (Book) -> Void
+
+    @State private var chapters: [BookChapter] = []
+    @State private var loadingChapters = true
+    @State private var introExpanded = false
+    @State private var showsGroup = false
+    @State private var showsSwitchSource = false
+    @State private var notice: String?
+    @State private var noticeTask: Task<Void, Never>?
+
+    private var book: Book { library.books.first { $0.bookUrl == bookURL } ?? fallback }
+    private var source: BookSource? { sources.sources.first { $0.bookSourceUrl == book.origin } }
+    private var isLocal: Bool { book.origin == "local" }
+    private var inLibrary: Bool { library.books.contains { $0.bookUrl == bookURL } }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            topBar
+            ScrollView {
+                VStack(spacing: 12) {
+                    headerCard
+                    actionButtons
+                    infoCard
+                    introCard
+                    tocCard
+                    sourceCard
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 6)
+                .padding(.bottom, 28)
+            }
+        }
+        .readingCanvas()
+        .overlay(alignment: .bottom) {
+            if let notice {
+                Text(notice)
+                    .font(AppFontStyle.footnote.weight(.medium).themed)
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.78), in: Capsule())
+                    .padding(.bottom, 24)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .allowsHitTesting(false)
+            }
+        }
+        .readingPresentationDetents([.medium, .large])
+        .readingPresentationDragIndicator()
+        .task { await loadChapters() }
+        .sheet(isPresented: $showsGroup) {
+            BookShelfPickerSheet(book: book, inLibrary: false, title: "移至书架") { groupIDs, reading in
+                Task {
+                    guard let stored = library.books.first(where: { $0.bookUrl == bookURL }) else { return }
+                    await library.setBook(stored, groupIDs: groupIDs)
+                    if let latest = library.books.first(where: { $0.bookUrl == bookURL }) {
+                        await library.setReadingStatus(latest, reading: reading)
+                    }
+                }
+            } onRemove: {}
+            .environmentObject(library)
+            .readingPresentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showsSwitchSource) {
+            ReadingNavigationStack {
+                SourceSwitchView(book: book, sources: sources.sources) { report, _ in
+                    showsSwitchSource = false
+                    switchSource(report.book)
+                }
+            }
+        }
+    }
+
+    // MARK: 顶栏
+
+    private var topBar: some View {
+        HStack {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(AppFontStyle.system(size: 16, weight: .semibold).themed)
+                    .foregroundStyle(ReadingTheme.ink)
+                    .frame(width: 40, height: 40)
+                    .background { ThemeSurface(shape: Circle()) }
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("关闭")
+            Spacer()
+            Text("作品详情")
+                .font(AppFontStyle.headline.themed)
+                .foregroundStyle(ReadingTheme.ink)
+            Spacer()
+            Menu {
+                Button { open(.info(book)) } label: { Label("完整详情页", systemImage: "doc.text.magnifyingglass") }
+                Button {
+                    UIPasteboard.general.string = book.name
+                    showNotice("已复制书名")
+                } label: { Label("复制书名", systemImage: "doc.on.doc") }
+                if !isLocal {
+                    Button {
+                        UIPasteboard.general.string = book.bookUrl
+                        showNotice("已复制书籍链接")
+                    } label: { Label("复制书籍链接", systemImage: "link") }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(AppFontStyle.system(size: 16, weight: .semibold).themed)
+                    .foregroundStyle(ReadingTheme.ink)
+                    .frame(width: 40, height: 40)
+                    .background { ThemeSurface(shape: Circle()) }
+                    .contentShape(Circle())
+            }
+            .accessibilityLabel("更多")
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
+        .padding(.bottom, 8)
+    }
+
+    // MARK: 书籍信息
+
+    private var headerCard: some View {
+        HStack(alignment: .center, spacing: 14) {
+            BookshelfCover(book: book, width: 70, height: 98)
+                .frame(width: 70, height: 98)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(book.name)
+                    .font(AppFontStyle.title3.weight(.semibold).themed)
+                    .foregroundStyle(ReadingTheme.ink)
+                    .lineLimit(2)
+                HStack(spacing: 5) {
+                    Image(systemName: "person.fill").font(AppFontStyle.system(size: 11).themed)
+                    Text(book.author.isEmpty ? "未知作者" : book.author).lineLimit(1)
+                }
+                .font(AppFontStyle.footnote.themed)
+                .foregroundStyle(ReadingTheme.secondaryInk)
+                HStack(spacing: 6) {
+                    if let words = book.wordCount?.trimmingCharacters(in: .whitespacesAndNewlines), !words.isEmpty {
+                        tag(words, color: .green)
+                    }
+                    if let kinds = kindText {
+                        tag(kinds, color: ReadingTheme.coral)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(card(18))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var kindText: String? {
+        let words = (book.kind ?? "")
+            .split(whereSeparator: { ",，、|/ \n".contains($0) })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        guard !words.isEmpty else { return nil }
+        return words.prefix(3).joined(separator: "·")
+    }
+
+    private func tag(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(AppFontStyle.system(size: 11, weight: .medium).themed)
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.12), in: Capsule())
+    }
+
+    // MARK: 开始阅读
+
+    private var actionButtons: some View {
+        HStack(spacing: 12) {
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                open(.read(book))
+            } label: {
+                Label(BookReadingPresentation.hasStarted(book) ? "继续阅读" : "开始阅读", systemImage: "book.fill")
+                    .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                    .foregroundStyle(Color.white)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 46)
+                    .background(ReadingTheme.accent, in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            Label(inLibrary ? "已在书架" : "未在书架", systemImage: inLibrary ? "checkmark" : "plus")
+                .font(AppFontStyle.subheadline.themed)
+                .foregroundStyle(ReadingTheme.secondaryInk)
+                .frame(maxWidth: .infinity)
+                .frame(height: 46)
+        }
+    }
+
+    // MARK: 分组 / 类型 / 更新
+
+    private var infoCard: some View {
+        HStack(spacing: 0) {
+            infoCell(icon: "folder.fill", tint: .blue, caption: "分组", value: groupLabel) { showsGroup = true }
+            Menu {
+                ForEach(BookKindChoice.allCases, id: \.self) { kind in
+                    Button {
+                        setKind(kind)
+                    } label: {
+                        if kind == currentKind {
+                            Label(kind.title, systemImage: "checkmark")
+                        } else {
+                            Text(kind.title)
+                        }
+                    }
+                }
+            } label: {
+                infoLabel(icon: currentKind.icon, tint: .pink, caption: "类型", value: currentKind.title)
+            }
+            .buttonStyle(.plain)
+            infoCell(icon: book.canUpdate ? "bell.fill" : "bell.slash.fill", tint: .orange, caption: "更新",
+                     value: book.canUpdate ? "开启更新" : "关闭更新", enabled: !isLocal) { toggleUpdate() }
+        }
+        .padding(.vertical, 12)
+        .background(card(18))
+    }
+
+    private func infoCell(icon: String, tint: Color, caption: String, value: String, enabled: Bool = true,
+                          action: @escaping () -> Void) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            action()
+        } label: {
+            infoLabel(icon: icon, tint: tint, caption: caption, value: value)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .opacity(enabled ? 1 : 0.45)
+    }
+
+    private func infoLabel(icon: String, tint: Color, caption: String, value: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(AppFontStyle.system(size: 17).themed)
+                .foregroundStyle(tint)
+                .frame(height: 22)
+            Text(caption)
+                .font(AppFontStyle.system(size: 10).themed)
+                .foregroundStyle(ReadingTheme.tertiaryInk)
+            Text(value)
+                .font(AppFontStyle.system(size: 12, weight: .medium).themed)
+                .foregroundStyle(ReadingTheme.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity)
+        .contentShape(Rectangle())
+    }
+
+    private var groupLabel: String {
+        let names = library.groups
+            .filter { $0.groupId > 0 && (book.group & $0.groupId) != 0 }
+            .map(\.groupName)
+        return names.isEmpty ? "未分组" : names.joined(separator: "、")
+    }
+
+    private enum BookKindChoice: CaseIterable {
+        case text, audio, image
+        var title: String {
+            switch self {
+            case .text: "文本"
+            case .audio: "音频"
+            case .image: "漫画"
+            }
+        }
+        var icon: String {
+            switch self {
+            case .text: "doc.plaintext.fill"
+            case .audio: "headphones"
+            case .image: "photo.fill.on.rectangle.fill"
+            }
+        }
+        var flag: Int {
+            switch self {
+            case .text: 8
+            case .audio: 32
+            case .image: 64
+            }
+        }
+    }
+
+    private var currentKind: BookKindChoice {
+        if book.type & 64 != 0 { return .image }
+        if book.type & 32 != 0 { return .audio }
+        return .text
+    }
+
+    private func setKind(_ kind: BookKindChoice) {
+        guard kind != currentKind else { return }
+        UISelectionFeedbackGenerator().selectionChanged()
+        var updated = book
+        updated.type = (updated.type & ~(8 | 32 | 64)) | kind.flag
+        Task { await library.addOrUpdate(updated) }
+        showNotice("已设为\(kind.title)")
+    }
+
+    private func toggleUpdate() {
+        var updated = book
+        updated.canUpdate.toggle()
+        let enabled = updated.canUpdate
+        Task { await library.addOrUpdate(updated) }
+        showNotice(enabled ? "已开启更新" : "已关闭更新")
+    }
+
+    // MARK: 简介
+
+    private var introText: String {
+        let custom = book.customIntro?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let raw = custom.isEmpty ? (book.intro ?? "") : custom
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "暂无简介" : trimmed
+    }
+
+    private var introCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("text.alignleft", "简介")
+            Text(introText)
+                .font(AppFontStyle.subheadline.themed)
+                .foregroundStyle(ReadingTheme.ink)
+                .lineSpacing(4)
+                .lineLimit(introExpanded ? nil : 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+            if introText.count > 80 {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.22)) { introExpanded.toggle() }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(introExpanded ? "收起" : "展开全部")
+                        Image(systemName: introExpanded ? "chevron.up" : "chevron.down")
+                    }
+                    .font(AppFontStyle.footnote.weight(.medium).themed)
+                    .foregroundStyle(ReadingTheme.accent)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(card(18))
+    }
+
+    // MARK: 目录
+
+    /// 目录里显示的几章：从正在读的那一章开始（没读过从第一章开始），最多 5 章。
+    private struct ChapterEntry: Identifiable {
+        let offset: Int
+        let chapter: BookChapter
+        var id: Int { offset }
+    }
+
+    private var visibleChapters: [ChapterEntry] {
+        let all = chapters.indices.filter { !chapters[$0].isVolume }
+        guard !all.isEmpty else { return [] }
+        let current = min(max(book.durChapterIndex, 0), chapters.count - 1)
+        let start = all.firstIndex { $0 >= current } ?? 0
+        return all[start..<min(start + 5, all.count)].map { ChapterEntry(offset: $0, chapter: chapters[$0]) }
+    }
+
+    private var tocCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                sectionTitle("list.bullet", "目录")
+                Spacer()
+                if !chapters.isEmpty {
+                    Button { open(.info(book)) } label: {
+                        HStack(spacing: 2) {
+                            Text("共 \(chapters.filter { !$0.isVolume }.count) 章")
+                            Image(systemName: "chevron.right").font(AppFontStyle.system(size: 10, weight: .semibold).themed)
+                        }
+                        .font(AppFontStyle.footnote.themed)
+                        .foregroundStyle(ReadingTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            if loadingChapters {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("加载目录中…")
+                        .font(AppFontStyle.footnote.themed)
+                        .foregroundStyle(ReadingTheme.secondaryInk)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            } else if visibleChapters.isEmpty {
+                Text(book.latestChapterTitle.map { "最新：\($0)" } ?? "还没有目录，打开阅读或刷新目录后显示")
+                    .font(AppFontStyle.footnote.themed)
+                    .foregroundStyle(ReadingTheme.secondaryInk)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(visibleChapters) { item in
+                        Button {
+                            readFrom(item.offset, chapter: item.chapter)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(item.chapter.title)
+                                    .font(AppFontStyle.subheadline.themed)
+                                    .foregroundStyle(item.offset == book.durChapterIndex
+                                                     ? ReadingTheme.accent : ReadingTheme.ink)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Image(systemName: "chevron.right")
+                                    .font(AppFontStyle.system(size: 11, weight: .semibold).themed)
+                                    .foregroundStyle(ReadingTheme.tertiaryInk)
+                            }
+                            .frame(height: 40)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(card(18))
+    }
+
+    private func loadChapters() async {
+        let loaded = (try? await AppBookChapterRepository.live().load(bookURL: bookURL)) ?? []
+        chapters = loaded
+        withAnimation(.easeOut(duration: 0.2)) { loadingChapters = false }
+    }
+
+    /// 点目录里的一章：从这一章开头开始读。
+    private func readFrom(_ index: Int, chapter: BookChapter) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        let original = book
+        var updated = original
+        if index != updated.durChapterIndex {
+            updated.durChapterIndex = index
+            updated.durChapterTitle = chapter.title
+            updated.durChapterPos = 0
+        }
+        let target = updated
+        Task {
+            if target.durChapterIndex != original.durChapterIndex || target.durChapterTitle != original.durChapterTitle {
+                await library.addOrUpdate(target)
+            }
+            open(.read(target))
+        }
+    }
+
+    // MARK: 来源
+
+    private var sourceCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("globe", "来源")
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(isLocal ? "本地书籍" : (book.originName.isEmpty ? (source?.bookSourceName ?? "网络书籍") : book.originName))
+                        .font(AppFontStyle.subheadline.weight(.semibold).themed)
+                        .foregroundStyle(ReadingTheme.ink)
+                        .lineLimit(1)
+                    if !isLocal {
+                        Text(book.origin)
+                            .font(AppFontStyle.caption.themed)
+                            .foregroundStyle(ReadingTheme.tertiaryInk)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer(minLength: 8)
+                if !isLocal {
+                    Button { showsSwitchSource = true } label: {
+                        HStack(spacing: 2) {
+                            Text("换源")
+                            Image(systemName: "chevron.right").font(AppFontStyle.system(size: 10, weight: .semibold).themed)
+                        }
+                        .font(AppFontStyle.footnote.weight(.medium).themed)
+                        .foregroundStyle(ReadingTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(card(18))
+    }
+
+    // MARK: 公共
+
+    private func sectionTitle(_ icon: String, _ title: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon).font(AppFontStyle.system(size: 12).themed)
+            Text(title).font(AppFontStyle.footnote.weight(.semibold).themed)
+        }
+        .foregroundStyle(ReadingTheme.secondaryInk)
+    }
+
+    private func card(_ radius: CGFloat) -> some View {
+        ThemeSurface(shape: RoundedRectangle(cornerRadius: radius, style: .continuous))
+    }
+
+    private func showNotice(_ text: String) {
+        noticeTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) { notice = text }
+        noticeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 1_600_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.2)) { notice = nil }
         }
     }
 }

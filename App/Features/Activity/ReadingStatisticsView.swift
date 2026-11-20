@@ -1057,7 +1057,6 @@ struct ReadingStatsRangePicker: View {
                             if range == item {
                                 ThemeSurface(shape: Capsule())
                                     .matchedGeometryEffect(id: "stats.range", in: animation)
-                                    .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
                             }
                         }
                         .contentShape(Capsule())

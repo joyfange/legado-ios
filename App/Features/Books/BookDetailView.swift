@@ -796,9 +796,7 @@ private struct BookTableOfContentsView: View {
                     .font(AppFontStyle.footnote.themed)
                     .padding(.horizontal, 14)
                     .frame(minHeight: 34)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(ReadingTheme.separator.opacity(0.6), lineWidth: 0.5))
-                    .shadow(color: .black.opacity(0.08), radius: 8, y: 3)
+                    .background { ThemeSurface(shape: Capsule()) }
                     .frame(maxWidth: 300)
                 }
                 .buttonStyle(.plain)
