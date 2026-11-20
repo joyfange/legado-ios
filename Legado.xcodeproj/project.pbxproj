@@ -31,6 +31,7 @@
 		DA1000000000000000000001 /* DarkModeUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA2000000000000000000001; };
 		B10000000000000000000050 = {isa = PBXBuildFile; fileRef = B20000000000000000000050; };
 		B10000000000000000000030 /* ReaderScrollGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000030; };
+		C6B100000000000000000001 /* ReaderOpenBookTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6B200000000000000000001; };
 		BC1000000000000000000001 /* WebReaderBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC2000000000000000000001; };
 		B10000000000000000000029 /* ReaderScrollView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000029 /* ReaderScrollView.swift */; };
 		F10000000000000000000001 /* SwiftSoup in Frameworks */ = {isa = PBXBuildFile; productRef = F20000000000000000000001 /* SwiftSoup */; };
@@ -191,6 +192,7 @@
 		B20000000000000000000050 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderUITests/ReaderScrollGestureTests.swift; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000051 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = LegadoReaderUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000030 /* ReaderScrollGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderTests/ReaderScrollGeometryTests.swift; sourceTree = SOURCE_ROOT; };
+		C6B200000000000000000001 /* ReaderOpenBookTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderTests/ReaderOpenBookTests.swift; sourceTree = SOURCE_ROOT; };
 		BC2000000000000000000001 /* WebReaderBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/LegadoReaderTests/WebReaderBridgeTests.swift; sourceTree = SOURCE_ROOT; };
 		B20000000000000000000031 /* LegadoReaderTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = LegadoReaderTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000029 /* ReaderScrollView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderScrollView.swift; sourceTree = "<group>"; };
@@ -381,6 +383,7 @@
 				AA2200000000000000000009,
 				AA2200000000000000000010,
 				B20000000000000000000030 /* ReaderScrollGeometryTests.swift */,
+				C6B200000000000000000001 /* ReaderOpenBookTests.swift */,
 				BC2000000000000000000001 /* WebReaderBridgeTests.swift */, ED2000000000000000000003 /* EPUBReaderIntegrationTests.swift */,
 				DA2000000000000000000001 /* DarkModeUITests.swift */,
 				DA2000000000000000000002 /* AppearanceContrastTests.swift */,
@@ -813,7 +816,7 @@
 
 /* Begin PBXSourcesBuildPhase section */
 		B30000000000000000000050 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000050, AA1100000000000000000009, AA1100000000000000000010, DA1000000000000000000001); runOnlyForDeploymentPostprocessing = 0; };
-		B30000000000000000000030 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000030, BC1000000000000000000001, ED1000000000000000000003, DA1000000000000000000002); runOnlyForDeploymentPostprocessing = 0; };
+		B30000000000000000000030 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000030, BC1000000000000000000001, ED1000000000000000000003, DA1000000000000000000002, C6B100000000000000000001); runOnlyForDeploymentPostprocessing = 0; };
 		D30000000000000000000002 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;

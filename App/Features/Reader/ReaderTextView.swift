@@ -1,8 +1,25 @@
 import SwiftUI
 import UIKit
 
-private final class ReaderLayoutTextView: UITextView {
+final class ReaderLayoutTextView: UITextView {
     var onLayout: ((UITextView) -> Void)?
+    /// 自己创建的 TextKit 1 文本存储：文本视图只持有文本容器，存储要由这里强引用。
+    private var ownedTextStorage: NSTextStorage?
+
+    /// TextKit 1 文本视图，排版器是正则高亮用的 ReaderHighlightLayoutManager（没有高亮时与系统排版器一致）。
+    /// 与系统默认一样：容器宽度跟随视图，高度不限。
+    static func makeTextKit1() -> ReaderLayoutTextView {
+        let storage = NSTextStorage()
+        let manager = ReaderHighlightLayoutManager()
+        storage.addLayoutManager(manager)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        container.heightTracksTextView = false
+        manager.addTextContainer(container)
+        let view = ReaderLayoutTextView(frame: .zero, textContainer: container)
+        view.ownedTextStorage = storage
+        return view
+    }
     /// 选中文字后编辑菜单里的「替换」（iOS 15 走 UIMenuController）。
     var onReplaceSelection: (() -> Void)?
 
@@ -190,12 +207,10 @@ struct ReaderTextView: UIViewRepresentable {
     func makeUIView(context: Context) -> UITextView {
         // Pagination uses NSLayoutManager. Start in TextKit 1 rather than
         // switching a TextKit 2 view after its content size has been computed.
-        let view: ReaderLayoutTextView
-        if #available(iOS 16.0, *) {
-            view = ReaderLayoutTextView(usingTextLayoutManager: false)
-        } else {
-            view = ReaderLayoutTextView(frame: .zero)
-        }
+        // 正则高亮的自绘排版器在创建文本视图之前就装好：自己建 TextKit 1 三件套再用
+        // init(frame:textContainer:) 创建。不能事后对系统文本视图调用 replaceLayoutManager——
+        // 文本视图内部仍引用被换掉（随即释放）的旧排版器，打开书就会闪退。
+        let view = ReaderLayoutTextView.makeTextKit1()
         view.onLayout = { [weak coordinator = context.coordinator] view in
             coordinator?.updatePageBreaker(in: view)
             coordinator?.alignPagedContent(in: view)
@@ -208,10 +223,6 @@ struct ReaderTextView: UIViewRepresentable {
             coordinator?.replaceSelection(in: view)
         }
         view.accessibilityIdentifier = "reader.text"
-        // 正则高亮的圆角 / 渐变背景、背景图、渐变文字、波浪线由自绘排版器补画；没有高亮时与系统排版器一致。
-        if view.textContainer.layoutManager != nil, !(view.layoutManager is ReaderHighlightLayoutManager) {
-            view.textContainer.replaceLayoutManager(ReaderHighlightLayoutManager())
-        }
         let effectivePageAnimation = isEInkMode ? 4 : pageAnimation
         view.backgroundColor = backgroundColor
         view.isOpaque = backgroundColor != .clear

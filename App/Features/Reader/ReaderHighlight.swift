@@ -140,6 +140,26 @@ final class ReaderHighlightStore: ObservableObject {
         var version = 1
         var enabled: Bool
         var rules: [ReaderHighlightRule]
+
+        init(enabled: Bool, rules: [ReaderHighlightRule]) {
+            self.enabled = enabled
+            self.rules = rules
+        }
+
+        /// 旧版本或部分损坏的存档：缺字段取默认值，单条坏规则跳过，不让整份规则丢失。
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            version = (try? c.decodeIfPresent(Int.self, forKey: .version)) ?? 1
+            enabled = (try? c.decodeIfPresent(Bool.self, forKey: .enabled)) ?? true
+            rules = ((try? c.decodeIfPresent([LossyRule].self, forKey: .rules)) ?? []).compactMap(\.rule)
+        }
+
+        private enum CodingKeys: String, CodingKey { case version, enabled, rules }
+    }
+
+    private struct LossyRule: Decodable {
+        let rule: ReaderHighlightRule?
+        init(from decoder: Decoder) throws { rule = try? ReaderHighlightRule(from: decoder) }
     }
 
     /// 导出 / 导入的规则文件。
@@ -189,6 +209,13 @@ final class ReaderHighlightStore: ObservableObject {
     }
 
     func rule(id: String) -> ReaderHighlightRule? { rules.first { $0.id == id } }
+
+    /// 整体替换开关和规则（测试用；内置规则的名称、正则仍以当前定义为准）。
+    func restoreForTesting(enabled: Bool, rules: [ReaderHighlightRule]) {
+        self.enabled = enabled
+        self.rules = Self.merge(rules)
+        persist()
+    }
 
     func setEnabled(_ value: Bool) {
         guard enabled != value else { return }
