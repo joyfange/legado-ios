@@ -126,6 +126,7 @@
 		C1000000000000000000002D /* AddBookURLService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000002D /* AddBookURLService.swift */; };
 		C1000000000000000000002E /* HttpTTSService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000002E /* HttpTTSService.swift */; };
 		B10000000000000000000027 /* BookshelfReadViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000027 /* BookshelfReadViewModel.swift */; };
+		C1000000000000000000BA01 /* BookshelfActionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000BA01 /* BookshelfActionsSheet.swift */; };
 		B10000000000000000000028 /* BookDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000028 /* BookDetailViewModel.swift */; };
 		910000000000000000000001 /* ApplicationSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000001 /* ApplicationSettings.swift */; };
 		910000000000000000000002 /* HostsHTTPTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20000000000000000000002 /* HostsHTTPTransport.swift */; };
@@ -282,6 +283,7 @@
 		C2000000000000000000002E /* HttpTTSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HttpTTSService.swift; sourceTree = "<group>"; };
 		D20000000000000000000001 /* Legado.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Legado.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000027 /* BookshelfReadViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookshelfReadViewModel.swift; sourceTree = "<group>"; };
+		C2000000000000000000BA01 /* BookshelfActionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookshelfActionsSheet.swift; sourceTree = "<group>"; };
 		B20000000000000000000028 /* BookDetailViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookDetailViewModel.swift; sourceTree = "<group>"; };
 		E20000000000000000000001 /* ApplicationSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplicationSettings.swift; sourceTree = "<group>"; };
 		E20000000000000000000002 /* HostsHTTPTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostsHTTPTransport.swift; sourceTree = "<group>"; };
@@ -435,6 +437,7 @@
 				A20000000000000000000007 /* BookLibraryModel.swift */,
 				B20000000000000000000028 /* BookDetailViewModel.swift */,
 				B20000000000000000000027 /* BookshelfReadViewModel.swift */,
+				C2000000000000000000BA01 /* BookshelfActionsSheet.swift */,
 				A20000000000000000000008 /* BookDetailView.swift */,
 				A20000000000000000000015 /* SourceSwitchView.swift */,
 				A2000000000000000000000F /* LocalBookDetailView.swift */,
@@ -848,6 +851,7 @@
 				A10000000000000000000006 /* BookLibraryModel.swift in Sources */,
 				B10000000000000000000028 /* BookDetailViewModel.swift in Sources */,
 				B10000000000000000000027 /* BookshelfReadViewModel.swift in Sources */,
+				C1000000000000000000BA01 /* BookshelfActionsSheet.swift in Sources */,
 				A10000000000000000000007 /* BookDetailView.swift in Sources */,
 				A10000000000000000000008 /* ReaderView.swift in Sources */,
                 ED1000000000000000000001 /* EPUBReaderView.swift in Sources */,

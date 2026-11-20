@@ -358,6 +358,8 @@ enum ReadingGlassRowMetrics {
     static let gap: CGFloat = 8
     /// 行卡片圆角（与「我的」入口卡片相近）。
     static let radius: CGFloat = 16
+    /// 玻璃卡片与单元格左右边界之间的余量：玻璃的亮边和柔光不会被单元格裁掉。
+    static let edgeInset: CGFloat = 6
 }
 
 /// 列表行底 + 分隔线：「系统」玻璃时行是独立卡片，不画分隔线；其它效果保持系统分隔线。
@@ -412,11 +414,13 @@ struct ThemeListRowBackground: View {
                     // 行与行之间留出间距、不再连成一整块；分隔线由 `readingRowBackground` 一并隐藏。
                     // 玻璃总开关关闭时仍是实色。
                     if glassEnabled {
-                        // 不用系统 Liquid Glass：它放在列表单元格背景里时，折射和投影会被单元格矩形边界裁成硬边，
-                        // 卡片左右两侧出现马赛克一样的色块。这里改成自绘的玻璃卡片（半透明底 + 顶部高光 + 渐变亮边，无投影），
-                        // 全部画在卡片形状以内，边缘干净；观感与「我的」入口卡片一致。
-                        ThemeListGlassCardFill(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: ReadingGlassRowMetrics.radius),
-                                                                       style: .continuous))
+                        // 与外观主题里的玻璃卡片同一种系统玻璃（iOS 26 Liquid Glass，更早系统为磨砂材质）。
+                        // 之前两侧出现马赛克：卡片左右边缘正好贴着单元格边界，玻璃的亮边与外圈柔光画到单元格外面，
+                        // 被单元格矩形裁成硬边。现在四周都留出余量（左右 edgeInset、上下各半个行间距），
+                        // 玻璃完整画在单元格以内，边缘干净。
+                        ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: ReadingGlassRowMetrics.radius),
+                                                             style: .continuous), isCard: true)
+                            .padding(.horizontal, ReadingGlassRowMetrics.edgeInset)
                             .padding(.vertical, ReadingGlassRowMetrics.gap / 2)
                     } else {
                         palette.surface
@@ -426,27 +430,6 @@ struct ThemeListRowBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-    }
-}
-
-/// 列表行里的玻璃卡片（「系统」界面效果）：全部绘制都限制在卡片形状以内，没有任何溢出到单元格外的阴影或折射，
-/// 所以不会被列表单元格裁出锯齿 / 马赛克边。
-struct ThemeListGlassCardFill<S: InsettableShape>: View {
-    let shape: S
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        let dark = scheme == .dark
-        ZStack {
-            shape.fill(Color.white.opacity(dark ? 0.10 : 0.62))
-            shape.fill(LinearGradient(colors: [Color.white.opacity(dark ? 0.10 : 0.42), Color.white.opacity(0)],
-                                      startPoint: .top, endPoint: .center))
-            shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(dark ? 0.26 : 0.95),
-                                                       Color.white.opacity(dark ? 0.06 : 0.40)],
-                                              startPoint: .top, endPoint: .bottom),
-                               lineWidth: 0.8)
-        }
-        .compositingGroup()
     }
 }
 

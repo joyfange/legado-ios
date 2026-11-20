@@ -441,10 +441,15 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
     /// 系统语音：旁白用阅读设置里的声音；男 / 女角色用 AI 朗读页设置的声音（未设置时自动挑同性别的中文声音，
     /// 没有同性别声音时用音调区分）；同性别不同角色再按名字微调音调。
     private func systemVoice(for role: AIRoleAssignment?) -> (AVSpeechSynthesisVoice?, Float) {
-        let base = AVSpeechSynthesisVoice(identifier: voiceIdentifier) ?? AVSpeechSynthesisVoice(language: "zh-CN")
-        guard let role, let settings = roleSettings, role.kind != .narrator else { return (base, 1) }
+        // 书架长按「角色配音」可以给这本书单独指定旁白声音。
+        let bookVoice = AIRoleBookVoice.load(bookName: bookName)
+        let base = AVSpeechSynthesisVoice(identifier: bookVoice.narratorVoiceID)
+            ?? AVSpeechSynthesisVoice(identifier: voiceIdentifier)
+            ?? AVSpeechSynthesisVoice(language: "zh-CN")
+        guard let role, let settings = roleSettings, let kind = effectiveKind(role.kind, bookVoice: bookVoice),
+              kind != .narrator else { return (base, 1) }
         let variation: Float = settings.variesCharacterPitch ? AIRoleText.pitchVariation(for: role.name) : 1
-        switch role.kind {
+        switch kind {
         case .male:
             if let voice = AVSpeechSynthesisVoice(identifier: settings.maleVoiceID)
                 ?? SpeechVoiceCatalog.automaticVoice(gender: .male, avoiding: base?.identifier) {
@@ -462,11 +467,22 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
         }
     }
 
+    /// 未识别出性别的角色：按这本书「角色配音 → 未知角色」的设置跟随旁白或用男 / 女声。
+    private func effectiveKind(_ kind: AIRoleKind, bookVoice: AIRoleBookVoice) -> AIRoleKind? {
+        guard kind == .unknown else { return kind }
+        switch bookVoice.unknownMode {
+        case "male": return .male
+        case "female": return .female
+        default: return .narrator
+        }
+    }
+
     /// 在线朗读：男 / 女角色可以各用一个朗读源（AI 朗读页设置），未设置时用默认朗读源。
     private func roleEngine(for index: Int) -> HttpTTS? {
-        guard let settings = roleSettings, let role = segmentRoles[index] else { return nil }
+        guard let settings = roleSettings, let role = segmentRoles[index],
+              let kind = effectiveKind(role.kind, bookVoice: AIRoleBookVoice.load(bookName: bookName)) else { return nil }
         let id: String
-        switch role.kind {
+        switch kind {
         case .male: id = settings.maleEngineID
         case .female: id = settings.femaleEngineID
         default: return nil

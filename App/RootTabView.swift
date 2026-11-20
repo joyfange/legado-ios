@@ -241,6 +241,8 @@ private struct BookshelfView: View {
     @ObservedObject private var folderStore = BookshelfFolderStore.shared
     @ObservedObject private var selection = BookshelfSelection.shared
     @ObservedObject private var sheetRouter = BookshelfSheetRouter.shared
+    @ObservedObject private var dragSession = BookshelfDragSession.shared
+    @ObservedObject private var pins = BookshelfPinStore.shared
     @State private var showsLocalImporter = false
     @State private var pendingLocalFiles: [LocalBookImportFile] = []
     @State private var selectedGroupID = BookGroup.idReading
@@ -294,7 +296,8 @@ private struct BookshelfView: View {
                 ? $0.offset < $1.offset : $0.element.durChapterTime > $1.element.durChapterTime }
         }
         let ordered = result.map(\.element)
-        return sortAscending ? ordered.reversed() : ordered
+        // 置顶的书（长按面板「置顶」）始终排在最前，按置顶先后排列，不受正倒序影响。
+        return pins.pinnedFirst(sortAscending ? ordered.reversed() : ordered)
     }
 
     private static let sortTitles = ["最近阅读", "最近更新", "书名", "加入顺序"]
@@ -405,6 +408,19 @@ private struct BookshelfView: View {
                 newShelfDialog.transition(.opacity)
             }
         }
+        .overlay(alignment: .top) {
+            if let toast = dragSession.toast {
+                Text(toast)
+                    .font(AppFontStyle.footnote.weight(.medium).themed)
+                    .foregroundStyle(Color.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.75), in: Capsule())
+                    .padding(.top, 60)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .allowsHitTesting(false)
+            }
+        }
         .readingTabBarHidden(selection.isActive)
         .onChange(of: selectedGroupID) { _ in selection.urls = [] }
         .onDisappear { if selection.isActive { selection.end() } }
@@ -489,6 +505,10 @@ private struct BookshelfView: View {
                 .readingPresentationDetents([.medium, .large])
             case .editInfo(let book):
                 BookInfoEditView(book: book).environmentObject(library).environmentObject(sources)
+            case .actions(let book):
+                BookshelfBookActionsSheet(bookURL: book.bookUrl, fallback: book)
+                    .environmentObject(library)
+                    .environmentObject(sources)
             }
         }
         .alert("本地书导入失败", isPresented: Binding(
@@ -739,6 +759,7 @@ private struct BookshelfView: View {
                 HStack(alignment: .top, spacing: spacing) {
                     ForEach(rows[index]) { entry in
                         gridCell(entry, width: cellWidth)
+                            .zIndex(isDragging(entry) ? 1 : 0)
                     }
                     ForEach(0..<(columns - rows[index].count), id: \.self) { _ in
                         Color.clear.frame(width: cellWidth, height: 1)
@@ -754,6 +775,8 @@ private struct BookshelfView: View {
                             .allowsHitTesting(false)
                     }
                 }
+                // 正在拖的书所在的那一行放到最上层：书拖过下面几行时不会被盖住。
+                .zIndex(rows[index].contains(where: isDragging) ? 1 : 0)
             }
         }
     }
@@ -775,7 +798,7 @@ private struct BookshelfView: View {
             .buttonStyle(.plain)
             .opacity(selection.isActive ? 0.4 : 1)
             .disabled(selection.isActive)
-            .modifier(BookshelfDropModifier(targetURL: nil, folderID: folder.id, groupID: selectedGroup.groupId))
+            .modifier(BookshelfDropTarget(id: "f:" + folder.id))
             .accessibilityLabel("文件夹「\(folder.name)」，\(inside.count) 本书")
             .accessibilityHint("轻点打开")
         }
@@ -792,6 +815,7 @@ private struct BookshelfView: View {
                 case .book(let book):
                     BookshelfBookLink(book: book, mode: compact ? .compact : .list, groupID: selectedGroup.groupId)
                         .id("\(book.bookUrl)#\(selection.isActive)")
+                        .zIndex(isDragging(entry) ? 1 : 0)
                 case .folder(let folder, let inside):
                     Button {
                         openFolder(folder)
@@ -801,10 +825,15 @@ private struct BookshelfView: View {
                     .buttonStyle(.plain)
                     .opacity(selection.isActive ? 0.4 : 1)
                     .disabled(selection.isActive)
-                    .modifier(BookshelfDropModifier(targetURL: nil, folderID: folder.id, groupID: selectedGroup.groupId))
+                    .modifier(BookshelfDropTarget(id: "f:" + folder.id, cornerRadius: BookshelfRow.cornerRadius))
                 }
             }
         }
+    }
+
+    private func isDragging(_ entry: BookshelfEntry) -> Bool {
+        guard let url = dragSession.draggingURL else { return false }
+        return entry.id == "b:" + url
     }
 
     private func openFolder(_ folder: BookshelfFolder) {
@@ -977,24 +1006,29 @@ private enum BookshelfLinkMode {
         if case .compact = self { return true }
         return false
     }
+
+    var isGrid: Bool {
+        if case .grid = self { return true }
+        return false
+    }
 }
 
 private struct BookshelfBookLink: View {
-    @EnvironmentObject private var library: BookLibraryModel
-    @EnvironmentObject private var sources: SourceLibraryModel
-    @ObservedObject private var folderStore = BookshelfFolderStore.shared
     let book: Book
     let mode: BookshelfLinkMode
     let groupID: Int64
     @ObservedObject private var selection = BookshelfSelection.shared
-
-    private var source: BookSource? { sources.sources.first { $0.bookSourceUrl == book.origin } }
+    @ObservedObject private var session = BookshelfDragSession.shared
+    /// 长按浮起后手指移动的距离（书跟着手指走）。
+    @State private var dragOffset: CGSize = .zero
+    @State private var lifted = false
+    @GestureState private var pressing = false
 
     @ViewBuilder private var label: some View {
         switch mode {
         case .grid(let width):
             // 选择圈直接画在封面上（每本书都有），不再靠外层叠一层按高度对齐的框。
-            BookshelfGridItem(book: book, width: width, coverMenu: selection.isActive ? nil : AnyView(menuItems),
+            BookshelfGridItem(book: book, width: width,
                               selected: selection.isActive ? selection.urls.contains(book.bookUrl) : nil)
         case .list, .compact:
             BookshelfRow(book: book, compact: mode.isCompact,
@@ -1002,52 +1036,9 @@ private struct BookshelfBookLink: View {
         }
     }
 
-    /// 长按预览只框住书本身：网格的菜单挂在封面上（见 BookshelfGridItem），列表铺上页面底色并用圆角，
-    /// 不再出现半透明的大方框。
-    @ViewBuilder private var previewFramedLabel: some View {
-        switch mode {
-        case .grid:
-            label
-        case .list, .compact:
-            label
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: BookshelfRow.cornerRadius, style: .continuous))
-                .contextMenu { menuItems }
-        }
-    }
-
-    @ViewBuilder private var menuItems: some View {
-            NavigationLink {
-                if let source { BookDetailView(book: book, source: source) }
-                else { LocalBookDetailView(book: book) }
-            } label: {
-                Label("作品详情", systemImage: "books.vertical")
-            }
-            Button("编辑书籍信息", systemImage: "pencil") { presentAfterMenu(.editInfo(book)) }
-            Button("选择", systemImage: "checkmark.circle") { selection.begin(with: book.bookUrl) }
-            Button("移至书架", systemImage: "rectangle.3.group") { presentAfterMenu(.moveToShelf(book)) }
-            let folders = folderStore.folders(inGroup: groupID)
-            if !folders.isEmpty {
-                Menu {
-                    ForEach(folders) { folder in
-                        Button(folder.name) {
-                            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
-                                folderStore.add(book.bookUrl, to: folder.id)
-                            }
-                        }
-                    }
-                } label: {
-                    Label("放入文件夹", systemImage: "folder")
-                }
-            }
-            Button("移出书架", systemImage: "trash", role: .destructive) {
-                Task { await BookshelfRemoval.remove(book, library: library) }
-            }
-            }
-
     var body: some View {
         if selection.isActive {
-            // 多选时整块（封面 + 书名）都能点选：直接用点按手势，不经过按钮，
-            // 避免封面上的长按菜单、拖动等手势把轻点吃掉，出现有的书点了没反应。
+            // 多选时整块（封面 + 书名）都能点选：直接用点按手势，避免长按、拖动等手势把轻点吃掉。
             label
                 .contentShape(Rectangle())
                 .onTapGesture { selection.toggle(book.bookUrl) }
@@ -1056,37 +1047,110 @@ private struct BookshelfBookLink: View {
                 .accessibilityAddTraits(selection.urls.contains(book.bookUrl) ? .isSelected : [])
                 .accessibilityAction { selection.toggle(book.bookUrl) }
         } else {
-            link
+            interactive
         }
     }
 
-    private var link: some View {
-        NavigationLink {
-            BookshelfBookDestination(book: book, source: source)
-        } label: {
-            previewFramedLabel
-        }
-        .buttonStyle(.plain)
-        .onDrag {
-            NSItemProvider(object: book.bookUrl as NSString)
-        } preview: {
-            BookshelfDragPreview(book: book, width: dragPreviewWidth)
-        }
-        .modifier(BookshelfDropModifier(targetURL: book.bookUrl, folderID: nil, groupID: groupID))
+    /// 轻点打开阅读；长按浮起：原地松手弹出操作面板，拖到另一本书 / 文件夹上合并。
+    private var interactive: some View {
+        label
+            .contentShape(Rectangle())
+            .scaleEffect(lifted ? 1.06 : 1, anchor: .center)
+            .shadow(color: .black.opacity(lifted ? 0.28 : 0), radius: lifted ? 12 : 0, y: lifted ? 8 : 0)
+            .offset(dragOffset)
+            .zIndex(lifted ? 10 : 0)
+            .animation(.spring(response: 0.26, dampingFraction: 0.78), value: lifted)
+            .onTapGesture {
+                BookshelfFolderStore.shared.openRequest = .read(book)
+            }
+            .gesture(pressAndDrag)
+            .onChange(of: pressing) { active in
+                if !active { finish() }
+            }
+            .modifier(BookshelfDropTarget(id: "b:" + book.bookUrl,
+                                          cornerRadius: mode.isGrid ? 6 : BookshelfRow.cornerRadius))
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("轻点打开阅读，长按打开操作面板，长按后拖到另一本书上可装进文件夹")
+            .accessibilityAction(named: "更多操作") { BookshelfSheetRouter.shared.sheet = .actions(book) }
     }
 
-    private var dragPreviewWidth: CGFloat {
-        if case .grid(let width) = mode { return width }
-        return 72
+    private var pressAndDrag: some Gesture {
+        LongPressGesture(minimumDuration: 0.35)
+            .sequenced(before: DragGesture(minimumDistance: 0, coordinateSpace: .global))
+            .updating($pressing) { value, state, _ in
+                if case .second(true, _) = value { state = true }
+            }
+            .onChanged { value in
+                guard case .second(true, let drag) = value else { return }
+                if !lifted {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    lifted = true
+                    session.begin(url: book.bookUrl, groupID: groupID)
+                }
+                if let drag {
+                    dragOffset = drag.translation
+                    session.update(location: drag.location, translation: drag.translation)
+                }
+            }
     }
 
-    /// 长按菜单里打开的面板：等菜单收起动画结束再弹出，并交给书架页统一弹出。
-    /// 之前直接挂在网格格子上，菜单收起时格子被懒加载容器重建，面板就弹不出来（看起来是空白）。
-    private func presentAfterMenu(_ sheet: BookshelfSheetRouter.Sheet) {
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            BookshelfSheetRouter.shared.sheet = sheet
+    private func finish() {
+        guard lifted else { return }
+        let outcome = session.end()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.8)) {
+            dragOffset = .zero
+            lifted = false
         }
+        if outcome == .press {
+            BookshelfSheetRouter.shared.sheet = .actions(book)
+        }
+    }
+}
+
+/// 书架置顶（长按面板「置顶」）：置顶的书在网格、列表、仿真书架里都排在最前，按置顶先后排列。
+@MainActor
+final class BookshelfPinStore: ObservableObject {
+    static let shared = BookshelfPinStore()
+    private static let storageKey = "bookshelfPinnedBooks"
+
+    /// 置顶顺序：最近置顶的在最前。
+    @Published private(set) var urls: [String]
+
+    private init() {
+        urls = UserDefaults.standard.stringArray(forKey: Self.storageKey) ?? []
+    }
+
+    func isPinned(_ url: String) -> Bool { urls.contains(url) }
+
+    func toggle(_ url: String) {
+        if let index = urls.firstIndex(of: url) {
+            urls.remove(at: index)
+        } else {
+            urls.insert(url, at: 0)
+        }
+        UserDefaults.standard.set(urls, forKey: Self.storageKey)
+    }
+
+    func forget(_ url: String) {
+        guard urls.contains(url) else { return }
+        urls.removeAll { $0 == url }
+        UserDefaults.standard.set(urls, forKey: Self.storageKey)
+    }
+
+    /// 置顶的书提到最前（保持置顶先后），其余保持原顺序。
+    func pinnedFirst(_ books: [Book]) -> [Book] {
+        guard !urls.isEmpty else { return books }
+        var rank: [String: Int] = [:]
+        for (index, url) in urls.enumerated() where rank[url] == nil { rank[url] = index }
+        let pinned = books.filter { rank[$0.bookUrl] != nil }.sorted { rank[$0.bookUrl]! < rank[$1.bookUrl]! }
+        guard !pinned.isEmpty else { return books }
+        return pinned + books.filter { rank[$0.bookUrl] == nil }
+    }
+
+    /// 仿真书架的混排顺序里，含置顶书的项（书或装着置顶书的文件夹）提到最前。
+    func rank(of urlsInItem: [String]) -> Int? {
+        urlsInItem.compactMap { urls.firstIndex(of: $0) }.min()
     }
 }
 
@@ -1098,11 +1162,14 @@ final class BookshelfSheetRouter: ObservableObject {
     enum Sheet: Identifiable {
         case moveToShelf(Book)
         case editInfo(Book)
+        /// 长按一本书弹出的整本书操作面板（网格、列表、仿真书架共用）。
+        case actions(Book)
 
         var id: String {
             switch self {
             case .moveToShelf(let book): "move:" + book.bookUrl
             case .editInfo(let book): "edit:" + book.bookUrl
+            case .actions(let book): "actions:" + book.bookUrl
             }
         }
     }
@@ -1150,8 +1217,6 @@ private struct BookshelfGridLabel: View {
 private struct BookshelfGridItem: View {
     let book: Book
     let width: CGFloat
-    /// 长按菜单只挂在封面上：预览就是封面本身，菜单收起时书名和作者不会被系统隐藏再淡入（不再延迟出现）。
-    var coverMenu: AnyView? = nil
     /// 多选时的选中状态；nil 表示不在多选。
     var selected: Bool? = nil
     @AppStorage(BookshelfShelfSettings.gridShowTitleKey) private var showsGridTitle = true
@@ -1183,7 +1248,6 @@ private struct BookshelfGridItem: View {
                             .allowsHitTesting(false)
                     }
                 }
-                .modifier(BookshelfCoverMenuModifier(menu: coverMenu))
                 .overlay {
                     // 多选：每本书都画选择圈（不做出入场动画，避免部分书的圈停在透明态），
                     // 选中的书再加一圈主题色描边和淡色蒙层，即使圈被遮住也看得出选没选。
@@ -4274,6 +4338,7 @@ enum BookshelfRemoval {
             await library.remove(bookURL: book.bookUrl)
         }
         BookshelfFolderStore.shared.removeBook(book.bookUrl)
+        BookshelfPinStore.shared.forget(book.bookUrl)
     }
 }
 
@@ -4439,87 +4504,145 @@ struct BookshelfFolderIcon: View {
     }
 }
 
-/// 网格、列表里的拖放：把一本书拖到另一本书上建文件夹，拖到文件夹上放进去。
-struct BookshelfDropModifier: ViewModifier {
-    let targetURL: String?
-    let folderID: String?
-    let groupID: Int64
-    var cornerRadius: CGFloat = 6
-    @State private var targeted = false
+/// 网格、列表里的长按与拖动（与仿真书架同一套手势，不再用系统拖放）：
+/// - 长按约 0.35 秒：书轻轻浮起并震动一下；原地松手 → 弹出整本书的操作面板；
+/// - 浮起后直接拖动：书跟着手指走；停到另一本书中间 → 那本书缩小、身后浮出底板（文件夹成形），
+///   松手两本书装进一个新文件夹；停到文件夹上 → 松手放进这个文件夹；拖到空白处松手 → 回到原位。
+/// 系统拖放（onDrag / onDrop）和系统长按菜单抢同一个长按手势，长按菜单与拖动会互相打断，所以全部改成自己处理。
+@MainActor
+final class BookshelfDragSession: ObservableObject {
+    static let shared = BookshelfDragSession()
 
-    /// 拖到目标上时：目标书轻轻缩小、变淡并虚化，身后浮出一块圆角底板，像文件夹正在成形；
-    /// 不再画描边框，也不显示系统的绿色「+」。
+    /// 正在拖动的书（书籍链接）。
+    @Published private(set) var draggingURL: String?
+    /// 手指下的目标："b:" + 书籍链接，或 "f:" + 文件夹 id。
+    @Published private(set) var targetID: String?
+    /// 合并后在书架上方短暂显示的提示。
+    @Published private(set) var toast: String?
+
+    /// 每一格在屏幕上的位置（全局坐标）；token 用来区分同一本书在不同布局里的两次出现。
+    private var frames: [String: (token: UUID, rect: CGRect)] = [:]
+    private var groupID: Int64 = BookGroup.idAll
+    private var moved = false
+    private var toastTask: Task<Void, Never>?
+
+    /// 拖动超过这个距离才算「拖」，否则松手算长按（弹出操作面板）。
+    static let moveThreshold: CGFloat = 10
+
+    func report(_ id: String, token: UUID, frame: CGRect) {
+        frames[id] = (token, frame)
+    }
+
+    func forget(_ id: String, token: UUID) {
+        if frames[id]?.token == token { frames[id] = nil }
+    }
+
+    func begin(url: String, groupID: Int64) {
+        self.groupID = groupID
+        moved = false
+        targetID = nil
+        draggingURL = url
+    }
+
+    func update(location: CGPoint, translation: CGSize) {
+        guard let draggingURL else { return }
+        if !moved, hypot(translation.width, translation.height) > Self.moveThreshold { moved = true }
+        guard moved else { return }
+        let ownID = "b:" + draggingURL
+        var found: String?
+        for (id, entry) in frames where id != ownID {
+            let rect = entry.rect
+            // 只认格子中间的一块：从旁边擦过不会误合并。
+            let zone = rect.insetBy(dx: rect.width * 0.18, dy: rect.height * 0.14)
+            if zone.contains(location) { found = id; break }
+        }
+        if found != targetID {
+            if found != nil { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { targetID = found }
+        }
+    }
+
+    enum Outcome { case press, merged, none }
+
+    /// 松手：返回这次手势的结果（原地长按 / 已合并 / 放回原位）。
+    @discardableResult
+    func end() -> Outcome {
+        defer {
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.82)) {
+                draggingURL = nil
+                targetID = nil
+            }
+            moved = false
+        }
+        guard let url = draggingURL else { return .none }
+        guard moved else { return .press }
+        guard let target = targetID else { return .none }
+        let store = BookshelfFolderStore.shared
+        if target.hasPrefix("b:") {
+            let other = String(target.dropFirst(2))
+            guard other != url else { return .none }
+            let folder = withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
+                store.makeFolder(groupID: groupID, bookURLs: [other, url])
+            }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            showToast("已建立「\(folder.name)」")
+            return .merged
+        }
+        if target.hasPrefix("f:"), let folder = store.folder(id: String(target.dropFirst(2))) {
+            withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) { store.add(url, to: folder.id) }
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            showToast("已放入「\(folder.name)」")
+            return .merged
+        }
+        return .none
+    }
+
+    private func showToast(_ text: String) {
+        toastTask?.cancel()
+        withAnimation(.easeOut(duration: 0.2)) { toast = text }
+        toastTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeIn(duration: 0.2)) { self.toast = nil }
+        }
+    }
+}
+
+/// 网格、列表的一格：把自己的位置报给拖动会话，被拖到上面时缩小、身后浮出底板（像文件夹正在成形）。
+struct BookshelfDropTarget: ViewModifier {
+    let id: String
+    var cornerRadius: CGFloat = 6
+    @ObservedObject private var session = BookshelfDragSession.shared
+    @State private var token = UUID()
+
     func body(content: Content) -> some View {
+        let targeted = session.targetID == id
         content
             .scaleEffect(targeted ? 0.9 : 1)
-            .opacity(targeted ? 0.55 : 1)
-            .blur(radius: targeted ? 1.2 : 0)
+            .opacity(targeted ? 0.6 : 1)
             .background {
                 RoundedRectangle(cornerRadius: cornerRadius + 8, style: .continuous)
-                    .fill(ReadingTheme.separator.opacity(0.45))
+                    .fill(ReadingTheme.accent.opacity(0.16))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: cornerRadius + 8, style: .continuous)
+                            .strokeBorder(ReadingTheme.accent.opacity(0.55), lineWidth: 1.5)
+                    )
                     .padding(-6)
                     .scaleEffect(targeted ? 1 : 0.85)
                     .opacity(targeted ? 1 : 0)
                     .allowsHitTesting(false)
             }
-            .animation(.spring(response: 0.3, dampingFraction: 0.78), value: targeted)
-            .onDrop(of: [UTType.plainText], delegate: BookshelfDropDelegate(
-                targetURL: targetURL, folderID: folderID, groupID: groupID, targeted: $targeted))
-    }
-}
-
-private struct BookshelfDropDelegate: DropDelegate {
-    let targetURL: String?
-    let folderID: String?
-    let groupID: Int64
-    @Binding var targeted: Bool
-
-    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [UTType.plainText]) }
-
-    func dropEntered(info: DropInfo) {
-        targeted = true
-        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
-    }
-
-    func dropExited(info: DropInfo) { targeted = false }
-
-    /// 「移动」而不是「拷贝」：系统就不会在拖动的封面上加绿色加号。
-    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
-
-    func performDrop(info: DropInfo) -> Bool {
-        targeted = false
-        guard let provider = info.itemProviders(for: [UTType.plainText]).first else { return false }
-        let target = targetURL
-        let folder = folderID
-        let group = groupID
-        _ = provider.loadObject(ofClass: NSString.self) { object, _ in
-            guard let value = object as? NSString else { return }
-            let url = String(value)
-            Task { @MainActor in
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                withAnimation(.spring(response: 0.36, dampingFraction: 0.82)) {
-                    BookshelfFolderStore.shared.handleDrop(url, ontoBook: target, folder: folder, groupID: group)
+            .background(
+                GeometryReader { proxy in
+                    Color.clear
+                        .onAppear { session.report(id, token: token, frame: proxy.frame(in: .global)) }
+                        .onChange(of: proxy.frame(in: .global)) { session.report(id, token: token, frame: $0) }
                 }
-            }
-        }
-        return true
+            )
+            .onDisappear { session.forget(id, token: token) }
     }
 }
 
-/// 拖动时手指下的预览：只有封面本身（圆角 + 柔和投影），不带书名、不带底色方框。
-struct BookshelfDragPreview: View {
-    let book: Book
-    var width: CGFloat = 84
-
-    var body: some View {
-        let height = BookshelfGridMetrics.coverHeight(width: width)
-        let radius = BookshelfCover.cornerRadius(width: width)
-        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl,
-                         width: width, height: height, cornerRadius: radius, spineShade: false)
-            .frame(width: width, height: height)
-            .contentShape(.dragPreview, RoundedRectangle(cornerRadius: radius, style: .continuous))
-    }
-}
 
 /// 仿真书架上的文件夹外观：两种装帧样式；书脊上的小旋转按钮修改摆放形态与样式。
 private struct BookshelfFolderBox: View {
@@ -4776,6 +4899,7 @@ private struct BookshelfShelfView: View {
     @AppStorage(BookshelfShelfSettings.variedSizeKey) private var variedSizes = true
     @AppStorage(BookshelfShelfSettings.boardStyleKey) private var boardStyle = "solid"
     @ObservedObject private var designStore = BookshelfSpineDesignStore.shared
+    @ObservedObject private var pins = BookshelfPinStore.shared
     /// 换装面板：书（"b:" + 链接）或文件夹（"f:" + id）。
     @State private var dressingTarget: BookshelfDressTarget?
     @State private var poses: [String: Int] = BookshelfShelfPose.load()
@@ -4794,6 +4918,8 @@ private struct BookshelfShelfView: View {
     @State private var insertionMarker: (row: Int, x: CGFloat)?
     /// 拖动时手指停在哪件东西上（书 "b:"、文件夹 "f:"）：合并、放进文件夹或放摆件。
     @State private var dropTargetID: String?
+    /// 长按后手指是否真的拖动过：没拖动就松手 = 长按，弹出整本书的操作面板。
+    @State private var dragMoved = false
     @State private var toast: String?
     @GestureState private var dragGestureActive = false
 
@@ -4844,7 +4970,7 @@ private struct BookshelfShelfView: View {
             case .folder(let folder, let inside): defaults.append(.folder(folder, inside))
             }
         }
-        guard !order.isEmpty else { return defaults }
+        guard !order.isEmpty else { return pinnedFirst(defaults) }
         var rank: [String: Int] = [:]
         for (index, id) in order.enumerated() where rank[id] == nil { rank[id] = index }
         func itemRank(_ item: BookshelfShelfItem, offset: Int) -> Int {
@@ -4855,11 +4981,35 @@ private struct BookshelfShelfView: View {
             }
             return order.count + offset
         }
-        return defaults.enumerated().sorted { lhs, rhs in
+        return pinnedFirst(defaults.enumerated().sorted { lhs, rhs in
             let l = itemRank(lhs.element, offset: lhs.offset)
             let r = itemRank(rhs.element, offset: rhs.offset)
             return l == r ? lhs.offset < rhs.offset : l < r
-        }.map(\.element)
+        }.map(\.element))
+    }
+
+    /// 置顶的书（或装着置顶书的文件夹）排在摆件之后、其余书之前，按置顶先后排列。
+    private func pinnedFirst(_ items: [BookshelfShelfItem]) -> [BookshelfShelfItem] {
+        guard !pins.urls.isEmpty else { return items }
+        func pinRank(_ item: BookshelfShelfItem) -> Int? {
+            switch item {
+            case .ornament: return nil
+            case .book(let book): return pins.rank(of: [book.bookUrl])
+            case .folder(_, let inside): return pins.rank(of: inside.map(\.bookUrl))
+            }
+        }
+        let pinned = items.compactMap { item in pinRank(item).map { (item, $0) } }
+            .sorted { $0.1 < $1.1 }.map(\.0)
+        guard !pinned.isEmpty else { return items }
+        let pinnedIDs = Set(pinned.map(\.id))
+        var rest = items.filter { !pinnedIDs.contains($0.id) }
+        // 插在第一件书 / 文件夹的位置：摆件保持用户摆好的位置不动。
+        let position = rest.firstIndex { item in
+            if case .ornament = item { return false }
+            return true
+        } ?? rest.count
+        rest.insert(contentsOf: pinned, at: position)
+        return rest
     }
 
     static let perchGap: CGFloat = 2
@@ -5275,10 +5425,15 @@ private struct BookshelfShelfView: View {
                     insertionIndex = nil
                     insertionMarker = nil
                     dropTargetID = nil
+                    dragMoved = false
                 }
                 if let drag {
                     dragTranslation = drag.translation
-                    updateDropTarget(at: drag.location, rows: rows)
+                    if !dragMoved, hypot(drag.translation.width, drag.translation.height) > BookshelfDragSession.moveThreshold {
+                        dragMoved = true
+                    }
+                    // 还没真正拖动时不显示插入黄线、不认合并目标：原地松手是「长按」。
+                    if dragMoved { updateDropTarget(at: drag.location, rows: rows) }
                 }
             }
     }
@@ -5350,6 +5505,30 @@ private struct BookshelfShelfView: View {
 
     private func finishDrag() {
         guard let draggingID else { return }
+        if !dragMoved {
+            // 原地长按松手：书弹出整本书的操作面板；文件夹打开文件夹；摆件打开大小调整。
+            withAnimation(.spring(response: 0.32, dampingFraction: 0.82)) {
+                self.draggingID = nil
+                dragTranslation = .zero
+                insertionIndex = nil
+                insertionMarker = nil
+                dropTargetID = nil
+            }
+            if draggingID.hasPrefix("b:") {
+                let url = String(draggingID.dropFirst(2))
+                if let book = books.first(where: { $0.bookUrl == url }) {
+                    BookshelfSheetRouter.shared.sheet = .actions(book)
+                }
+            } else if draggingID.hasPrefix("f:") {
+                let id = String(draggingID.dropFirst(2))
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.86)) { folderStore.presentedFolderID = id }
+            } else if draggingID.hasPrefix("o:") {
+                let id = String(draggingID.dropFirst(2))
+                editingOrnament = ornamentStore.placed.first { $0.id == id }
+            }
+            return
+        }
+        dragMoved = false
         let items = allItems
         let perched = perchedOrnaments(in: items)
         let perchedIDs = Set(perched.values.flatMap { $0.map { "o:" + $0.0.id } })
@@ -9445,17 +9624,3 @@ private struct BookshelfAddToFolderSheet: View {
 
 
 
-/// 网格封面的长按菜单（多选时不挂）。
-private struct BookshelfCoverMenuModifier: ViewModifier {
-    let menu: AnyView?
-
-    func body(content: Content) -> some View {
-        if let menu {
-            content
-                .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 6, style: .continuous))
-                .contextMenu { menu }
-        } else {
-            content
-        }
-    }
-}
