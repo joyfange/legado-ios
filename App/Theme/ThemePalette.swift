@@ -295,9 +295,27 @@ struct IndependentGlassListRow: ViewModifier {
             .listRowSeparator(.hidden)
             .listRowInsets(EdgeInsets(top: 14, leading: 18, bottom: 14, trailing: 18))
             .listRowBackground(
-                ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: AppLayout.radiusCard)))
+                ThemeListCardSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: AppLayout.radiusCard),
+                                                             style: .continuous))
                     .padding(.vertical, 4)
             )
+    }
+}
+
+/// 列表单元格背景里的卡片：「系统」玻璃时改用自绘玻璃（系统 Liquid Glass 在单元格里会被裁出马赛克边），
+/// 其它效果（透明 / 毛玻璃 / 自定义卡片 / 关闭玻璃）与 ThemeSurface 完全一致。
+struct ThemeListCardSurface<S: InsettableShape>: View {
+    @ThemePalette private var palette
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage(AppGlassMode.storageKey) private var glassEnabled = true
+    let shape: S
+
+    var body: some View {
+        if glassEnabled, !reduceTransparency, !palette.customCard, (palette.interfaceEffect ?? .opaque) == .opaque {
+            ThemeListGlassCardFill(shape: shape)
+        } else {
+            ThemeSurface(shape: shape)
+        }
     }
 }
 

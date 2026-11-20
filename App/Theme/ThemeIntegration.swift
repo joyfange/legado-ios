@@ -412,8 +412,11 @@ struct ThemeListRowBackground: View {
                     // 行与行之间留出间距、不再连成一整块；分隔线由 `readingRowBackground` 一并隐藏。
                     // 玻璃总开关关闭时仍是实色。
                     if glassEnabled {
-                        ThemeSurface(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: ReadingGlassRowMetrics.radius),
-                                                             style: .continuous), isCard: true)
+                        // 不用系统 Liquid Glass：它放在列表单元格背景里时，折射和投影会被单元格矩形边界裁成硬边，
+                        // 卡片左右两侧出现马赛克一样的色块。这里改成自绘的玻璃卡片（半透明底 + 顶部高光 + 渐变亮边，无投影），
+                        // 全部画在卡片形状以内，边缘干净；观感与「我的」入口卡片一致。
+                        ThemeListGlassCardFill(shape: RoundedRectangle(cornerRadius: palette.cornerRadius(default: ReadingGlassRowMetrics.radius),
+                                                                       style: .continuous))
                             .padding(.vertical, ReadingGlassRowMetrics.gap / 2)
                     } else {
                         palette.surface
@@ -423,6 +426,27 @@ struct ThemeListRowBackground: View {
         }
         .allowsHitTesting(false)
         .accessibilityHidden(true)
+    }
+}
+
+/// 列表行里的玻璃卡片（「系统」界面效果）：全部绘制都限制在卡片形状以内，没有任何溢出到单元格外的阴影或折射，
+/// 所以不会被列表单元格裁出锯齿 / 马赛克边。
+struct ThemeListGlassCardFill<S: InsettableShape>: View {
+    let shape: S
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        let dark = scheme == .dark
+        ZStack {
+            shape.fill(Color.white.opacity(dark ? 0.10 : 0.62))
+            shape.fill(LinearGradient(colors: [Color.white.opacity(dark ? 0.10 : 0.42), Color.white.opacity(0)],
+                                      startPoint: .top, endPoint: .center))
+            shape.strokeBorder(LinearGradient(colors: [Color.white.opacity(dark ? 0.26 : 0.95),
+                                                       Color.white.opacity(dark ? 0.06 : 0.40)],
+                                              startPoint: .top, endPoint: .bottom),
+                               lineWidth: 0.8)
+        }
+        .compositingGroup()
     }
 }
 

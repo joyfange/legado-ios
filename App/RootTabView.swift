@@ -2690,7 +2690,7 @@ private struct SettingsView: View {
             .accessibilityLabel("外观")
             .accessibilityValue(appearanceTitle)
             .accessibilityIdentifier("profile.appearance")
-            settingLink("在线朗读", icon: "waveform") { HttpTTSManagementView() }
+            settingLink("朗读", icon: "waveform") { HttpTTSManagementView() }
             settingLink("书签", icon: "bookmark") { AllBookmarksView() }
             settingLink("阅读记录", icon: "clock", showsSeparator: false) {
                 ReadingHistoryView()
@@ -2720,10 +2720,24 @@ private struct SettingsView: View {
     private var appearanceEntry: some View {
         Button { AppearanceHubPresenter.shared.isPresented = true } label: {
             settingRow("外观主题", icon: "circle.lefthalf.filled",
-                       value: AppThemeStore.shared.selectedTheme.name,
+                       value: appearanceThemeName,
                        showsValuePill: true)
         }
         .buttonStyle(.plain)
+    }
+
+    /// 外观主题行右侧显示的名称：选了「主题切换」配色（如琥珀金）时显示配色名，
+    /// 否则显示主题名（去掉自动生成的「· 我的外观」后缀）。
+    private var appearanceThemeName: String {
+        let theme = AppThemeStore.shared.selectedTheme
+        if let custom = theme.customization, let light = ThemeColorPreset.find(custom.colorThemeID, in: custom) {
+            if custom.separateDarkTheme, let dark = ThemeColorPreset.find(custom.darkColorThemeID, in: custom), dark.id != light.id {
+                return "\(light.name) · \(dark.name)"
+            }
+            return light.name
+        }
+        let name = theme.name.replacingOccurrences(of: " · 我的外观", with: "")
+        return name.isEmpty ? theme.name : name
     }
 
     private var appearanceTitle: String {
@@ -2827,30 +2841,41 @@ private enum ProfileTheme {
 
 private struct ProfileSettingIcon: View {
     let systemName: String
+    /// 跟随主题刷新：选了「主题切换」里的配色（如琥珀金）时，图标改用主题强调色。
+    @ThemePalette private var palette
+    @Environment(\.appTheme) private var theme
+
+    private var hasColorPreset: Bool { theme.customization?.colorThemeID != nil }
+
+    /// 选了配色：图标主体用强调色、点缀用强调色的浅色；没选配色（经典黑白等）保持原来的墨色 + 暖棕点缀。
+    private var ink: Color { hasColorPreset ? palette.accent : ProfileTheme.ink }
+    private var detail: Color { hasColorPreset ? palette.accent.opacity(0.55) : ProfileTheme.detail }
 
     var body: some View {
-        Group {
+        let ink = self.ink
+        let detail = self.detail
+        return Group {
             if systemName == "textformat.size" {
                 HStack(alignment: .firstTextBaseline, spacing: 0) {
-                    Text("A").font(AppFontStyle.system(size: 24, weight: .light).themed).foregroundStyle(ProfileTheme.ink)
-                    Text("A").font(AppFontStyle.system(size: 13, weight: .medium).themed).foregroundStyle(ProfileTheme.detail)
+                    Text("A").font(AppFontStyle.system(size: 24, weight: .light).themed).foregroundStyle(ink)
+                    Text("A").font(AppFontStyle.system(size: 13, weight: .medium).themed).foregroundStyle(detail)
                 }
             } else if ["circle.lefthalf.filled", "waveform", "bookmark", "clock", "globe"].contains(systemName) {
                 Canvas { context, size in
                     context.scaleBy(x: size.width / 24, y: size.height / 24)
-                    draw(in: &context)
+                    draw(in: &context, ink: ink, detail: detail)
                 }
                 .frame(width: 22, height: 22)
             } else {
                 Image(systemName: systemName)
                     .font(AppFontStyle.system(size: 20, weight: .regular).themed)
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(ProfileTheme.ink, ProfileTheme.detail)
+                    .foregroundStyle(ink, detail)
             }
         }
     }
 
-    private func draw(in context: inout GraphicsContext) {
+    private func draw(in context: inout GraphicsContext, ink: Color, detail: Color) {
         let stroke = StrokeStyle(lineWidth: 1.65, lineCap: .round, lineJoin: .round)
         let circle = Path(ellipseIn: CGRect(x: 2.5, y: 2.5, width: 19, height: 19))
         switch systemName {
@@ -2858,15 +2883,15 @@ private struct ProfileSettingIcon: View {
             var half = Path()
             half.addArc(center: CGPoint(x: 12, y: 12), radius: 9.5, startAngle: .degrees(90), endAngle: .degrees(270), clockwise: false)
             half.closeSubpath()
-            context.fill(half, with: .color(ProfileTheme.ink))
-            context.stroke(circle, with: .color(ProfileTheme.ink), style: stroke)
+            context.fill(half, with: .color(ink))
+            context.stroke(circle, with: .color(ink), style: stroke)
             var edge = Path()
             edge.addArc(center: CGPoint(x: 12, y: 12), radius: 10.2, startAngle: .degrees(105), endAngle: .degrees(255), clockwise: false)
-            context.stroke(edge, with: .color(ProfileTheme.detail), style: StrokeStyle(lineWidth: 1, lineCap: .round))
+            context.stroke(edge, with: .color(detail), style: StrokeStyle(lineWidth: 1, lineCap: .round))
         case "waveform":
             for (index, height) in [4.0, 12.0, 21.0, 14.0, 5.0].enumerated() {
                 let bar = CGRect(x: 2 + Double(index) * 4.4, y: (24 - height) / 2, width: 2.4, height: height)
-                context.fill(Path(roundedRect: bar, cornerRadius: 1.2), with: .color(index > 2 ? ProfileTheme.detail : ProfileTheme.ink))
+                context.fill(Path(roundedRect: bar, cornerRadius: 1.2), with: .color(index > 2 ? detail : ink))
             }
         case "bookmark":
             var bookmark = Path()
@@ -2878,24 +2903,24 @@ private struct ProfileSettingIcon: View {
             bookmark.addLine(to: CGPoint(x: 19, y: 21))
             bookmark.addLine(to: CGPoint(x: 12, y: 16))
             bookmark.closeSubpath()
-            context.stroke(bookmark, with: .color(ProfileTheme.detail), style: stroke)
+            context.stroke(bookmark, with: .color(detail), style: stroke)
         case "clock":
-            context.stroke(circle, with: .color(ProfileTheme.ink), style: stroke)
+            context.stroke(circle, with: .color(ink), style: stroke)
             var hands = Path()
             hands.move(to: CGPoint(x: 12, y: 6))
             hands.addLine(to: CGPoint(x: 12, y: 12))
             hands.addLine(to: CGPoint(x: 16, y: 15))
-            context.stroke(hands, with: .color(ProfileTheme.detail), style: stroke)
+            context.stroke(hands, with: .color(detail), style: stroke)
         case "globe":
             let meridian = Path(ellipseIn: CGRect(x: 7.5, y: 2.5, width: 9, height: 19))
-            context.stroke(meridian, with: .color(ProfileTheme.detail), style: stroke)
+            context.stroke(meridian, with: .color(detail), style: stroke)
             var parallels = Path()
             for y in [7.0, 17.0] {
                 parallels.move(to: CGPoint(x: 4, y: y))
                 parallels.addQuadCurve(to: CGPoint(x: 20, y: y), control: CGPoint(x: 12, y: 12))
             }
-            context.stroke(parallels, with: .color(ProfileTheme.detail), style: stroke)
-            context.stroke(circle, with: .color(ProfileTheme.ink), style: stroke)
+            context.stroke(parallels, with: .color(detail), style: stroke)
+            context.stroke(circle, with: .color(ink), style: stroke)
         default: break
         }
     }

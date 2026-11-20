@@ -2188,6 +2188,9 @@ struct ReaderView: View {
                             .font(.footnote.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
+                    if let status = speech.roleStatus {
+                        Text(status).font(.footnote).foregroundStyle(.secondary)
+                    }
                     if let error = speech.errorMessage {
                         Text(error).font(.footnote).foregroundStyle(.red)
                     }
@@ -2617,6 +2620,8 @@ struct ReaderView: View {
     }
 
     private func configureSpeech() {
+        speech.allowsRoleAnalysis = true
+        speech.availableHTTPEngines = httpTTSEngines
         speech.configure(
             followsSystemRate: ttsFollowSystem,
             speechRate: ttsSpeechRate,

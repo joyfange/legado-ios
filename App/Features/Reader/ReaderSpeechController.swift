@@ -141,6 +141,19 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
     private var bookName = ""
     private var chapterTitle = ""
     private var author = ""
+    /// AI 多角色朗读：每个片段对应的段落序号（同一段被拆成旁白 / 对白多片时共用一个段落序号，用于跟读定位）。
+    private var segmentParagraphs: [Int] = []
+    /// AI 识别出的片段角色（键是片段序号）。
+    private var segmentRoles: [Int: AIRoleAssignment] = [:]
+    private var roleTask: Task<Void, Never>?
+    private var roleSettings: AIRoleSpeechSettings?
+    private var roleGeneration = 0
+    /// 试听等场景关闭 AI 角色识别。
+    var allowsRoleAnalysis = true
+    /// 角色声音可选的在线朗读源（由阅读页传入）。
+    var availableHTTPEngines: [HttpTTS] = []
+    /// AI 角色识别的状态（识别中 / 失败原因），阅读设置里显示。
+    @Published private(set) var roleStatus: String?
     var onNextChapter: (() -> Void)?
     var onPreviousChapter: (() -> Void)?
     var onRemoteStop: (() -> Void)?
@@ -189,6 +202,11 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
         httpTask = nil
         httpPrefetchTasks.forEach { $0.cancel() }
         httpPrefetchTasks.removeAll()
+        roleTask?.cancel()
+        roleTask = nil
+        roleGeneration += 1
+        segmentRoles = [:]
+        segmentParagraphs = []
         httpSegments = []
         httpSegmentIndex = 0
         httpEngine = nil
@@ -237,11 +255,13 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
             synthesizer.stopSpeaking(at: .immediate)
         }
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        systemSegments = segments(for: text)
+        systemSegments = prepareSegments(for: text)
         guard !systemSegments.isEmpty else { return }
         systemSegmentIndex = 0
         self.segmentIndexOffset = max(segmentIndexOffset, 0)
-        playCurrentSystemSegment()
+        startPlayback(segments: systemSegments) { controller in
+            controller.playCurrentSystemSegment()
+        }
     }
 
     func speakHTTP(
@@ -255,16 +275,20 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
         activateAudioSession()
         self.continuesAcrossChapters = continuesAcrossChapters
         httpEngine = engine
-        httpSegments = segments(for: text)
+        httpSegments = prepareSegments(for: text)
         guard !httpSegments.isEmpty else { return }
         httpSegmentIndex = 0
         self.segmentIndexOffset = max(segmentIndexOffset, 0)
         isSpeaking = true
-        playCurrentHTTPSegment()
-        prefetchHTTP(engine: engine, texts: Array(httpSegments.dropFirst()))
+        startPlayback(segments: httpSegments) { controller in
+            controller.playCurrentHTTPSegment()
+            controller.prefetchHTTPSegments(from: 1)
+        }
     }
 
     func prefetchHTTP(engine: HttpTTS, text: String, limit: Int = 10) {
+        // AI 多角色朗读开启时，下一章会按角色拆分、换声音，提前按整段预取没有意义。
+        if allowsRoleAnalysis, AIRoleSpeechSettings.load().isActive { return }
         let values = Array(segments(for: text).prefix(max(limit, 0)))
         prefetchHTTP(engine: engine, texts: values)
     }
@@ -298,6 +322,171 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
     private func segments(for text: String) -> [String] {
         let values = readByPage ? [text] : text.components(separatedBy: .newlines)
         return values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    /// 拆分朗读片段：AI 多角色朗读开启时把每段的旁白和对白（引号内）拆成独立片段，分别配声音。
+    private func prepareSegments(for text: String) -> [String] {
+        let settings = allowsRoleAnalysis ? AIRoleSpeechSettings.load() : nil
+        roleSettings = settings?.isActive == true ? settings : nil
+        segmentRoles = [:]
+        guard roleSettings != nil else {
+            let values = segments(for: text)
+            segmentParagraphs = Array(values.indices).map { readByPage ? 0 : $0 }
+            return values
+        }
+        var texts: [String] = []
+        var paragraphs: [Int] = []
+        var paragraph = 0
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            for piece in AIRoleText.split(trimmed) {
+                texts.append(piece)
+                paragraphs.append(readByPage ? 0 : paragraph)
+            }
+            paragraph += 1
+        }
+        segmentParagraphs = paragraphs
+        return texts
+    }
+
+    /// 片段序号 → 段落序号（跟读高亮 / 跳转用）。
+    private func paragraphIndex(for segment: Int) -> Int {
+        segmentParagraphs.indices.contains(segment) ? segmentParagraphs[segment] : segment
+    }
+
+    /// 开始播放：AI 多角色朗读开启时先识别第一批（较小，几秒内返回）再开口，其余批次在播放时并发识别。
+    private func startPlayback(segments: [String], play: @escaping @MainActor @Sendable (ReaderSpeechController) -> Void) {
+        guard let settings = roleSettings, let endpoint = settings.activeEndpoint else {
+            play(self)
+            return
+        }
+        isSpeaking = true
+        let store = AIRoleSpeechStore.shared
+        for (index, text) in segments.enumerated() {
+            if let cached = store.cached(text) { segmentRoles[index] = cached }
+        }
+        let ranges = AIRoleAnalyzer.batches(
+            for: segments,
+            limit: endpoint.batchCharacters,
+            firstLimit: min(endpoint.batchCharacters, 1_500),
+            known: Set(segmentRoles.keys)
+        )
+        guard let first = ranges.first else {
+            play(self)
+            return
+        }
+        roleStatus = "AI 正在识别角色…"
+        let analyzer = AIRoleAnalyzer(endpoint: endpoint, apiKey: AIRoleKeychain.key(for: endpoint.id))
+        let generation = roleGeneration
+        let concurrency = max(endpoint.concurrency, 1)
+        roleTask = Task { [weak self] in
+            var failure: String?
+            do {
+                let roles = try await analyzer.analyze(first, in: segments)
+                self?.applyRoles(roles, segments: segments, generation: generation)
+            } catch is CancellationError {
+                return
+            } catch {
+                failure = error.localizedDescription
+            }
+            guard let self, !Task.isCancelled, generation == self.roleGeneration else { return }
+            self.roleStatus = failure.map { "角色识别失败，本段使用默认声音：\($0)" }
+            // 识别期间被暂停（在线朗读）时不自动开口，继续播放时从当前片段开始。
+            if self.isSpeaking { play(self) }
+            await self.analyzeRemaining(Array(ranges.dropFirst()), segments: segments,
+                                        analyzer: analyzer, concurrency: concurrency, generation: generation)
+        }
+    }
+
+    private func analyzeRemaining(
+        _ ranges: [ClosedRange<Int>],
+        segments: [String],
+        analyzer: AIRoleAnalyzer,
+        concurrency: Int,
+        generation: Int
+    ) async {
+        guard !ranges.isEmpty else { return }
+        var pending = ranges[...]
+        await withTaskGroup(of: [Int: AIRoleAssignment].self) { group in
+            var started = 0
+            while started < concurrency, let next = pending.popFirst() {
+                group.addTask { (try? await analyzer.analyze(next, in: segments)) ?? [:] }
+                started += 1
+            }
+            for await roles in group {
+                let current = await self.roleGeneration
+                if Task.isCancelled || generation != current {
+                    group.cancelAll()
+                    return
+                }
+                await self.applyRoles(roles, segments: segments, generation: generation)
+                if let next = pending.popFirst() {
+                    group.addTask { (try? await analyzer.analyze(next, in: segments)) ?? [:] }
+                }
+            }
+        }
+    }
+
+    private func applyRoles(_ roles: [Int: AIRoleAssignment], segments: [String], generation: Int) {
+        guard generation == roleGeneration, !roles.isEmpty else { return }
+        var remembered: [String: AIRoleAssignment] = [:]
+        for (index, role) in roles where segments.indices.contains(index) {
+            segmentRoles[index] = role
+            remembered[segments[index]] = role
+        }
+        AIRoleSpeechStore.shared.remember(remembered)
+    }
+
+    /// 系统语音：旁白用阅读设置里的声音；男 / 女角色用 AI 朗读页设置的声音（未设置时自动挑同性别的中文声音，
+    /// 没有同性别声音时用音调区分）；同性别不同角色再按名字微调音调。
+    private func systemVoice(for role: AIRoleAssignment?) -> (AVSpeechSynthesisVoice?, Float) {
+        let base = AVSpeechSynthesisVoice(identifier: voiceIdentifier) ?? AVSpeechSynthesisVoice(language: "zh-CN")
+        guard let role, let settings = roleSettings, role.kind != .narrator else { return (base, 1) }
+        let variation: Float = settings.variesCharacterPitch ? AIRoleText.pitchVariation(for: role.name) : 1
+        switch role.kind {
+        case .male:
+            if let voice = AVSpeechSynthesisVoice(identifier: settings.maleVoiceID)
+                ?? SpeechVoiceCatalog.automaticVoice(gender: .male, avoiding: base?.identifier) {
+                return (voice, variation)
+            }
+            return (base, 0.82 * variation)
+        case .female:
+            if let voice = AVSpeechSynthesisVoice(identifier: settings.femaleVoiceID)
+                ?? SpeechVoiceCatalog.automaticVoice(gender: .female, avoiding: base?.identifier) {
+                return (voice, variation)
+            }
+            return (base, 1.18 * variation)
+        default:
+            return (base, variation)
+        }
+    }
+
+    /// 在线朗读：男 / 女角色可以各用一个朗读源（AI 朗读页设置），未设置时用默认朗读源。
+    private func roleEngine(for index: Int) -> HttpTTS? {
+        guard let settings = roleSettings, let role = segmentRoles[index] else { return nil }
+        let id: String
+        switch role.kind {
+        case .male: id = settings.maleEngineID
+        case .female: id = settings.femaleEngineID
+        default: return nil
+        }
+        guard !id.isEmpty else { return nil }
+        return availableHTTPEngines.first { String($0.id) == id }
+    }
+
+    private func prefetchHTTPSegments(from start: Int) {
+        guard let engine = httpEngine, start < httpSegments.count else { return }
+        let items: [(HttpTTS, String)] = (start..<httpSegments.count).map { (roleEngine(for: $0) ?? engine, httpSegments[$0]) }
+        let rate = speechRate + 5
+        let task = Task { [weak self] in
+            guard let self else { return }
+            for (engine, text) in items {
+                guard !Task.isCancelled else { return }
+                _ = try? await self.httpService.audio(engine: engine, text: text, speechRate: rate)
+            }
+        }
+        httpPrefetchTasks.append(task)
     }
 
     private func activateAudioSession() {
@@ -438,16 +627,16 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
             return
         }
         let utterance = AVSpeechUtterance(string: systemSegments[systemSegmentIndex])
-        utterance.voice = AVSpeechSynthesisVoice(identifier: voiceIdentifier)
-            ?? AVSpeechSynthesisVoice(language: "zh-CN")
+        let (voice, pitch) = systemVoice(for: segmentRoles[systemSegmentIndex])
+        utterance.voice = voice
         let multiplier = followsSystemRate ? 1 : Float(speechRate + 5) / 10
         utterance.rate = min(
             max(AVSpeechUtteranceDefaultSpeechRate * multiplier, AVSpeechUtteranceMinimumSpeechRate),
             AVSpeechUtteranceMaximumSpeechRate
         )
-        utterance.pitchMultiplier = 1
+        utterance.pitchMultiplier = min(max(pitch, 0.5), 2)
         synthesizer.speak(utterance)
-        currentSegmentIndex = segmentIndexOffset + systemSegmentIndex
+        currentSegmentIndex = segmentIndexOffset + paragraphIndex(for: systemSegmentIndex)
         isSpeaking = true
         isPaused = false
         updateNowPlaying()
@@ -518,12 +707,13 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
     }
 
     private func playCurrentHTTPSegment() {
-        guard let engine = httpEngine, httpSegments.indices.contains(httpSegmentIndex) else {
+        guard let defaultEngine = httpEngine, httpSegments.indices.contains(httpSegmentIndex) else {
             stop()
             return
         }
+        let engine = roleEngine(for: httpSegmentIndex) ?? defaultEngine
         let text = httpSegments[httpSegmentIndex]
-        currentSegmentIndex = segmentIndexOffset + httpSegmentIndex
+        currentSegmentIndex = segmentIndexOffset + paragraphIndex(for: httpSegmentIndex)
         let rate = speechRate + 5
         httpTask?.cancel()
         httpTask = Task { [weak self] in

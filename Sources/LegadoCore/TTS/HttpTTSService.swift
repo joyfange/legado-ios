@@ -80,6 +80,20 @@ public actor HttpTTSAudioCache {
 
     public func clear() { try? FileManager.default.removeItem(at: directory) }
 
+    /// 当前缓存占用的字节数（朗读管理页「TTS 缓存」显示用）。
+    public func totalBytes() -> Int64 {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        return files.reduce(Int64(0)) { total, url in
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+            guard values?.isRegularFile == true else { return total }
+            return total + Int64(values?.fileSize ?? 0)
+        }
+    }
+
     private func trimIfNeeded() {
         let keys: Set<URLResourceKey> = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
         guard let files = try? FileManager.default.contentsOfDirectory(

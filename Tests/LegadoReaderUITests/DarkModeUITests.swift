@@ -95,7 +95,7 @@ final class DarkModeUITests: XCTestCase {
         let app = launch(["-uiDemoTab", "settings", "-themeMode", "2"])
         let routes: [(String, String, String?)] = [
             ("textformat.size", "阅读设置", nil),
-            ("waveform", "在线朗读引擎", "新建"),
+            ("waveform", "朗读管理", nil),
             ("bookmark", "书签", nil),
             ("clock", "阅读记录", nil),
             ("link", "规则订阅", "新建"),
