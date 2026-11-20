@@ -106,6 +106,9 @@ private struct ReaderThemeSwatch: View {
     let background: UIColor
     let foreground: UIColor
     let selected: Bool
+    var image: UIImage? = nil
+    /// 右下角小图标（「自定义」色块用来提示可以编辑）。
+    var badge: String? = nil
     let action: () -> Void
 
     var body: some View {
@@ -114,6 +117,23 @@ private struct ReaderThemeSwatch: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(Color(uiColor: background))
                     .frame(width: 50, height: 50)
+                    .overlay {
+                        if let image {
+                            Image(uiImage: image).resizable().scaledToFill()
+                                .frame(width: 50, height: 50)
+                                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        }
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if let badge {
+                            Image(systemName: badge)
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Color(uiColor: background))
+                                .frame(width: 15, height: 15)
+                                .background(Circle().fill(Color(uiColor: foreground).opacity(0.75)))
+                                .padding(3)
+                        }
+                    }
                     .overlay {
                         Text("文")
                             .font(.system(size: 19, weight: .medium))
@@ -187,6 +207,11 @@ private struct ReaderThemeSettingsTab: View {
     @AppStorage("readerBackgroundRevision") private var backgroundRevision = 0
     @AppStorage(ReaderStylePreset.customBackgroundKey) private var customBackgroundHex = ReaderStylePreset.defaultCustomBackground
     @AppStorage(ReaderStylePreset.customForegroundKey) private var customForegroundHex = ReaderStylePreset.defaultCustomForeground
+    @AppStorage(ReaderStylePreset.customDarkBackgroundKey) private var customDarkBackgroundHex = ReaderStylePreset.defaultCustomDarkBackground
+    @AppStorage(ReaderStylePreset.customDarkForegroundKey) private var customDarkForegroundHex = ReaderStylePreset.defaultCustomDarkForeground
+    @AppStorage(ReaderCustomThemeImage.lightUseKey) private var customUsesImage = false
+    @AppStorage(ReaderCustomThemeImage.darkUseKey) private var customDarkUsesImage = false
+    @AppStorage("themeMode") private var themeMode = "0"
     @AppStorage("textSize") private var fontSize = 20.0
     @AppStorage("textBold") private var fontWeight = 0
     @AppStorage("textFont") private var fontPath = ""
@@ -222,6 +247,9 @@ private struct ReaderThemeSettingsTab: View {
     @AppStorage("showsReviewBubbles") private var showsReviewBubbles = true
 
     @State private var backgroundImage: UIImage?
+    @State private var darkBackgroundImage: UIImage?
+    /// 正在编辑的自定义主题：false 浅色、true 深色。
+    @State private var customEditorDark: Bool?
     @State private var showsBackgroundPicker = false
     /// 字体文件与主题包共用一个文件选择器（同一页面上多个 fileImporter 在旧系统上会互相抢）。
     @State private var showsImporter = false
@@ -236,12 +264,28 @@ private struct ReaderThemeSettingsTab: View {
 
     private var animationBinding: Binding<Int> { pageAnimation ?? $storedPageAnimation }
 
+    /// 阅读页当前用的主题（与阅读页一致：开启「跟随系统深色模式」时按系统明暗取浅色 / 深色主题）。
     private var currentStyle: ReaderStylePreset {
-        if theme == ReaderStylePreset.customID {
-            _ = (customBackgroundHex, customForegroundHex)
-            return .custom()
+        _ = (customBackgroundHex, customForegroundHex, customDarkBackgroundHex, customDarkForegroundHex)
+        if followSystemDark {
+            if systemPrefersDark {
+                return ReaderStylePreset.resolve(ReaderStylePreset.darkIDs.contains(darkTheme) ? darkTheme : "night")
+            }
+            if ReaderStylePreset.darkIDs.contains(theme) {
+                return ReaderStylePreset.resolve(ReaderStylePreset.darkIDs.contains(previousDayTheme) ? "wechat" : previousDayTheme)
+            }
         }
         return .resolve(theme)
+    }
+
+    private var systemPrefersDark: Bool {
+        switch themeMode {
+        case "2": return true
+        case "1", "3": return false
+        default:
+            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+            return (scene?.traitCollection.userInterfaceStyle ?? .light) == .dark
+        }
     }
 
     var body: some View {
@@ -255,7 +299,23 @@ private struct ReaderThemeSettingsTab: View {
             backgroundSection
             fontSection
         }
-        .onAppear { if backgroundImage == nil { backgroundImage = ReaderBackgroundStore.load() } }
+        .onAppear {
+            // 旧版「使用背景图」（任何主题都铺图）并入当前一侧的自定义主题，外观不变。
+            ReaderCustomThemeImage.migrateLegacyBackground(current: currentStyle)
+            reloadBackgroundImages()
+        }
+        .sheet(isPresented: Binding(get: { customEditorDark != nil }, set: { if !$0 { customEditorDark = nil } })) {
+            if let dark = customEditorDark {
+                ReaderCustomThemeEditor(dark: dark) { saved in
+                    customEditorDark = nil
+                    if saved {
+                        reloadBackgroundImages()
+                        selectCustom(dark: dark)
+                        backgroundRevision &+= 1
+                    }
+                }
+            }
+        }
         Group {
             AppearanceGroup("底线设置", prominent: true) {
                 AppearanceSegmentedCard(title: "文字底线", options: [(0, "关闭"), (1, "实线"), (2, "虚线")], selection: $underlineMode)
@@ -317,7 +377,7 @@ private struct ReaderThemeSettingsTab: View {
                 swatchCard(ReaderStylePreset.lightPresets, dark: false, includesCustom: true)
             }
             AppearanceGroup("深色主题", prominent: true) {
-                swatchCard(ReaderStylePreset.darkPresets, dark: true, includesCustom: false)
+                swatchCard(ReaderStylePreset.darkPresets, dark: true, includesCustom: true)
             }
             if !themes.themes.isEmpty {
                 AppearanceGroup("我的主题", prominent: true) {
@@ -327,15 +387,23 @@ private struct ReaderThemeSettingsTab: View {
             }
             AppearanceGroup("自动切换", prominent: true) {
                 AppearanceToggleRow(title: "跟随系统深色模式", isOn: $followSystemDark)
-                ReaderSettingsFootnote(text: "系统切到深色时自动换成上面选中的深色主题，切回浅色时恢复浅色主题。")
+                ReaderSettingsFootnote(text: "系统切到深色时自动换成上面选中的深色主题（含自定义），切回浅色时恢复选中的浅色主题。")
             }
         }
     }
 
     private func isSelected(_ preset: ReaderStylePreset, dark: Bool) -> Bool {
+        isSelected(id: preset.id, dark: dark)
+    }
+
+    /// 选中状态：开启「跟随系统深色模式」时两排各自显示所选的浅色 / 深色主题。
+    private func isSelected(id: String, dark: Bool) -> Bool {
         if useBackgroundImage && backgroundImage != nil { return false }
-        if followSystemDark { return dark ? darkTheme == preset.id : (theme == preset.id || (currentStyle.isDark && previousDayTheme == preset.id)) }
-        return currentStyle.id == preset.id
+        if followSystemDark {
+            if dark { return darkTheme == id || (theme == id && ReaderStylePreset.darkIDs.contains(id)) }
+            return ReaderStylePreset.darkIDs.contains(theme) ? previousDayTheme == id : theme == id
+        }
+        return currentStyle.id == id
     }
 
     private func swatchCard(_ presets: [ReaderStylePreset], dark: Bool, includesCustom: Bool) -> some View {
@@ -348,11 +416,17 @@ private struct ReaderThemeSettingsTab: View {
                     }
                 }
                 if includesCustom {
-                    let custom = ReaderStylePreset.custom()
+                    // 「自定义」：轻点打开编辑器（文字颜色、背景颜色、背景图、实时预览），保存后作为这一侧的自定义主题使用。
+                    let custom = ReaderStylePreset.custom(dark: dark)
+                    let usesImage = dark ? customDarkUsesImage : customUsesImage
                     ReaderThemeSwatch(name: "自定义", background: custom.background, foreground: custom.foreground,
-                                      selected: theme == ReaderStylePreset.customID && !(useBackgroundImage && backgroundImage != nil)) {
-                        select(ReaderStylePreset.customID, dark: false)
+                                      selected: isSelected(id: custom.id, dark: dark),
+                                      image: usesImage ? (dark ? darkBackgroundImage : backgroundImage) : nil,
+                                      badge: "slider.horizontal.3") {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        customEditorDark = dark
                     }
+                    .accessibilityIdentifier(dark ? "reader.theme.customDark" : "reader.theme.customLight")
                 }
             }
             .padding(.horizontal, 12)
@@ -360,6 +434,19 @@ private struct ReaderThemeSettingsTab: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .background { ThemeCardSurface(radius: 14) }
+    }
+
+    /// 选中某一侧的自定义主题（关闭旧版全局背景图开关，背景图由自定义主题自己决定）。
+    private func selectCustom(dark: Bool) {
+        useBackgroundImage = false
+        let id = dark ? ReaderStylePreset.customDarkID : ReaderStylePreset.customID
+        if dark { darkTheme = id } else { previousDayTheme = id }
+        theme = id
+    }
+
+    private func reloadBackgroundImages() {
+        backgroundImage = ReaderBackgroundStore.load()
+        darkBackgroundImage = ReaderCustomThemeImage.load(dark: true)
     }
 
     private func select(_ id: String, dark: Bool) {
@@ -380,7 +467,7 @@ private struct ReaderThemeSettingsTab: View {
                     ReaderThemeSwatch(name: item.name, background: item.previewBackground, foreground: item.previewForeground,
                                       selected: false) {
                         themes.apply(item)
-                        backgroundImage = ReaderBackgroundStore.load()
+                        reloadBackgroundImages()
                         backgroundRevision &+= 1
                         message = "已使用「\(item.name)」"
                     }
@@ -398,27 +485,42 @@ private struct ReaderThemeSettingsTab: View {
 
     // MARK: 背景
 
-    private var usesImage: Bool { useBackgroundImage && backgroundImage != nil }
+    /// 背景设置作用在「当前一侧」：当前是深色主题就改深色的自定义主题，否则改浅色的自定义主题。
+    private var editsDarkSide: Bool { currentStyle.isDark }
+
+    private var sideImage: UIImage? { editsDarkSide ? darkBackgroundImage : backgroundImage }
+
+    private var sideUsesImage: Bool { editsDarkSide ? customDarkUsesImage : customUsesImage }
+
+    /// 阅读页现在是否铺着背景图（旧版全局开关或当前自定义主题带图）。
+    private var usesImage: Bool {
+        if useBackgroundImage { return backgroundImage != nil }
+        return currentStyle.isCustom && sideUsesImage && sideImage != nil
+    }
 
     private var backgroundSection: some View {
         AppearanceGroup("背景设置", prominent: true) {
             backgroundPreview
-            if backgroundImage != nil {
+            if sideImage != nil {
                 AppearanceToggleRow(title: "使用背景图", isOn: Binding(
-                    get: { useBackgroundImage },
-                    set: { useBackgroundImage = $0; backgroundRevision &+= 1 }
+                    get: { currentStyle.isCustom && sideUsesImage },
+                    set: { value in
+                        startCustomizing()
+                        setSideUsesImage(value)
+                        backgroundRevision &+= 1
+                    }
                 ))
             }
             Button { showsBackgroundPicker = true } label: {
-                AppearanceRowLabel(title: backgroundImage == nil ? "选择背景图片" : "更换背景图片", icon: "photo", chevron: true)
+                AppearanceRowLabel(title: sideImage == nil ? "选择背景图片" : "更换背景图片", icon: "photo", chevron: true)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("选择背景图片")
-            if backgroundImage != nil {
+            if sideImage != nil {
                 Button {
-                    ReaderBackgroundStore.remove()
-                    backgroundImage = nil
-                    useBackgroundImage = false
+                    try? FileManager.default.removeItem(at: ReaderCustomThemeImage.url(dark: editsDarkSide))
+                    setSideUsesImage(false)
+                    reloadBackgroundImages()
                     backgroundRevision &+= 1
                 } label: {
                     AppearanceRowLabel(title: "删除背景图片", icon: "trash")
@@ -431,12 +533,23 @@ private struct ReaderThemeSettingsTab: View {
             AppearanceColorRow(title: "背景颜色", hex: currentStyle.background.readerHex) { hex in
                 customize(background: hex)
             }
-            ReaderSettingsFootnote(text: "改文字或背景颜色会切换到「自定义」主题；选择上面的主题色块会关闭背景图。")
+            Button { customEditorDark = editsDarkSide } label: {
+                AppearanceRowLabel(title: editsDarkSide ? "编辑深色自定义主题" : "编辑浅色自定义主题",
+                                   icon: "slider.horizontal.3", chevron: true)
+            }
+            .buttonStyle(.plain)
+            ReaderSettingsFootnote(text: editsDarkSide
+                ? "当前是深色主题：改文字颜色、背景颜色或背景图会保存到深色的「自定义」主题并立即使用；选择上面的主题色块可换回预设。"
+                : "当前是浅色主题：改文字颜色、背景颜色或背景图会保存到浅色的「自定义」主题并立即使用；选择上面的主题色块可换回预设。")
         }
         .readingPhotoPicker(isPresented: $showsBackgroundPicker) { data in
                 do {
-                    backgroundImage = try ReaderBackgroundStore.save(data)
-                    useBackgroundImage = true
+                    let dark = editsDarkSide
+                    startCustomizing()
+                    _ = try ReaderBackgroundStore.save(data, to: ReaderCustomThemeImage.url(dark: dark))
+                    if dark { customDarkUsesImage = true } else { customUsesImage = true }
+                    reloadBackgroundImages()
+                    selectCustom(dark: dark)
                     backgroundRevision &+= 1
                     message = nil
                 } catch {
@@ -447,8 +560,13 @@ private struct ReaderThemeSettingsTab: View {
             }
     }
 
+    private func setSideUsesImage(_ value: Bool) {
+        if editsDarkSide { customDarkUsesImage = value } else { customUsesImage = value }
+    }
+
     private var backgroundPreview: some View {
         let style = currentStyle
+        let image = useBackgroundImage ? backgroundImage : (usesImage ? sideImage : nil)
         return VStack(alignment: .leading, spacing: 4) {
             Text("背景预览").font(.system(size: 17, weight: .semibold))
             Text(usesImage ? "当前使用背景图" : "当前使用纯色背景").font(.system(size: 12))
@@ -466,8 +584,8 @@ private struct ReaderThemeSettingsTab: View {
             // 背景图放在 background 里：按卡片大小铺满裁切，不会把卡片撑宽。
             ZStack {
                 Color(uiColor: style.background)
-                if usesImage, let backgroundImage {
-                    Image(uiImage: backgroundImage).resizable().scaledToFill()
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
                 }
             }
         }
@@ -479,16 +597,33 @@ private struct ReaderThemeSettingsTab: View {
         .accessibilityElement(children: .combine)
     }
 
-    private func customize(foreground: String? = nil, background: String? = nil) {
-        if theme != ReaderStylePreset.customID {
-            let style = currentStyle
-            customBackgroundHex = style.background.readerHex
-            customForegroundHex = style.foreground.readerHex
+    /// 从预设开始改时，先把预设的颜色抄进这一侧的自定义主题（之后只改用户动的那一项），并切到自定义主题。
+    private func startCustomizing() {
+        let style = currentStyle
+        let dark = style.isDark
+        if !style.isCustom {
+            if dark {
+                customDarkBackgroundHex = style.background.readerHex
+                customDarkForegroundHex = style.foreground.readerHex
+                customDarkUsesImage = false
+            } else {
+                customBackgroundHex = style.background.readerHex
+                customForegroundHex = style.foreground.readerHex
+                customUsesImage = false
+            }
         }
-        if let foreground, !foreground.isEmpty { customForegroundHex = foreground }
-        if let background, !background.isEmpty { customBackgroundHex = background }
-        theme = ReaderStylePreset.customID
-        previousDayTheme = ReaderStylePreset.customID
+        selectCustom(dark: dark)
+    }
+
+    private func customize(foreground: String? = nil, background: String? = nil) {
+        let dark = editsDarkSide
+        startCustomizing()
+        if let foreground, !foreground.isEmpty {
+            if dark { customDarkForegroundHex = foreground } else { customForegroundHex = foreground }
+        }
+        if let background, !background.isEmpty {
+            if dark { customDarkBackgroundHex = background } else { customBackgroundHex = background }
+        }
     }
 
     // MARK: 字体
@@ -678,22 +813,18 @@ private struct ReaderThemeSettingsTab: View {
 
     private var bubbleSection: some View {
         AppearanceGroup("气泡设置", prominent: true) {
-            AppearanceToggleRow(title: "显示段评气泡", isOn: $showsReviewBubbles)
-            if showsReviewBubbles {
-                if #available(iOS 16.0, *) {
-                    SwiftUI.NavigationLink {
-                        BubbleStyleSettingsView()
-                    } label: {
-                        AppearanceRowLabel(title: "气泡样式", icon: "bubble.left",
-                                           value: bubbleStyles.styles.first { $0.id == bubbleStyles.selectedID }?.name ?? "默认气泡",
-                                           chevron: true)
-                    }
-                    .buttonStyle(.plain)
-                }
+            SwiftUI.NavigationLink {
+                BubbleStyleSettingsView()
+            } label: {
+                AppearanceRowLabel(title: "气泡", value: bubbleStyles.selectedName, chevron: true)
             }
-            ReaderSettingsFootnote(text: "书源提供段评时，气泡显示在段落末尾，轻点打开段评页。气泡样式里可新建、导入自定义气泡并调整大小。")
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("reader.settings.bubble")
+            AppearanceToggleRow(title: "显示段评气泡", isOn: $showsReviewBubbles)
+            ReaderSettingsFootnote(text: "书源提供段评时，气泡显示在段落末尾，轻点打开段评页。")
         }
     }
+
 
     // MARK: 主题文件
 
@@ -740,7 +871,7 @@ private struct ReaderThemeSettingsTab: View {
             }
             do {
                 let pack = try themes.importPack(from: url)
-                backgroundImage = ReaderBackgroundStore.load()
+                reloadBackgroundImages()
                 backgroundRevision &+= 1
                 message = "已导入并使用「\(pack.name)」"
             } catch {
@@ -944,6 +1075,196 @@ private struct ReaderSpeechSettingsTab: View {
 // MARK: - 阅读主题（保存 / 导出 / 导入）
 
 /// 一套阅读主题：一组阅读设置的值（只包含外观与排版，不含翻页方式、字体文件和朗读）。
+// MARK: - 自定义主题编辑器
+
+/// 「自定义」色块打开的编辑器：文字颜色、背景颜色、可选背景图，上方实时预览。
+/// 浅色、深色各有一套，保存后作为这一侧的「自定义」主题并立即用在阅读页。
+private struct ReaderCustomThemeEditor: View {
+    let dark: Bool
+    let onFinish: (Bool) -> Void
+
+    @ThemePalette private var palette
+    @State private var foregroundHex: String
+    @State private var backgroundHex: String
+    @State private var usesImage: Bool
+    @State private var image: UIImage?
+    /// 新选的图片先放在临时文件里，保存时才替换正式文件。
+    @State private var pickedImageURL: URL?
+    @State private var removesImage = false
+    @State private var picksImage = false
+    @State private var errorMessage: String?
+
+    private static let lightSuggestions: [(String, String, String)] = [
+        ("米黄", "F5EFDF", "2E2A24"), ("纸白", "FBFAF7", "1F1F1F"), ("豆沙绿", "CCE8CF", "1F3322"),
+        ("浅粉", "F8E8EA", "4A2F35"), ("雾蓝", "E3EBF3", "26313D"), ("燕麦", "EDE3D1", "3B3226")
+    ]
+    private static let darkSuggestions: [(String, String, String)] = [
+        ("暖黑", "1C1B19", "B9B2A6"), ("纯黑", "000000", "9A9A9A"), ("石墨", "2B2B2D", "C9C9CC"),
+        ("夜蓝", "0E1726", "9FB0C7"), ("松绿", "10201A", "9EBFAE"), ("咖啡", "241C16", "C2B09A")
+    ]
+
+    init(dark: Bool, onFinish: @escaping (Bool) -> Void) {
+        self.dark = dark
+        self.onFinish = onFinish
+        let style = ReaderStylePreset.custom(dark: dark)
+        _foregroundHex = State(initialValue: style.foreground.readerHex)
+        _backgroundHex = State(initialValue: style.background.readerHex)
+        _usesImage = State(initialValue: ReaderCustomThemeImage.usesImage(dark: dark))
+        _image = State(initialValue: ReaderCustomThemeImage.load(dark: dark))
+    }
+
+    private var foreground: Color { AppThemeColor.color(foregroundHex) }
+    private var background: Color { AppThemeColor.color(backgroundHex) }
+    private var showsImage: Bool { usesImage && image != nil }
+
+    var body: some View {
+        ReadingNavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 22) {
+                    preview
+                    AppearanceGroup("颜色", prominent: true) {
+                        AppearanceColorRow(title: "文字颜色", hex: foregroundHex) { foregroundHex = $0 }
+                        AppearanceColorRow(title: "背景颜色", hex: backgroundHex) { backgroundHex = $0 }
+                        suggestions
+                        if AppThemeColor.contrast(foregroundHex, backgroundHex) < 3 {
+                            ReaderSettingsFootnote(text: "文字和背景颜色太接近，阅读时可能看不清。")
+                        }
+                    }
+                    AppearanceGroup("背景图片", prominent: true) {
+                        if image != nil {
+                            AppearanceToggleRow(title: "使用背景图", isOn: $usesImage)
+                        }
+                        Button { picksImage = true } label: {
+                            AppearanceRowLabel(title: image == nil ? "从相册选择背景图" : "更换背景图", icon: "photo", chevron: true)
+                        }
+                        .buttonStyle(.plain)
+                        if image != nil {
+                            Button {
+                                image = nil
+                                usesImage = false
+                                pickedImageURL = nil
+                                removesImage = true
+                            } label: {
+                                AppearanceRowLabel(title: "移除背景图", icon: "trash")
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        if let errorMessage {
+                            ReaderSettingsFootnote(text: errorMessage)
+                        }
+                        ReaderSettingsFootnote(text: "背景图铺满阅读页，文字颜色仍按上面的设置；不用背景图时显示背景颜色。")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 48)
+            }
+            .background { AppThemeCanvas().ignoresSafeArea() }
+            .navigationTitle(dark ? "自定义深色主题" : "自定义浅色主题")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        if let pickedImageURL { try? FileManager.default.removeItem(at: pickedImageURL) }
+                        onFinish(false)
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
+                        .accessibilityIdentifier("reader.customTheme.save")
+                }
+            }
+        }
+        .readingPhotoPicker(isPresented: $picksImage) { data in
+            do {
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("reader-custom-\(UUID().uuidString).jpg")
+                image = try ReaderBackgroundStore.save(data, to: url)
+                if let pickedImageURL { try? FileManager.default.removeItem(at: pickedImageURL) }
+                pickedImageURL = url
+                usesImage = true
+                removesImage = false
+                errorMessage = nil
+            } catch {
+                errorMessage = "无法读取这张图片。"
+            }
+        } onError: { error in
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private var preview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("第一章 · 雨夜").font(.system(size: 19, weight: .semibold))
+            Text("　　雨落在旧城的瓦檐上，细密得像一封迟到了许多年的信。")
+                .font(.system(size: 16, design: .serif))
+            Text("　　“灯塔第三次亮起时，就沿着潮声出发。”")
+                .font(.system(size: 16, design: .serif))
+            Spacer(minLength: 0)
+            Text(showsImage ? "预览 · 背景图" : "预览 · 纯色背景")
+                .font(.system(size: 11))
+                .opacity(0.6)
+        }
+        .foregroundStyle(foreground)
+        .padding(18)
+        .frame(maxWidth: .infinity, minHeight: 190, maxHeight: 190, alignment: .topLeading)
+        .background {
+            ZStack {
+                background
+                if showsImage, let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(foreground.opacity(0.12), lineWidth: 0.75)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("reader.customTheme.preview")
+    }
+
+    private var suggestions: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(dark ? Self.darkSuggestions : Self.lightSuggestions, id: \.0) { item in
+                    ReaderThemeSwatch(name: item.0, background: UIColor(readerHex: item.1) ?? .white,
+                                      foreground: UIColor(readerHex: item.2) ?? .black,
+                                      selected: backgroundHex == item.1 && foregroundHex == item.2) {
+                        backgroundHex = item.1
+                        foregroundHex = item.2
+                    }
+                }
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background { ThemeCardSurface(radius: 14) }
+    }
+
+    private func save() {
+        let defaults = UserDefaults.standard
+        let keys = ReaderStylePreset.customKeys(dark: dark)
+        if UIColor(readerHex: backgroundHex) != nil { defaults.set(backgroundHex, forKey: keys.background) }
+        if UIColor(readerHex: foregroundHex) != nil { defaults.set(foregroundHex, forKey: keys.foreground) }
+        let target = ReaderCustomThemeImage.url(dark: dark)
+        if let pickedImageURL {
+            do {
+                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if FileManager.default.fileExists(atPath: target.path) { try FileManager.default.removeItem(at: target) }
+                try FileManager.default.moveItem(at: pickedImageURL, to: target)
+            } catch {
+                errorMessage = "背景图保存失败：\(error.localizedDescription)"
+                return
+            }
+        } else if removesImage {
+            try? FileManager.default.removeItem(at: target)
+        }
+        defaults.set(usesImage && image != nil, forKey: keys.useImage)
+        onFinish(true)
+    }
+}
+
 struct ReaderThemePack: Codable, Identifiable, Equatable {
     struct Value: Codable, Equatable {
         var i: Int?
@@ -962,6 +1283,9 @@ struct ReaderThemePack: Codable, Identifiable, Equatable {
     var backgroundImage: String?
     /// 本机保存的主题：背景图文件名。
     var backgroundFile: String?
+    /// 深色自定义主题的背景图（导出文件里 base64 / 本机文件名）；旧版主题包没有这两项。
+    var darkBackgroundImage: String?
+    var darkBackgroundFile: String?
 
     var previewBackground: UIColor { color(for: true) }
     var previewForeground: UIColor { color(for: false) }
@@ -972,6 +1296,11 @@ struct ReaderThemePack: Codable, Identifiable, Equatable {
             let key = background ? ReaderStylePreset.customBackgroundKey : ReaderStylePreset.customForegroundKey
             let fallback = background ? ReaderStylePreset.defaultCustomBackground : ReaderStylePreset.defaultCustomForeground
             return UIColor(readerHex: values[key]?.s ?? fallback) ?? .white
+        }
+        if themeID == ReaderStylePreset.customDarkID {
+            let key = background ? ReaderStylePreset.customDarkBackgroundKey : ReaderStylePreset.customDarkForegroundKey
+            let fallback = background ? ReaderStylePreset.defaultCustomDarkBackground : ReaderStylePreset.defaultCustomDarkForeground
+            return UIColor(readerHex: values[key]?.s ?? fallback) ?? .black
         }
         let preset = ReaderStylePreset.resolve(themeID)
         return background ? preset.background : preset.foreground
@@ -993,6 +1322,8 @@ final class ReaderThemeStore: ObservableObject {
         ("readerTheme", .string), ("readerPreviousDayTheme", .string), ("readerDarkTheme", .string),
         ("readerFollowSystemDark", .bool), ("readerUseBackgroundImage", .bool),
         (ReaderStylePreset.customBackgroundKey, .string), (ReaderStylePreset.customForegroundKey, .string),
+        (ReaderStylePreset.customDarkBackgroundKey, .string), (ReaderStylePreset.customDarkForegroundKey, .string),
+        (ReaderCustomThemeImage.lightUseKey, .bool), (ReaderCustomThemeImage.darkUseKey, .bool),
         ("textSize", .double), ("textBold", .int), ("underlineMode", .int),
         ("letterSpacing", .double), ("lineSpacingExtra", .double), ("paragraphSpacing", .double), ("paragraphIndent", .string),
         ("paddingLeft", .double), ("paddingRight", .double), ("paddingTop", .double), ("paddingBottom", .double),
@@ -1062,8 +1393,21 @@ final class ReaderThemeStore: ObservableObject {
         }
         if let imageData, (try? ReaderBackgroundStore.save(imageData)) != nil {
             // 背景图已换成主题里的图片。
-        } else if pack.values["readerUseBackgroundImage"]?.b == true {
-            defaults.set(false, forKey: "readerUseBackgroundImage")
+        } else {
+            // 主题里要求用背景图但没带图片：关掉，避免沿用一张不相干的旧图。
+            if pack.values["readerUseBackgroundImage"]?.b == true { defaults.set(false, forKey: "readerUseBackgroundImage") }
+            if pack.values[ReaderCustomThemeImage.lightUseKey]?.b == true { defaults.set(false, forKey: ReaderCustomThemeImage.lightUseKey) }
+        }
+        var darkData: Data?
+        if let file = pack.darkBackgroundFile {
+            darkData = try? Data(contentsOf: Self.directory.appendingPathComponent(file))
+        } else if let encoded = pack.darkBackgroundImage {
+            darkData = Data(base64Encoded: encoded)
+        }
+        if let darkData, (try? ReaderBackgroundStore.save(darkData, to: ReaderCustomThemeImage.darkURL)) != nil {
+            // 深色自定义主题的背景图已换成主题里的图片。
+        } else if pack.values[ReaderCustomThemeImage.darkUseKey]?.b == true {
+            defaults.set(false, forKey: ReaderCustomThemeImage.darkUseKey)
         }
     }
 
@@ -1071,7 +1415,7 @@ final class ReaderThemeStore: ObservableObject {
     func save(name: String) -> Bool {
         guard themes.count < Self.maximumThemes else { return false }
         var pack = snapshot(name: name)
-        if defaults.bool(forKey: "readerUseBackgroundImage"),
+        if Self.usesLightImage(defaults.bool(forKey: "readerUseBackgroundImage"), defaults.bool(forKey: ReaderCustomThemeImage.lightUseKey)),
            let data = try? Data(contentsOf: ReaderBackgroundStore.url) {
             let file = pack.id + ".jpg"
             do {
@@ -1080,6 +1424,18 @@ final class ReaderThemeStore: ObservableObject {
                 pack.backgroundFile = file
             } catch {
                 pack.values["readerUseBackgroundImage"] = .init(b: false)
+                pack.values[ReaderCustomThemeImage.lightUseKey] = .init(b: false)
+            }
+        }
+        if defaults.bool(forKey: ReaderCustomThemeImage.darkUseKey),
+           let data = try? Data(contentsOf: ReaderCustomThemeImage.darkURL) {
+            let file = pack.id + "-dark.jpg"
+            do {
+                try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+                try data.write(to: Self.directory.appendingPathComponent(file), options: .atomic)
+                pack.darkBackgroundFile = file
+            } catch {
+                pack.values[ReaderCustomThemeImage.darkUseKey] = .init(b: false)
             }
         }
         themes.append(pack)
@@ -1089,7 +1445,7 @@ final class ReaderThemeStore: ObservableObject {
 
     func delete(_ id: String) {
         guard let index = themes.firstIndex(where: { $0.id == id }) else { return }
-        if let file = themes[index].backgroundFile {
+        for file in [themes[index].backgroundFile, themes[index].darkBackgroundFile].compactMap({ $0 }) {
             try? FileManager.default.removeItem(at: Self.directory.appendingPathComponent(file))
         }
         themes.remove(at: index)
@@ -1102,11 +1458,20 @@ final class ReaderThemeStore: ObservableObject {
         var imageData: Data?
         if let file = pack.backgroundFile {
             imageData = try? Data(contentsOf: Self.directory.appendingPathComponent(file))
-        } else if pack.values["readerUseBackgroundImage"]?.b == true {
+        } else if Self.usesLightImage(pack.values["readerUseBackgroundImage"]?.b == true,
+                                      pack.values[ReaderCustomThemeImage.lightUseKey]?.b == true) {
             imageData = try? Data(contentsOf: ReaderBackgroundStore.url)
         }
         value.backgroundFile = nil
         value.backgroundImage = imageData?.base64EncodedString()
+        var darkData: Data?
+        if let file = pack.darkBackgroundFile {
+            darkData = try? Data(contentsOf: Self.directory.appendingPathComponent(file))
+        } else if pack.values[ReaderCustomThemeImage.darkUseKey]?.b == true {
+            darkData = try? Data(contentsOf: ReaderCustomThemeImage.darkURL)
+        }
+        value.darkBackgroundFile = nil
+        value.darkBackgroundImage = darkData?.base64EncodedString()
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         guard let data = try? encoder.encode(value) else { return nil }
@@ -1124,6 +1489,9 @@ final class ReaderThemeStore: ObservableObject {
         guard data.count <= 40_000_000 else { throw CocoaError(.fileReadTooLarge) }
         var pack = try JSONDecoder().decode(ReaderThemePack.self, from: data)
         guard pack.format == ReaderThemePack.formatID else { throw CocoaError(.fileReadCorruptFile) }
+        // 导入文件只认内嵌的图片，不认本机文件名。
+        pack.backgroundFile = nil
+        pack.darkBackgroundFile = nil
         pack.id = UUID().uuidString.lowercased()
         if pack.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { pack.name = "导入的主题" }
         // 只接受已知设置，未知键忽略。
@@ -1137,6 +1505,14 @@ final class ReaderThemeStore: ObservableObject {
             }
         }
         pack.backgroundImage = nil
+        if let encoded = pack.darkBackgroundImage, let image = Data(base64Encoded: encoded) {
+            let file = pack.id + "-dark.jpg"
+            try? FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+            if (try? image.write(to: Self.directory.appendingPathComponent(file), options: .atomic)) != nil {
+                pack.darkBackgroundFile = file
+            }
+        }
+        pack.darkBackgroundImage = nil
         if themes.count < Self.maximumThemes {
             themes.append(pack)
             persist()
@@ -1144,6 +1520,9 @@ final class ReaderThemeStore: ObservableObject {
         apply(pack)
         return pack
     }
+
+    /// 主题是否带浅色背景图（旧版全局背景图与浅色自定义主题的背景图是同一个文件）。
+    static func usesLightImage(_ legacy: Bool, _ custom: Bool) -> Bool { legacy || custom }
 
     static func resetToDefaults(_ defaults: UserDefaults = .standard) {
         for (key, _) in keys where key != "readerUseBackgroundImage" { defaults.removeObject(forKey: key) }

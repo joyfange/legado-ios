@@ -92,6 +92,11 @@ struct ReaderView: View {
     @AppStorage("titleBold") private var titleBold = true
     @AppStorage(ReaderStylePreset.customBackgroundKey) private var customBackgroundHex = ReaderStylePreset.defaultCustomBackground
     @AppStorage(ReaderStylePreset.customForegroundKey) private var customForegroundHex = ReaderStylePreset.defaultCustomForeground
+    @AppStorage(ReaderStylePreset.customDarkBackgroundKey) private var customDarkBackgroundHex = ReaderStylePreset.defaultCustomDarkBackground
+    @AppStorage(ReaderStylePreset.customDarkForegroundKey) private var customDarkForegroundHex = ReaderStylePreset.defaultCustomDarkForeground
+    @AppStorage(ReaderCustomThemeImage.lightUseKey) private var customUsesImage = false
+    @AppStorage(ReaderCustomThemeImage.darkUseKey) private var customDarkUsesImage = false
+    @State private var darkBackgroundImage: UIImage?
     @AppStorage("underlineMode") private var underlineMode = 0
     @AppStorage("headerPaddingBottom") private var headerPaddingBottom = 0.0
     @AppStorage("headerPaddingLeft") private var headerPaddingLeft = 16.0
@@ -256,6 +261,7 @@ struct ReaderView: View {
                 readerBrightness = brightnessBeforeReading
             }
             backgroundImage = ReaderBackgroundStore.load()
+            darkBackgroundImage = ReaderCustomThemeImage.load(dark: true)
             ReaderScreenOrientation.apply(screenOrientation)
             Task { await loadHTTPEngines() }
             if ProcessInfo.processInfo.arguments.contains("-uiDemoBookmarks") {
@@ -465,6 +471,7 @@ struct ReaderView: View {
         .onChange(of: backgroundRevision) { _ in
             // 阅读设置里换了 / 删了背景图，或套用了带背景图的主题。
             backgroundImage = ReaderBackgroundStore.load()
+            darkBackgroundImage = ReaderCustomThemeImage.load(dark: true)
         }
         .onChange(of: themeMode) { _ in
             isAutoReading = false
@@ -787,7 +794,13 @@ struct ReaderView: View {
     }
 
     private var activeBackgroundImage: UIImage? {
-        themeMode != "3" && useBackgroundImage ? backgroundImage : nil
+        guard themeMode != "3" else { return nil }
+        if useBackgroundImage { return backgroundImage }
+        // 自定义主题（浅色 / 深色各一套）带的背景图。
+        let style = resolvedStyle
+        if style.id == ReaderStylePreset.customID, customUsesImage { return backgroundImage }
+        if style.id == ReaderStylePreset.customDarkID, customDarkUsesImage { return darkBackgroundImage }
+        return nil
     }
 
     private var backgroundColor: Color {
@@ -801,7 +814,7 @@ struct ReaderView: View {
     private var resolvedStyle: ReaderStylePreset {
         if themeMode == "3" { return .eInk }
         if let bound = ReaderStylePreset.boundToAppTheme(themeMode: themeMode) { return bound }
-        _ = (customBackgroundHex, customForegroundHex)
+        _ = (customBackgroundHex, customForegroundHex, customDarkBackgroundHex, customDarkForegroundHex)
         if followSystemDark {
             // 「跟随系统深色模式」：系统深色用选中的深色主题，浅色时用浅色主题。
             if systemPrefersDark {
@@ -1721,6 +1734,8 @@ struct ReaderView: View {
 
     /// 段评气泡 / 插图点击：网址直接半屏打开；书源回调先在后台执行拿到网址。
     private func openReviewLink(_ url: URL) {
+        // 气泡设置 › 交互 › 触感反馈。
+        if BubblePreferences.hapticsEnabled { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         guard let script = ReaderInlineMarkup.script(from: url) else {
             reviewPage = ReaderReviewPage(url: url)
             return

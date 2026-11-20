@@ -512,7 +512,7 @@ private struct ReaderHighlightRuleEditor: View {
             AppearanceCard {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Text("匹配到 \(result.count) 处")
+                        Text(result.fallback ? "正则\(draft.pattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "为空" : "无效")，按 “…” 示意 \(result.count) 处" : "匹配到 \(result.count) 处")
                             .font(AppFontStyle.footnote.themed)
                             .foregroundStyle(palette.secondary)
                         Spacer()
@@ -540,7 +540,10 @@ private struct ReaderHighlightRuleEditor: View {
              : (UIColor(red: 0.98, green: 0.97, blue: 0.94, alpha: 1), UIColor(white: 0.12, alpha: 1))
     }
 
-    private func previewText(dark: Bool) -> (text: NSAttributedString, count: Int) {
+    /// 正则为空或无效时（例如刚新建的规则），预览先按中文双引号对话示意样式，CSS / 颜色 / 背景图改动立刻看得到。
+    static let fallbackPreviewPattern = "“[^“”\\n]*”"
+
+    private func previewText(dark: Bool) -> (text: NSAttributedString, count: Int, fallback: Bool) {
         let colors = previewColors(dark: dark)
         let font = UIFont(name: "STSongti-SC-Regular", size: 18) ?? UIFont.systemFont(ofSize: 18)
         let paragraph = NSMutableParagraphStyle()
@@ -550,10 +553,11 @@ private struct ReaderHighlightRuleEditor: View {
         ])
         var rule = draft
         rule.enabled = true
-        guard rule.regexError == nil else { return (text, 0) }
+        let fallback = rule.regexError != nil
+        if fallback { rule.pattern = Self.fallbackPreviewPattern }
         let count = ReaderHighlighter.apply(rules: [rule], to: text, in: NSRange(location: 0, length: text.length),
                                             foreground: colors.foreground, dark: dark)
-        return (text, count)
+        return (text, count, fallback)
     }
 
     // MARK: 背景图

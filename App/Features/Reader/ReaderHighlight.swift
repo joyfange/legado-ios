@@ -247,9 +247,12 @@ final class ReaderHighlightStore: ObservableObject {
         persist()
     }
 
+    /// 新建的自定义规则先带上一个能用的正则（中文双引号对话），保存、预览、CSS 预设立刻有效果；用户再按需要改。
+    static let defaultCustomPattern = "“[^“”\\n]*”"
+
     func newCustomRule() -> ReaderHighlightRule {
         ReaderHighlightRule(id: "custom." + UUID().uuidString.lowercased(),
-                            name: "自定义规则\(customRules.count + 1)", pattern: "", builtIn: false,
+                            name: "自定义规则\(customRules.count + 1)", pattern: Self.defaultCustomPattern, builtIn: false,
                             lightColor: "E5483D", darkColor: "FF6961")
     }
 
@@ -649,7 +652,17 @@ extension NSAttributedString.Key {
 }
 
 /// 一处命中需要自绘的内容。每处命中一个实例，相邻两处命中不会被合并成一段。
-final class ReaderHighlightDrawing: NSObject, @unchecked Sendable {
+/// 支持安全归档：正文被选中复制时系统会归档富文本属性，不可归档的自定义属性会让复制失败。
+/// 归档时不带任何内容（只是绘制用的临时信息）。
+final class ReaderHighlightDrawing: NSObject, NSSecureCoding, @unchecked Sendable {
+    static var supportsSecureCoding: Bool { true }
+
+    override init() { super.init() }
+
+    init?(coder: NSCoder) { super.init() }
+
+    func encode(with coder: NSCoder) {}
+
     enum Fill {
         case solid(UIColor)
         case gradient(angle: CGFloat, colors: [UIColor])
@@ -885,9 +898,12 @@ enum ReaderHighlighter {
 
     /// 文字颜色偏亮就是深色阅读主题：用规则的深色颜色和深色 CSS。
     static func isDark(foreground: UIColor) -> Bool {
-        var white: CGFloat = 0
-        var alpha: CGFloat = 0
         let resolved = foreground.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        if resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            return 0.299 * red + 0.587 * green + 0.114 * blue > 0.5
+        }
+        var white: CGFloat = 0
         if resolved.getWhite(&white, alpha: &alpha) { return white > 0.5 }
         return false
     }

@@ -12,13 +12,13 @@ final class ReaderOpenBookTests: XCTestCase {
     private static let touchedKeys = [
         "pageAnim", "readerPageAnimation", "readerTheme", "readerPreviousDayTheme", "readerDarkTheme",
         "readerFollowSystemDark", "readerUseBackgroundImage", "readerCustomBackgroundHex", "readerCustomForegroundHex",
-        "readerCustomDarkBackgroundHex", "readerCustomDarkForegroundHex",
+        "readerCustomDarkBackgroundHex", "readerCustomDarkForegroundHex", "readerCustomUseImage", "readerCustomDarkUseImage",
         "textFont", "textSize", "textBold", "paragraphIndent", "readerParagraphBlankLines", "readerTextCenter",
         "readerTipCustomFont", "titleColorHex", "themeMode", "showsReviewBubbles",
         ReaderHighlightStore.storageKey, ReaderThemeStore.storageKey
     ]
     static let dialogueText = """
-    “你回来了？”她站在门口，声音很轻。
+    “你回来了？”她站在门口，声音很轻。<img src="dp:5">
     ‘先别说话。’他把伞收起来，「外面还在下雨」，『灯塔第三次亮了』。
     【提示】潮水会在天亮前退去。“这一句没有结束引号，跨页补偿会高亮到段尾
     雨落在旧城的瓦檐上，细密得像一封迟到了许多年的信。林深推开阁楼的窗，远处的灯塔正越过雾气。
@@ -115,6 +115,44 @@ final class ReaderOpenBookTests: XCTestCase {
         }
     }
 
+    /// 自定义浅色 / 深色主题、跟随系统深色模式，以及各种段评气泡样式下打开书籍。
+    func testOpenBookWithCustomThemesAndBubbleStyles() async throws {
+        let restore = preserveSettings()
+        defer { restore() }
+        resetReaderSettings()
+        let defaults = UserDefaults.standard
+        defaults.set("123456", forKey: ReaderStylePreset.customDarkBackgroundKey)
+        defaults.set("EEDDCC", forKey: ReaderStylePreset.customDarkForegroundKey)
+        defaults.set(true, forKey: ReaderCustomThemeImage.darkUseKey)
+        defaults.set(ReaderStylePreset.customDarkID, forKey: "readerTheme")
+        defaults.set(ReaderStylePreset.customDarkID, forKey: "readerDarkTheme")
+        defaults.set(ReaderStylePreset.customID, forKey: "readerPreviousDayTheme")
+        defaults.set(true, forKey: "readerFollowSystemDark")
+        let store = BubbleStyleStore.shared
+        let previousSelection = store.selectedID, previousNumberScale = store.numberScale, previousPreferSource = store.preferSource
+        var svgStyle = BubbleStyle()
+        svgStyle.name = "测试 SVG 气泡"
+        svgStyle.mode = "svg"
+        svgStyle.svg = BubbleTemplate.square.svg
+        svgStyle.followText = false
+        try store.save(svgStyle)
+        defer {
+            try? store.delete(svgStyle.id)
+            try? store.select(previousSelection)
+            try? store.setNumberScale(previousNumberScale)
+            try? store.setPreferSource(previousPreferSource)
+        }
+        try store.setNumberScale(0.7)
+        try store.setPreferSource(true)
+        for selection in ["builtin.bubble", "builtin.square", "builtin.candy", svgStyle.id] {
+            try store.select(selection)
+            try await openBook(pageAnimation: 0)
+        }
+        try await openBook(pageAnimation: 3)
+        defaults.set("2", forKey: "themeMode")
+        try await openBook(pageAnimation: 0)
+    }
+
     /// 阅读页的正文视图必须一开始就用正则高亮的排版器（不能事后替换系统文本视图的排版器）。
     func testPagedTextViewIsBuiltWithHighlightLayoutManager() {
         let view = ReaderLayoutTextView.makeTextKit1()
@@ -164,17 +202,17 @@ final class ReaderOpenBookTests: XCTestCase {
             window.rootViewController = nil
         }
         let mode = pageAnimation ?? UserDefaults.standard.integer(forKey: "pageAnim")
-        var found = false
         for _ in 0..<40 {
             try await Task.sleep(nanoseconds: 100_000_000)
             host.view.layoutIfNeeded()
             if mode == 3 {
-                if let scroll = Self.find(ReaderScrollCollectionView.self, in: host.view), !scroll.visibleCells.isEmpty { found = true; break }
+                if let scroll = Self.find(ReaderScrollCollectionView.self, in: host.view), !scroll.visibleCells.isEmpty { break }
             } else if let text = Self.find(ReaderLayoutTextView.self, in: host.view), text.textStorage.length > 0 {
-                found = true
                 break
             }
         }
+        let found = mode == 3 ? Self.find(ReaderScrollCollectionView.self, in: host.view) != nil
+            : Self.find(ReaderLayoutTextView.self, in: host.view) != nil
         XCTAssertTrue(found, "阅读页正文没有出现（翻页模式 \(mode)）", file: file, line: line)
         // 把整个阅读页画一遍：高亮背景、渐变文字、波浪线都走自绘排版器。
         let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
@@ -230,6 +268,22 @@ final class ReaderLegacySettingsDecodingTests: XCTestCase {
         XCTAssertEqual(store.rule(id: "builtin.double")?.lightColor, "112233")
         XCTAssertEqual(store.rule(id: "custom.a")?.name, "规则")
         XCTAssertEqual(store.customRules.count, 2)
+    }
+
+    func testCustomDarkThemeResolvesAsDark() throws {
+        let suite = "reader-custom-dark-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertTrue(ReaderStylePreset.customDark(defaults: defaults).isDark)
+        XCTAssertEqual(ReaderStylePreset.customDark(defaults: defaults).background.readerHex, ReaderStylePreset.defaultCustomDarkBackground)
+        defaults.set("102030", forKey: ReaderStylePreset.customDarkBackgroundKey)
+        XCTAssertEqual(ReaderStylePreset.custom(dark: true, defaults: defaults).background.readerHex, "102030")
+        XCTAssertFalse(ReaderStylePreset.custom(dark: false, defaults: defaults).isDark)
+        XCTAssertTrue(ReaderStylePreset.resolve(ReaderStylePreset.customDarkID).isCustom)
+        XCTAssertEqual(ReaderStylePreset.customKeys(dark: true).useImage, ReaderCustomThemeImage.darkUseKey)
+        XCTAssertNil(ReaderCustomThemeImage.activeImageSide(for: ReaderStylePreset.resolve("night"), defaults: defaults))
+        defaults.set(true, forKey: ReaderCustomThemeImage.darkUseKey)
+        XCTAssertEqual(ReaderCustomThemeImage.activeImageSide(for: ReaderStylePreset.customDark(defaults: defaults), defaults: defaults), true)
     }
 
     func testThemeIDsFromOlderVersionsResolve() {

@@ -27,8 +27,8 @@ struct ReaderStylePreset: Identifiable {
         .init(id: "inkGreen", name: "墨绿", background: UIColor(hex: 0x0F2018), foreground: UIColor(hex: 0xA8C4B2))
     ]
 
-    /// 深色阅读主题（夜间、深蓝、墨绿）：阅读页的系统控件随之用深色外观。
-    static let darkIDs: Set<String> = ["night", "deepBlue", "inkGreen"]
+    /// 深色阅读主题（夜间、深蓝、墨绿、自定义深色）：阅读页的系统控件随之用深色外观。
+    static let darkIDs: Set<String> = ["night", "deepBlue", "inkGreen", customDarkID]
     var isDark: Bool { Self.darkIDs.contains(id) }
     static var lightPresets: [ReaderStylePreset] { legadoDefaults.filter { !$0.isDark } }
     static var darkPresets: [ReaderStylePreset] { legadoDefaults.filter(\.isDark) }
@@ -47,6 +47,7 @@ struct ReaderStylePreset: Identifiable {
         default: id
         }
         if migratedID == customID { return custom() }
+        if migratedID == customDarkID { return customDark() }
         return legadoDefaults.first(where: { $0.id == migratedID }) ?? legadoDefaults[0]
     }
 
@@ -88,6 +89,85 @@ struct ReaderStylePreset: Identifiable {
         let foreground = UIColor(readerHex: defaults.string(forKey: customForegroundKey) ?? "")
             ?? UIColor(readerHex: defaultCustomForeground)!
         return ReaderStylePreset(id: customID, name: "自定义", background: background, foreground: foreground)
+    }
+
+    // MARK: 自定义深色主题
+
+    static let customDarkID = "customDark"
+    static let customDarkBackgroundKey = "readerCustomDarkBackgroundHex"
+    static let customDarkForegroundKey = "readerCustomDarkForegroundHex"
+    static let defaultCustomDarkBackground = "1C1B19"
+    static let defaultCustomDarkForeground = "B9B2A6"
+
+    /// 深色一侧的「自定义」：与浅色的自定义各存一套文字 / 背景颜色和背景图。
+    static func customDark(defaults: UserDefaults = .standard) -> ReaderStylePreset {
+        let background = UIColor(readerHex: defaults.string(forKey: customDarkBackgroundKey) ?? "")
+            ?? UIColor(readerHex: defaultCustomDarkBackground)!
+        let foreground = UIColor(readerHex: defaults.string(forKey: customDarkForegroundKey) ?? "")
+            ?? UIColor(readerHex: defaultCustomDarkForeground)!
+        return ReaderStylePreset(id: customDarkID, name: "自定义", background: background, foreground: foreground)
+    }
+
+    /// 自定义主题（浅色 / 深色）对应的存储。
+    static func customKeys(dark: Bool) -> (background: String, foreground: String, useImage: String) {
+        dark ? (customDarkBackgroundKey, customDarkForegroundKey, ReaderCustomThemeImage.darkUseKey)
+             : (customBackgroundKey, customForegroundKey, ReaderCustomThemeImage.lightUseKey)
+    }
+
+    static func custom(dark: Bool, defaults: UserDefaults = .standard) -> ReaderStylePreset {
+        dark ? customDark(defaults: defaults) : custom(defaults: defaults)
+    }
+
+    var isCustom: Bool { id == Self.customID || id == Self.customDarkID }
+}
+
+/// 自定义主题的背景图：浅色沿用原来的阅读背景图文件（旧版本选过的背景图不丢），深色单独一张。
+enum ReaderCustomThemeImage {
+    static let lightUseKey = "readerCustomUseImage"
+    static let darkUseKey = "readerCustomDarkUseImage"
+
+    static var darkURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Legado/reader-background-dark.jpg")
+    }
+
+    static func url(dark: Bool) -> URL { dark ? darkURL : ReaderBackgroundStore.url }
+
+    static func load(dark: Bool) -> UIImage? { ReaderBackgroundStore.load(from: url(dark: dark)) }
+
+    static func usesImage(dark: Bool, defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: dark ? darkUseKey : lightUseKey)
+    }
+
+    /// 旧版「使用背景图」开关（任何主题上都铺同一张图）并入当前一侧的自定义主题：
+    /// 颜色抄当前主题、图片沿用原图，阅读页看起来完全不变；之后背景图只跟着自定义主题走。
+    static func migrateLegacyBackground(current style: ReaderStylePreset, defaults: UserDefaults = .standard) {
+        guard defaults.bool(forKey: "readerUseBackgroundImage") else { return }
+        defaults.set(false, forKey: "readerUseBackgroundImage")
+        guard FileManager.default.fileExists(atPath: ReaderBackgroundStore.url.path) else { return }
+        let dark = style.isDark
+        let keys = ReaderStylePreset.customKeys(dark: dark)
+        if !style.isCustom {
+            defaults.set(style.background.readerHex, forKey: keys.background)
+            defaults.set(style.foreground.readerHex, forKey: keys.foreground)
+        }
+        if dark {
+            try? FileManager.default.removeItem(at: darkURL)
+            try? FileManager.default.copyItem(at: ReaderBackgroundStore.url, to: darkURL)
+        }
+        defaults.set(true, forKey: keys.useImage)
+        let id = dark ? ReaderStylePreset.customDarkID : ReaderStylePreset.customID
+        defaults.set(id, forKey: dark ? "readerDarkTheme" : "readerPreviousDayTheme")
+        defaults.set(id, forKey: "readerTheme")
+    }
+
+    /// 阅读页当前该用的背景图：旧版「使用背景图」开关（任何主题都铺图）优先，
+    /// 否则只有选中自定义主题且它设了背景图时才用。
+    static func activeImageSide(for style: ReaderStylePreset, defaults: UserDefaults = .standard) -> Bool? {
+        if defaults.bool(forKey: "readerUseBackgroundImage") { return false }
+        if style.id == ReaderStylePreset.customID, usesImage(dark: false, defaults: defaults) { return false }
+        if style.id == ReaderStylePreset.customDarkID, usesImage(dark: true, defaults: defaults) { return true }
+        return nil
     }
 }
 
@@ -265,6 +345,8 @@ enum ReaderInlineMarkup {
         var color: UIColor?
         var emphasis: Bool
         var url: URL?
+        /// 书源自带的气泡图片（「优先使用自带气泡」开启时代替气泡样式）。
+        var imageURL: URL? = nil
     }
 
     enum Item: Equatable {
@@ -329,7 +411,8 @@ enum ReaderInlineMarkup {
                     text: displayCount(count),
                     color: (options["displayColor"] as? String).flatMap { UIColor(readerHex: $0) },
                     emphasis: (options["status"] as? String) == "emphasis",
-                    url: link.flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
+                    url: link.flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil },
+                    imageURL: url.flatMap { ["http", "https"].contains($0.scheme?.lowercased() ?? "") ? $0 : nil }
                 ))
             }
         }
@@ -388,7 +471,8 @@ enum ReaderInlineMarkup {
             case .bubble(let bubble):
                 // 气泡形状与数字格式跟随「段评气泡」样式；颜色优先用书源给的 displayColor，
                 // 其次强调状态用强调色，否则跟随正文（自定义样式可改为固定颜色）。
-                image = CommentBubble.image(label: bubble.text, fontSize: font.pointSize, color: bubble.color ?? (bubble.emphasis ? accent : foreground))
+                image = CommentBubble.image(label: bubble.text, fontSize: font.pointSize, color: bubble.color ?? (bubble.emphasis ? accent : foreground),
+                                            sourceImageURL: bubble.imageURL)
                 link = bubble.url
             case .image(let url):
                 image = bubbleImage(text: "插图", font: font, color: foreground, style: 0)
@@ -573,6 +657,9 @@ struct ReaderReviewPage: Identifiable {
 /// 失败时就地显示原因和重试。
 struct ReaderReviewSheet: View {
     let page: ReaderReviewPage
+    @AppStorage(BubblePreferences.browserFullScreenKey) private var fullScreen = false
+    @AppStorage(BubblePreferences.edgeBackKey) private var edgeBack = true
+    @Environment(\.dismiss) private var dismiss
     @State private var resolved: (url: URL, html: String?)?
     @State private var error: String?
     @State private var attempt = 0
@@ -580,7 +667,8 @@ struct ReaderReviewSheet: View {
     var body: some View {
         Group {
             if let resolved {
-                ReaderReviewWebView(url: resolved.url, html: resolved.html, bridge: page.bridge)
+                ReaderReviewWebView(url: resolved.url, html: resolved.html, bridge: page.bridge,
+                                    edgeBack: edgeBack, onEdgeDismiss: { dismiss() })
                     .ignoresSafeArea(edges: .bottom)
             } else if let error {
                 VStack(spacing: 14) {
@@ -595,7 +683,8 @@ struct ReaderReviewSheet: View {
                 ProgressView("正在加载段评…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .readingPresentationDetents([.medium, .large])
+        // 气泡设置 › Browser 默认显示：半屏（可上划展开）或直接全屏。
+        .readingPresentationDetents(fullScreen ? [.large] : [.medium, .large])
         .task(id: attempt) { await load() }
     }
 
@@ -622,6 +711,9 @@ private struct ReaderReviewWebView: UIViewRepresentable {
     let url: URL
     var html: String?
     var bridge: (@MainActor (String) async -> String)?
+    /// 边缘返回：左边缘右滑有上一页时后退，没有时关闭段评页。
+    var edgeBack = true
+    var onEdgeDismiss: (() -> Void)? = nil
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -638,8 +730,15 @@ private struct ReaderReviewWebView: UIViewRepresentable {
         }
         let web = WKWebView(frame: .zero, configuration: configuration)
         web.customUserAgent = ApplicationSettingsStore.shared.settings.effectiveUserAgent
-        web.allowsBackForwardNavigationGestures = true
+        web.allowsBackForwardNavigationGestures = edgeBack
         web.navigationDelegate = context.coordinator
+        let edge = UIScreenEdgePanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.edgePanned(_:)))
+        edge.edges = .left
+        edge.isEnabled = edgeBack
+        edge.delegate = context.coordinator
+        web.addGestureRecognizer(edge)
+        context.coordinator.edgePan = edge
+        context.coordinator.onEdgeDismiss = onEdgeDismiss
         if let html {
             web.loadHTMLString(html, baseURL: url)
         } else {
@@ -648,7 +747,11 @@ private struct ReaderReviewWebView: UIViewRepresentable {
         return web
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        uiView.allowsBackForwardNavigationGestures = edgeBack
+        context.coordinator.edgePan?.isEnabled = edgeBack
+        context.coordinator.onEdgeDismiss = onEdgeDismiss
+    }
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.configuration.userContentController.removeAllScriptMessageHandlers()
@@ -658,12 +761,30 @@ private struct ReaderReviewWebView: UIViewRepresentable {
 
     /// 不少段评接口的证书已过期，书源阅读里会直接空白。只对段评页自己的域名、
     /// 且仅在“证书过期”这一个错误时放行；其他证书问题照常拦下。
-    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandlerWithReply {
+    @MainActor final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandlerWithReply, UIGestureRecognizerDelegate {
         let host: String?
         let bridge: (@MainActor (String) async -> String)?
+        weak var edgePan: UIScreenEdgePanGestureRecognizer?
+        var onEdgeDismiss: (() -> Void)?
         init(host: String?, bridge: (@MainActor (String) async -> String)? = nil) {
             self.host = host
             self.bridge = bridge
+        }
+
+        /// 已经退到第一页时，左边缘右滑关闭段评页（能后退时交给网页自己的返回手势）。
+        @objc func edgePanned(_ gesture: UIScreenEdgePanGestureRecognizer) {
+            guard gesture.state == .ended, let web = gesture.view as? WKWebView, !web.canGoBack else { return }
+            if gesture.translation(in: web).x > 60 { onEdgeDismiss?() }
+        }
+
+        func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+            guard gestureRecognizer === edgePan, let web = gestureRecognizer.view as? WKWebView else { return true }
+            return !web.canGoBack
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+            gestureRecognizer === edgePan
         }
 
         func userContentController(
