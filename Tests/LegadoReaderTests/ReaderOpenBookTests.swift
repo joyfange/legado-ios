@@ -273,12 +273,37 @@ final class ReaderOpenBookTests: XCTestCase {
             }
         }
         XCTAssertTrue(ready, "真实书籍的正文没有出现（翻页模式 \(mode)）", file: file, line: line)
+        print("MAIN-STACK-BEFORE-DRAW \(MainStackProbe.peakUsage() / 1024) KB (本地书 翻页 \(mode))")
         _ = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
     }
 
     /// 阅读页的正文视图必须一开始就用正则高亮的排版器（不能事后替换系统文本视图的排版器）。
+    /// 对照：一个最简单的页面用多少主线程栈，用来判断阅读页的数字是否异常。
+    func testMainStackBaseline() async throws {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window.windowScene = scene
+        }
+        MainStackProbe.paint()
+        let host = UIHostingController(rootView: ReadingNavigationStack { Text("对照") })
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        for _ in 0..<5 { try await Task.sleep(nanoseconds: 100_000_000); host.view.layoutIfNeeded() }
+        print("MAIN-STACK-BASE \(MainStackProbe.peakUsage() / 1024) KB (简单页 未截图)")
+        MainStackProbe.paint()
+        _ = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+        print("MAIN-STACK-BASE \(MainStackProbe.peakUsage() / 1024) KB (简单页 截图)")
+        MainStackProbe.paint()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        print("MAIN-STACK-BASE \(MainStackProbe.peakUsage() / 1024) KB (空闲)")
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
     func testPagedTextViewIsBuiltWithHighlightLayoutManager() {
         let view = ReaderLayoutTextView.makeTextKit1()
         XCTAssertTrue(view.layoutManager is ReaderHighlightLayoutManager)
