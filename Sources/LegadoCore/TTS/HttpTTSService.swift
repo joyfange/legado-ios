@@ -5,6 +5,7 @@ public enum HttpTTSServiceError: Error, LocalizedError, Sendable {
     case emptyText
     case invalidContentType(expected: String, actual: String, body: String)
     case textResponse(contentType: String, body: String)
+    case missingLoginFields(engine: String, fields: [String])
 
     public var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ public enum HttpTTSServiceError: Error, LocalizedError, Sendable {
             "TTS 返回类型不匹配（期望 \(expected)，实际 \(actual)）：\(body)"
         case .textResponse(_, let body):
             body
+        case .missingLoginFields(let engine, let fields):
+            "「\(engine)」需要先在朗读源的「登录 / 配置」里填写 \(fields.joined(separator: "、"))，填好后再试听。"
         }
     }
 }
@@ -136,6 +139,7 @@ public actor HttpTTSService {
     public func audio(engine: HttpTTS, text: String, speechRate: Int) async throws -> HttpTTSAudio {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw HttpTTSServiceError.emptyText }
+        try Self.requireLoginFields(engine)
         let source = engine.bookSourceAdapter
         let cacheKey = try Self.cacheKey(engine: engine, text: text, speechRate: speechRate)
         if let data = await cache.data(for: cacheKey) {
@@ -218,6 +222,7 @@ public actor HttpTTSService {
     public func audioStream(engine: HttpTTS, text: String, speechRate: Int) async throws -> HttpTTSAudioStream {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { throw HttpTTSServiceError.emptyText }
+        try Self.requireLoginFields(engine)
         let cacheKey = try Self.cacheKey(engine: engine, text: text, speechRate: speechRate)
         if let data = await cache.data(for: cacheKey) {
             return Self.bufferedStream(
@@ -284,6 +289,31 @@ public actor HttpTTSService {
             chunks: cachedChunks,
             isIncremental: true
         )
+    }
+
+    /// 规则里直接取 `getLoginInfoMap().get('X')` 的字段（如阿里云的 AppKey）没填时，
+    /// 请求一定失败；提前给出能看懂的提示，而不是接口返回的错误或 JS 报错。
+    static func requireLoginFields(_ engine: HttpTTS) throws {
+        guard let expression = try? NSRegularExpression(
+            pattern: #"getLoginInfoMap\(\)\s*(?:\.get\(\s*|\[\s*)['"]([^'"]+)['"]"#
+        ) else { return }
+        let url = engine.url
+        let keys = expression.matches(in: url, range: NSRange(url.startIndex..., in: url)).compactMap {
+            Range($0.range(at: 1), in: url).map { String(url[$0]) }
+        }
+        guard !keys.isEmpty else { return }
+        let stored = BookSourceRuntimeStore.shared.get(sourceID: engine.bookSourceAdapter.bookSourceUrl, key: "loginInfo")
+        let info = (stored.data(using: .utf8)).flatMap {
+            try? JSONSerialization.jsonObject(with: $0) as? [String: Any]
+        } ?? [:]
+        var missing: [String] = []
+        for key in keys where !missing.contains(key) {
+            let value = info[key].map { "\($0)" }?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if value.isEmpty { missing.append(key) }
+        }
+        if !missing.isEmpty {
+            throw HttpTTSServiceError.missingLoginFields(engine: engine.name, fields: missing)
+        }
     }
 
     private static func cacheKey(engine: HttpTTS, text: String, speechRate: Int) throws -> String {

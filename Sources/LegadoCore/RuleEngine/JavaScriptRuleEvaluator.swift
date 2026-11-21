@@ -326,6 +326,24 @@ public struct JavaScriptRuleEvaluator: Sendable {
         installBook(in: context, book: executionContext.book)
         installChapter(in: context, chapter: executionContext.chapter)
         installRuntimeExtras(in: context, book: executionContext.book)
+        // Android AnalyzeUrl binds speakText / speakSpeed as top-level JS
+        // variables for TTS engines (speakSpeed is an Int there), so rules like
+        // `@js:apiurl(speakText, speakSpeed)` or `{{(speakSpeed + 5) / 10}}` work.
+        if let speakText = executionContext.variables["speakText"] {
+            context.setObject(speakText, forKeyedSubscript: "speakText" as NSString)
+        }
+        if let speakSpeed = executionContext.variables["speakSpeed"] {
+            let trimmed = speakSpeed.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let number = Int(trimmed) {
+                context.setObject(number, forKeyedSubscript: "speakSpeed" as NSString)
+            } else if let number = Double(trimmed) {
+                context.setObject(number, forKeyedSubscript: "speakSpeed" as NSString)
+            } else if trimmed.isEmpty {
+                context.setObject(0, forKeyedSubscript: "speakSpeed" as NSString)
+            } else {
+                context.setObject(speakSpeed, forKeyedSubscript: "speakSpeed" as NSString)
+            }
+        }
         context.evaluateScript("""
             (function () {
               var nativeParse = JSON.parse;

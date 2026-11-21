@@ -19,6 +19,7 @@ final class HttpTTSLibraryModel: ObservableObject {
         do {
             var values = try await repository().loadHttpTTS()
             if values.isEmpty { values = try bundledDefaults() }
+            values = Self.upgradingBundledPresets(values)
             engines = sorted(values)
             if !values.isEmpty { try await repository().saveHttpTTS(engines) }
         } catch {
@@ -118,6 +119,24 @@ final class HttpTTSLibraryModel: ObservableObject {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         guard let data = try? encoder.encode(engine) else { return "" }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// 旧版内置朗读源里有试听必失败的写法（百度 pdt=160 已被接口拒绝；Next 引擎未配置接口时拼出 undefined 网址）。
+    /// 用户没改过的旧预设，换成当前内置版本；用户自己改过的保持不动。
+    static func upgradingBundledPresets(_ values: [HttpTTS]) -> [HttpTTS] {
+        guard let url = Bundle.main.url(forResource: "httpTTS", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let defaults = try? JSONDecoder().decode([HttpTTS].self, from: data) else { return values }
+        let bundled = Dictionary(defaults.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return values.map { stored in
+            guard let fresh = bundled[stored.id] else { return stored }
+            let staleBaidu = stored.url.contains("pdt=160")
+            let staleNext = (stored.jsLib ?? "").contains("function apiurl(")
+                && !(stored.jsLib ?? "").contains("iOS 预设修复")
+                && stored.lastUpdateTime <= 1_770_778_835_144
+            guard staleBaidu || staleNext else { return stored }
+            return fresh
+        }
     }
 
     private func bundledDefaults() throws -> [HttpTTS] {

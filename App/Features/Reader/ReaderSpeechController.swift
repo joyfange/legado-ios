@@ -104,10 +104,62 @@ private final class IncrementalAudioResourceLoader: NSObject, AVAssetResourceLoa
     }
 }
 
+/// 朗读设置里的「朗读状态」：阅读页的朗读控制器把当前状态写在这里，设置页（含「我的 › 阅读设置」）都能读到。
 @MainActor
-final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate, @preconcurrency AVAudioPlayerDelegate {
+final class ReaderSpeechStatus: ObservableObject {
+    static let shared = ReaderSpeechStatus()
     @Published private(set) var isSpeaking = false
     @Published private(set) var isPaused = false
+    @Published private(set) var engineName = ""
+
+    var label: String {
+        if isSpeaking { return engineName.isEmpty ? "朗读中" : "朗读中 · \(engineName)" }
+        if isPaused { return "已暂停" }
+        return "未开始"
+    }
+
+    func update(speaking: Bool, paused: Bool) {
+        if isSpeaking != speaking { isSpeaking = speaking }
+        if isPaused != paused { isPaused = paused }
+    }
+
+    func updateEngine(_ name: String) {
+        if engineName != name { engineName = name }
+    }
+}
+
+/// 朗读设置的存储键（朗读页 / 阅读设置共用）。
+enum ReaderSpeechKeys {
+    /// 系统 TTS 音调（0.5～2.0，1.0 为正常）。
+    static let pitchKey = "ttsPitch"
+    /// 在线朗读预加载的段落数（1～10）。
+    static let preloadKey = "ttsPreloadCount"
+    /// 朗读高亮色（浅色 / 深色阅读主题各一个，十六进制）。
+    static let lightHighlight = "ttsHighlightLight"
+    static let darkHighlight = "ttsHighlightDark"
+    static let highlightEnabled = "ttsHighlightEnabled"
+    static let defaultLightHighlight = "FF3B30"
+    static let defaultDarkHighlight = "FF9F0A"
+
+    static var pitch: Float {
+        let value = UserDefaults.standard.object(forKey: pitchKey) as? Double ?? 1
+        return Float(min(max(value, 0.5), 2))
+    }
+
+    static var preload: Int {
+        let value = UserDefaults.standard.object(forKey: preloadKey) as? Int ?? 3
+        return min(max(value, 1), 10)
+    }
+}
+
+@MainActor
+final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency AVSpeechSynthesizerDelegate, @preconcurrency AVAudioPlayerDelegate {
+    @Published private(set) var isSpeaking = false {
+        didSet { ReaderSpeechStatus.shared.update(speaking: isSpeaking, paused: isPaused) }
+    }
+    @Published private(set) var isPaused = false {
+        didSet { ReaderSpeechStatus.shared.update(speaking: isSpeaking, paused: isPaused) }
+    }
     @Published private(set) var errorMessage: String?
     @Published private(set) var completionCount = 0
     @Published private(set) var currentSegmentIndex = 0
@@ -258,6 +310,7 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
         systemSegments = prepareSegments(for: text)
         guard !systemSegments.isEmpty else { return }
         systemSegmentIndex = 0
+        ReaderSpeechStatus.shared.updateEngine("系统 TTS")
         self.segmentIndexOffset = max(segmentIndexOffset, 0)
         startPlayback(segments: systemSegments) { controller in
             controller.playCurrentSystemSegment()
@@ -278,6 +331,8 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
         httpSegments = prepareSegments(for: text)
         guard !httpSegments.isEmpty else { return }
         httpSegmentIndex = 0
+        prefetchedThrough = 0
+        ReaderSpeechStatus.shared.updateEngine(engine.name)
         self.segmentIndexOffset = max(segmentIndexOffset, 0)
         isSpeaking = true
         startPlayback(segments: httpSegments) { controller in
@@ -491,9 +546,16 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
         return availableHTTPEngines.first { String($0.id) == id }
     }
 
+    /// 已经交给预取的最后一个片段序号（「预加载段落」只往后预取这么多段，边读边补）。
+    private var prefetchedThrough = -1
+
     private func prefetchHTTPSegments(from start: Int) {
         guard let engine = httpEngine, start < httpSegments.count else { return }
-        let items: [(HttpTTS, String)] = (start..<httpSegments.count).map { (roleEngine(for: $0) ?? engine, httpSegments[$0]) }
+        let begin = max(start, prefetchedThrough + 1)
+        let end = min(httpSegments.count, start + ReaderSpeechKeys.preload)
+        guard begin < end else { return }
+        prefetchedThrough = end - 1
+        let items: [(HttpTTS, String)] = (begin..<end).map { (roleEngine(for: $0) ?? engine, httpSegments[$0]) }
         let rate = speechRate + 5
         let task = Task { [weak self] in
             guard let self else { return }
@@ -650,7 +712,7 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
             max(AVSpeechUtteranceDefaultSpeechRate * multiplier, AVSpeechUtteranceMinimumSpeechRate),
             AVSpeechUtteranceMaximumSpeechRate
         )
-        utterance.pitchMultiplier = min(max(pitch, 0.5), 2)
+        utterance.pitchMultiplier = min(max(pitch * ReaderSpeechKeys.pitch, 0.5), 2)
         synthesizer.speak(utterance)
         currentSegmentIndex = segmentIndexOffset + paragraphIndex(for: systemSegmentIndex)
         isSpeaking = true
@@ -730,6 +792,7 @@ final class ReaderSpeechController: NSObject, ObservableObject, @preconcurrency 
         let engine = roleEngine(for: httpSegmentIndex) ?? defaultEngine
         let text = httpSegments[httpSegmentIndex]
         currentSegmentIndex = segmentIndexOffset + paragraphIndex(for: httpSegmentIndex)
+        if httpSegmentIndex > 0 { prefetchHTTPSegments(from: httpSegmentIndex + 1) }
         let rate = speechRate + 5
         httpTask?.cancel()
         httpTask = Task { [weak self] in

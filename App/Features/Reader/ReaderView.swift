@@ -9,6 +9,7 @@ struct ReaderView: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.appTheme) private var appTheme
@@ -36,6 +37,14 @@ struct ReaderView: View {
     @State private var quickReplacePick: ReaderTextPick?
     @State private var showsReaderSettings = false
     @State private var showsBookActions = false
+    /// 底栏「大小」快捷面板（替换底栏显示）。
+    @State private var showsQuickStyle = false
+    /// 「大小」面板里打开的设置页（朗读设置、高亮、气泡、标题样式、页眉页脚）。
+    @State private var quickStyleDestination: ReaderQuickStyleAction?
+    /// 阅读页顶部的轻提示（刷新目录、清缓存等结果）。
+    @State private var readerNotice: String?
+    @State private var readerNoticeTask: Task<Void, Never>?
+    @State private var isRefreshingToc = false
     /// 退出阅读时，书还不在书架上：先问是否加入书架。
     @State private var showsAddToShelfPrompt = false
     /// 拖动底部进度条时的本章位置（0…1）；松手后跳转，拖动过程中只预览页码。
@@ -144,6 +153,10 @@ struct ReaderView: View {
     @AppStorage("readerHideStatusBar") private var hideStatusBar = false
     @AppStorage("readerShowBrightness") private var showBrightness = true
     @AppStorage("readerBrightness") private var storedReaderBrightness = 0.0
+    @AppStorage(ReaderSpeechKeys.highlightEnabled) private var speechHighlightEnabled = true
+    @AppStorage(ReaderSpeechKeys.lightHighlight) private var speechHighlightLightHex = ReaderSpeechKeys.defaultLightHighlight
+    @AppStorage(ReaderSpeechKeys.darkHighlight) private var speechHighlightDarkHex = ReaderSpeechKeys.defaultDarkHighlight
+    @AppStorage(ContentSanitizer.chineseConverterKey) private var chineseConverterType = 0
     @AppStorage("readerUseBackgroundImage") private var useBackgroundImage = false
     @AppStorage("themeMode") private var themeMode = "0"
     @AppStorage("enableReadRecord") private var enableReadRecord = true
@@ -237,10 +250,31 @@ struct ReaderView: View {
         .readingHomeIndicatorHidden(hideHomeIndicator)
         .overlay(alignment: .top) {
             if showsReaderMenu {
-                readerTopChrome
-                    .transition(.move(edge: .top).combined(with: .opacity))
+                VStack(spacing: 0) {
+                    readerTopChrome
+                    if showsBookActions {
+                        bookActionsCard
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
+        .overlay(alignment: .top) {
+            if let readerNotice {
+                Text(readerNotice)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(readerChromeTint)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background { readerGlass(Capsule()) }
+                    .padding(.top, showsReaderMenu ? 64 : 12)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: readerNotice)
+        .animation(.easeOut(duration: 0.2), value: showsBookActions)
         .animation(.easeOut(duration: 0.22), value: showsReaderMenu)
         .onAppear {
             activity.beginReading(book)
@@ -309,7 +343,9 @@ struct ReaderView: View {
         .overlay(alignment: .bottom) {
             if showsReaderMenu {
                 Group {
-                    if appTheme.customization?.readerBarStyle == .chat {
+                    if showsQuickStyle {
+                        readerQuickStyleChrome
+                    } else if appTheme.customization?.readerBarStyle == .chat {
                         readerChatBottomChrome
                     } else {
                         readerBottomChrome
@@ -319,15 +355,24 @@ struct ReaderView: View {
             }
         }
         .dismissesSheetOnOutsideTap(Binding(
-            get: { showsStyleControls || showsReaderSettings || showsBookActions },
+            get: { showsStyleControls || showsReaderSettings || quickStyleDestination != nil },
             set: { shown in
                 if !shown {
                     showsStyleControls = false
                     showsReaderSettings = false
-                    showsBookActions = false
+                    quickStyleDestination = nil
                 }
             }
         ))
+        .onChange(of: showsReaderMenu) { shown in
+            if !shown {
+                showsQuickStyle = false
+                showsBookActions = false
+            }
+        }
+        .sheet(item: $quickStyleDestination) { destination in
+            quickStyleSheet(destination).readerPanelAppearance(followsPanelTheme)
+        }
         .sheet(isPresented: $showsTableOfContents) { tableOfContents.readerPanelAppearance(followsPanelTheme) }
         .sheet(isPresented: $showsBookmarks) { bookmarksSheet.readerPanelAppearance(followsPanelTheme) }
         .sheet(item: $reviewPage) { page in
@@ -374,7 +419,6 @@ struct ReaderView: View {
             }
         }
         .sheet(isPresented: $showsReaderSettings) { readerSettings.readerPanelAppearance(followsPanelTheme) }
-        .sheet(isPresented: $showsBookActions) { bookActionsSheet.readerPanelAppearance(followsPanelTheme) }
         .sheet(isPresented: $showsClickActionSettings) { clickActionSettings }
         .sheet(isPresented: $showsContentEditor) { contentEditor }
         .task(id: model.chapterLoadGeneration) {
@@ -446,6 +490,21 @@ struct ReaderView: View {
         }
         .onChange(of: readAloudByPage) { _ in
             restartSpeechAfterReaderLayoutChange()
+        }
+        .onChange(of: storedReaderBrightness) { value in
+            // 阅读设置「显示 › 屏幕设置 › 亮度」：0 表示跟随系统。
+            if value > 0.05 {
+                followsSystemBrightness = false
+                readerBrightness = value
+                UIScreen.main.brightness = CGFloat(value)
+            } else if !followsSystemBrightness {
+                followsSystemBrightness = true
+                UIScreen.main.brightness = CGFloat(brightnessBeforeReading)
+                readerBrightness = brightnessBeforeReading
+            }
+        }
+        .onChange(of: chineseConverterType) { _ in
+            Task { await applyReplaceRulesInPlace() }
         }
         .onChange(of: readAloudWakeLock) { _ in
             updateIdleTimer()
@@ -752,8 +811,24 @@ struct ReaderView: View {
             highlightRevision: highlightRules.revision,
             paragraphBlankLines: paragraphBlankLines,
             centerText: centerText,
-            onSwipeUp: swipeUpExit ? { leaveReader() } : nil
+            onSwipeUp: swipeUpExit ? { leaveReader() } : nil,
+            speechHighlight: speechHighlightRange,
+            speechHighlightColor: speechHighlightColor
         )
+    }
+
+    /// 朗读高亮：正在朗读的段落（按页朗读时不跟读定位，也不高亮）。
+    private var speechHighlightRange: NSRange? {
+        guard speechHighlightEnabled, speech.isSpeaking || speech.isPaused, !readAloudByPage else { return nil }
+        let index = speech.currentSegmentIndex
+        guard model.paragraphs.indices.contains(index) else { return nil }
+        let paragraph = model.paragraphs[index]
+        return NSRange(location: paragraph.id, length: paragraph.text.utf16.count)
+    }
+
+    private var speechHighlightColor: UIColor? {
+        let hex = resolvedStyle.isDark ? speechHighlightDarkHex : speechHighlightLightHex
+        return UIColor(readerHex: hex) ?? (resolvedStyle.isDark ? .systemOrange : .systemRed)
     }
 
     @ViewBuilder private var readerMenuDismissOverlay: some View {
@@ -969,7 +1044,7 @@ struct ReaderView: View {
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                 HStack(spacing: 4) {
-                    Text(model.title).lineLimit(1)
+                    Text(book.originName.isEmpty ? model.title : book.originName).lineLimit(1)
                     if model.loadedFromCache {
                         Image(systemName: "arrow.down.circle")
                             .accessibilityLabel("已缓存")
@@ -983,12 +1058,6 @@ struct ReaderView: View {
             .frame(maxWidth: .infinity, minHeight: 44)
             .background { readerGlass(Capsule()) }
             .accessibilityElement(children: .combine)
-            readerGlassCircleButton(bookmarkSaved ? "bookmark.fill" : "bookmark", label: "书签") {
-                toggleBookmark()
-            }
-            .accessibilityValue(bookmarkSaved ? "已添加" : "添加当前位置")
-            .accessibilityHint(bookmarkSaved ? "轻点取消本页书签" : "")
-            .disabled(isSavingBookmark)
             readerCoverButton
         }
         .foregroundStyle(readerChromeTint)
@@ -1138,8 +1207,8 @@ struct ReaderView: View {
     /// 右上角的圆形封面：轻点打开「书籍操作」面板（原「更多」菜单里的功能都在里面）。
     private var readerCoverButton: some View {
         Button {
-            showsReaderMenu = false
-            showsBookActions = true
+            showsQuickStyle = false
+            withAnimation(.easeOut(duration: 0.2)) { showsBookActions.toggle() }
         } label: {
             BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: 40, height: 56)
                 .frame(width: 38, height: 38, alignment: .center)
@@ -1157,8 +1226,9 @@ struct ReaderView: View {
     /// 关掉「书籍操作」面板后再打开另一个面板（两个 sheet 不能同时弹出）。
     private func afterBookActions(_ action: @escaping @MainActor () -> Void) {
         showsBookActions = false
+        showsReaderMenu = false
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 350_000_000)
+            try? await Task.sleep(nanoseconds: 250_000_000)
             action()
         }
     }
@@ -1167,116 +1237,190 @@ struct ReaderView: View {
         book.origin == "local" && URL(string: book.bookUrl)?.pathExtension.lowercased() == "epub"
     }
 
-    /// 书籍操作面板：上面是封面、书名、作者、书源、进度；下面是操作网格。半屏，不遮住正文。
-    private var bookActionsSheet: some View {
-        ReadingNavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    HStack(alignment: .top, spacing: 14) {
-                        BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: 64, height: 88)
-                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-                            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(book.name)
-                                .font(.headline)
-                                .lineLimit(2)
-                            if !book.author.isEmpty {
-                                Text(book.author)
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            if !book.originName.isEmpty {
-                                Label(book.originName, systemImage: "globe")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Label("进度 \(model.readableNumber(at: model.currentIndex))/\(model.readableChapterCount)", systemImage: "book")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer(minLength: 0)
+    /// 书籍操作卡片（轻点右上角封面，从顶栏下方展开，和参考应用一致）：上面是封面、书名、作者、来源、进度；
+    /// 下面是操作网格：刷新、刷新目录、清缓存并刷新、换源、替换净化、书签列表、浏览器打开，以及本书的其它操作。
+    private var bookActionsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 12) {
+                BookCoverArtwork(title: book.name, author: book.author, remoteURL: book.displayCoverUrl, width: 52, height: 72)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(book.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                    if !book.author.isEmpty {
+                        Text(book.author)
+                            .font(.caption)
+                            .foregroundStyle(readerChromeTint.opacity(0.6))
+                            .lineLimit(1)
                     }
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 18) {
-                        bookAction("arrow.clockwise", "重新获取", enabled: !model.isLoading && model.canEditContent) {
-                            showsBookActions = false
-                            refreshCurrentChapter()
-                        }
-                        bookAction("square.and.pencil", "编辑正文", enabled: model.canEditContent && !model.content.isEmpty) {
-                            afterBookActions {
-                                editedContent = model.content
-                                contentEditError = nil
-                                showsContentEditor = true
-                            }
-                        }
-                        bookAction("arrow.triangle.2.circlepath", "换源", enabled: model.canEditContent) {
-                            afterBookActions { openSourceSwitch() }
-                        }
-                        bookAction("wand.and.stars", "替换净化") {
-                            afterBookActions { showsReplaceRules = true }
-                        }
-                        bookAction("magnifyingglass", "搜索正文") {
-                            afterBookActions { showsContentSearch = true }
-                        }
-                        bookAction("bookmark", "书签列表") {
-                            afterBookActions { showsBookmarks = true }
-                        }
-                        bookAction(isAutoReading ? "stop.circle" : "play.circle", isAutoReading ? "停止自动阅读" : "自动阅读") {
-                            if isAutoReading {
-                                isAutoReading = false
-                                showsBookActions = false
-                            } else {
-                                afterBookActions { showsAutoReadControls = true }
-                            }
-                        }
-                        bookAction(resolvedStyle.isDark ? "sun.max" : "moon",
-                                   resolvedStyle.isDark ? "切换为日间" : "切换为夜间",
-                                   enabled: themeMode != "3") {
-                            toggleNightTheme()
-                        }
-                        if isLocalEPUB {
-                            bookAction("photo.on.rectangle", "本章插图") {
-                                afterBookActions { illustrationChapter = model.currentChapter }
-                            }
-                        }
-                        // 书源自带的评论 / 功能入口（番茄等书源的 callBackJs 与评论函数），和安卓「阅读」一致。
-                        if model.hasSourceCallback {
-                            bookAction("text.bubble", "书评") {
-                                afterBookActions { openSourceScript(sourceEventScript("clickBookName")) }
-                            }
-                            bookAction("square.grid.2x2", "作品功能") {
-                                afterBookActions { openSourceScript(sourceEventScript("clickCustomButton")) }
-                            }
-                        }
-                        if model.sourceDefines("getChapComments") {
-                            bookAction("bubble.left.and.bubble.right", "本章章评") {
-                                afterBookActions { openSourceScript(chapterCommentScript("getChapComments")) }
-                            }
-                        }
-                        if model.sourceDefines("getAuthorSay") {
-                            bookAction("pencil.and.outline", "作家说") {
-                                afterBookActions { openSourceScript(chapterCommentScript("getAuthorSay")) }
-                            }
-                        }
+                    if !book.originName.isEmpty {
+                        readerInfoTag("来源", book.originName)
                     }
-                    Text("重新获取、编辑正文只作用于当前章节。")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    readerInfoTag("进度", "\(model.readableNumber(at: model.currentIndex)) / \(model.readableChapterCount)")
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+                Spacer(minLength: 0)
             }
-            .navigationTitle("书籍操作")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { showsBookActions = false }
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(readerChromeTint.opacity(0.05)))
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 4), spacing: 12) {
+                bookAction("arrow.clockwise", "刷新", enabled: !model.isLoading && model.canEditContent) {
+                    showsBookActions = false
+                    refreshCurrentChapter()
+                }
+                bookAction("list.bullet.rectangle", "刷新目录", enabled: model.canEditContent && !isRefreshingToc) {
+                    showsBookActions = false
+                    refreshTableOfContents()
+                }
+                bookAction("trash.circle", "清缓存并刷新", enabled: !model.isLoading && model.canEditContent) {
+                    showsBookActions = false
+                    clearCacheAndRefresh()
+                }
+                bookAction("arrow.triangle.2.circlepath", "换源", enabled: model.canEditContent) {
+                    afterBookActions { openSourceSwitch() }
+                }
+                bookAction("wand.and.stars", "替换净化") {
+                    afterBookActions { showsReplaceRules = true }
+                }
+                bookAction("bookmark", "书签列表") {
+                    afterBookActions { showsBookmarks = true }
+                }
+                bookAction("safari", "浏览器打开", enabled: chapterWebURL != nil) {
+                    showsBookActions = false
+                    if let url = chapterWebURL { openURL(url) }
+                }
+                bookAction(bookmarkSaved ? "bookmark.fill" : "bookmark.circle", bookmarkSaved ? "取消书签" : "添加书签",
+                           enabled: !isSavingBookmark) {
+                    toggleBookmark()
+                }
+                bookAction("square.and.pencil", "编辑正文", enabled: model.canEditContent && !model.content.isEmpty) {
+                    afterBookActions {
+                        editedContent = model.content
+                        contentEditError = nil
+                        showsContentEditor = true
+                    }
+                }
+                bookAction(isAutoReading ? "stop.circle" : "play.circle", isAutoReading ? "停止自动阅读" : "自动阅读") {
+                    if isAutoReading {
+                        isAutoReading = false
+                        showsBookActions = false
+                    } else {
+                        afterBookActions { showsAutoReadControls = true }
+                    }
+                }
+                bookAction(resolvedStyle.isDark ? "sun.max" : "moon",
+                           resolvedStyle.isDark ? "切换为日间" : "切换为夜间",
+                           enabled: themeMode != "3") {
+                    toggleNightTheme()
+                }
+                if isLocalEPUB {
+                    bookAction("photo.on.rectangle", "本章插图") {
+                        afterBookActions { illustrationChapter = model.currentChapter }
+                    }
+                }
+                // 书源自带的评论 / 功能入口（番茄等书源的 callBackJs 与评论函数），和安卓「阅读」一致。
+                if model.hasSourceCallback {
+                    bookAction("text.bubble", "书评") {
+                        afterBookActions { openSourceScript(sourceEventScript("clickBookName")) }
+                    }
+                    bookAction("square.grid.2x2", "作品功能") {
+                        afterBookActions { openSourceScript(sourceEventScript("clickCustomButton")) }
+                    }
+                }
+                if model.sourceDefines("getChapComments") {
+                    bookAction("bubble.left.and.bubble.right", "本章章评") {
+                        afterBookActions { openSourceScript(chapterCommentScript("getChapComments")) }
+                    }
+                }
+                if model.sourceDefines("getAuthorSay") {
+                    bookAction("pencil.and.outline", "作家说") {
+                        afterBookActions { openSourceScript(chapterCommentScript("getAuthorSay")) }
+                    }
                 }
             }
         }
-        .readingLivePreviewSheet()
-        .readingPresentationDragIndicator()
+        .foregroundStyle(readerChromeTint)
+        .padding(14)
+        .frame(maxWidth: 560)
+        .background { readerGlass(RoundedRectangle(cornerRadius: 24, style: .continuous)) }
+        .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .onTapGesture {}
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .accessibilityIdentifier("reader.bookActions")
+    }
+
+    private func readerInfoTag(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 5) {
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(ReadingTheme.accent.opacity(0.15)))
+                .foregroundStyle(ReadingTheme.accent)
+            Text(value)
+                .font(.caption.weight(.medium))
+                .lineLimit(1)
+        }
+    }
+
+    /// 本章在书源网站上的地址（网络书籍才有）。
+    private var chapterWebURL: URL? {
+        guard model.canEditContent, let raw = model.currentChapter?.url else { return nil }
+        let base = URL(string: book.bookUrl)
+        let resolved = URL(string: raw, relativeTo: base)?.absoluteURL ?? URL(string: raw)
+        guard let resolved, let scheme = resolved.scheme?.lowercased(), ["http", "https"].contains(scheme) else { return nil }
+        return resolved
+    }
+
+    private func showReaderNotice(_ text: String) {
+        readerNoticeTask?.cancel()
+        readerNotice = text
+        readerNoticeTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            readerNotice = nil
+        }
+    }
+
+    /// 刷新目录：重新向书源取目录，换上新目录后当前章按地址找回，书架同步更新。
+    private func refreshTableOfContents() {
+        guard let source = model.source, !isRefreshingToc else { return }
+        isRefreshingToc = true
+        showReaderNotice("正在刷新目录…")
+        let stored = model.book
+        let all = sourceLibrary.sources
+        Task {
+            let detail = BookDetailViewModel(book: stored, source: source)
+            await detail.refresh(sources: all)
+            isRefreshingToc = false
+            guard detail.state == .ready, !detail.chapters.isEmpty else {
+                showReaderNotice("目录刷新失败，稍后再试")
+                return
+            }
+            let latest = library.books.first { $0.bookUrl == stored.bookUrl } ?? stored
+            detail.restoreUserSettings(from: latest)
+            detail.restoreReadingProgress(from: latest)
+            model.replaceChapters(detail.chapters)
+            if library.books.contains(where: { $0.bookUrl == stored.bookUrl }) {
+                var updated = detail.book
+                updated.type = latest.type
+                updated.variable = latest.variable
+                await library.addOrUpdate(updated)
+            }
+            showReaderNotice("目录已刷新，共 \(detail.chapters.filter { !$0.isVolume }.count) 章")
+        }
+    }
+
+    /// 清缓存并刷新：清掉这本书缓存的正文，重新从书源获取本章。
+    private func clearCacheAndRefresh() {
+        stopSpeechIfNeeded()
+        Task {
+            await model.clearCacheAndReload(rules: replaceRules.rules, prefetchNextChapter: pageAnimation != 3)
+            readerPosition = min(readerPosition, model.content.utf16.count)
+            showReaderNotice("已清除缓存并重新获取")
+        }
     }
 
     private func bookAction(_ icon: String, _ title: String, enabled: Bool = true,
@@ -1300,35 +1444,52 @@ struct ReaderView: View {
         .accessibilityLabel(title)
     }
 
+    /// 底栏（参考应用 1:1）：第一行章节名和页码，第二行「‹ 进度 ›」，第三行目录 · 朗读 · 搜索 · 大小。
+    /// 换源在右上角封面的书籍操作里，其它阅读设置在「大小」面板的入口里。
     private var readerBottomChrome: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: 4) {
             readerChapterControls
-            LazyVGrid(columns: readerToolbarColumns, spacing: 4) {
-                readerChromeAction("list.bullet", "目录", item: .toc) {
+            HStack(spacing: 0) {
+                readerBarIcon(.toc, symbol: "list.bullet", label: "目录") {
                     showsReaderMenu = false
                     showsTableOfContents = true
                 }
-                if model.canEditContent {
-                    readerChromeAction("arrow.triangle.2.circlepath", "换源", action: openSourceSwitch)
-                    .accessibilityIdentifier("reader.changeSource")
-                    .accessibilityValue(book.originName)
-                }
-                readerChromeAction(speech.isSpeaking ? "stop.fill" : "headphones", speech.isSpeaking ? "停止" : "朗读",
-                                   isActive: speech.isSpeaking, item: speech.isSpeaking ? nil : .tts) { toggleSpeech() }
-                readerChromeAction("textformat.size", "外观", item: .style) {
+                .accessibilityIdentifier("reader.toolbar.toc")
+                readerBarIcon(speech.isSpeaking ? nil : .tts,
+                              symbol: speech.isSpeaking ? "stop.fill" : "speaker.wave.2",
+                              label: speech.isSpeaking ? "停止朗读" : "朗读",
+                              isActive: speech.isSpeaking) { toggleSpeech() }
+                .accessibilityIdentifier("reader.toolbar.speech")
+                readerBarIcon(.search, symbol: "magnifyingglass", label: "搜索") {
                     showsReaderMenu = false
-                    showsStyleControls = true
+                    showsContentSearch = true
                 }
-                readerChromeAction("gearshape", "设置") {
-                    showsReaderMenu = false
-                    showsReaderSettings = true
+                .accessibilityIdentifier("reader.toolbar.search")
+                Button {
+                    showsBookActions = false
+                    withAnimation(.easeOut(duration: 0.2)) { showsQuickStyle = true }
+                } label: {
+                    Group {
+                        if appTheme.customization?.readerToolbarIcon(.style, dark: readerIsDark) != nil {
+                            readerToolbarIcon(.style, symbol: "textformat.size")
+                        } else {
+                            Text("大小")
+                                .font(.system(size: max(15, readerToolbarIconPointSize - 4), weight: .semibold))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 46)
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("大小")
+                .accessibilityHint("字号、主题、翻页方式和阅读设置")
+                .accessibilityIdentifier("reader.toolbar.style")
             }
         }
         .foregroundStyle(readerChromeTint)
         .padding(.horizontal, 12)
         .padding(.top, 12)
-        .padding(.bottom, 6)
+        .padding(.bottom, 4)
         .frame(maxWidth: 560)
         .background { readerGlass(RoundedRectangle(cornerRadius: 26, style: .continuous)) }
         .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
@@ -1341,9 +1502,90 @@ struct ReaderView: View {
         .background { Color.white.opacity(0.001).ignoresSafeArea(edges: .bottom).onTapGesture {} }
     }
 
-    private var readerToolbarColumns: [GridItem] {
-        let count = dynamicTypeSize.isAccessibilitySize ? (model.canEditContent ? 3 : 2) : (model.canEditContent ? 5 : 4)
-        return Array(repeating: GridItem(.flexible(), spacing: 0), count: count)
+    private func readerBarIcon(_ item: ThemeReaderToolbarItem?, symbol: String, label: String,
+                               isActive: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            readerToolbarIcon(item, symbol: symbol)
+                .frame(maxWidth: .infinity, minHeight: 46)
+                .background {
+                    if isActive {
+                        Capsule().fill(readerChromeTint.opacity(0.1)).padding(.horizontal, 14).padding(.vertical, 4)
+                    }
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// 「大小」面板：替换底栏显示，轻点正文空白处收起。
+    private var readerQuickStyleChrome: some View {
+        ReaderQuickStylePanel(pageAnimation: $pageAnimation, tint: readerChromeTint) { action in
+            handleQuickStyleAction(action)
+        }
+        .padding(14)
+        .frame(maxWidth: 560)
+        .background { readerGlass(RoundedRectangle(cornerRadius: 26, style: .continuous)) }
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .onTapGesture {}
+        .padding(.horizontal, 12)
+        .padding(.bottom, 6)
+        .frame(maxWidth: .infinity)
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .background { Color.white.opacity(0.001).ignoresSafeArea(edges: .bottom).onTapGesture {} }
+        .accessibilityIdentifier("reader.quickStyle")
+    }
+
+    private func handleQuickStyleAction(_ action: ReaderQuickStyleAction) {
+        switch action {
+        case .display:
+            showsReaderMenu = false
+            showsReaderSettings = true
+        case .more:
+            showsReaderMenu = false
+            showsStyleControls = true
+        case .spacing:
+            break
+        default:
+            showsReaderMenu = false
+            quickStyleDestination = action
+        }
+    }
+
+    @ViewBuilder
+    private func quickStyleSheet(_ destination: ReaderQuickStyleAction) -> some View {
+        switch destination {
+        case .speech:
+            readerSettingsPage(.speech, focus: nil)
+        case .titleStyle:
+            readerSettingsPage(.theme, focus: .titleStyle)
+        case .headerFooter:
+            readerSettingsPage(.theme, focus: .headerFooter)
+        case .highlight:
+            ReadingNavigationStack {
+                ReaderHighlightSettingsView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成") { quickStyleDestination = nil }
+                        }
+                    }
+            }
+            .readingLivePreviewSheet()
+            .readingPresentationDragIndicator()
+        case .bubble:
+            ReadingNavigationStack {
+                BubbleStyleSettingsView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("完成") { quickStyleDestination = nil }
+                        }
+                    }
+            }
+            .readingLivePreviewSheet()
+            .readingPresentationDragIndicator()
+        default:
+            readerSettingsPage(.theme, focus: nil)
+        }
     }
 
     /// 进度区：上面一行章节名和本章页码；下面「‹ 滑块 ›」——左右箭头切换章节，
@@ -1622,7 +1864,11 @@ struct ReaderView: View {
     private var readerSettings: some View { readerSettingsPanel(.display) }
 
     private func readerSettingsPanel(_ tab: ReaderSettingsPage.Tab) -> some View {
-        ReaderSettingsPage(initialTab: tab, context: ReaderSettingsPage.ReaderContext(
+        readerSettingsPage(tab, focus: nil)
+    }
+
+    private func readerSettingsPage(_ tab: ReaderSettingsPage.Tab, focus: ReaderThemeSettingsSection?) -> some View {
+        ReaderSettingsPage(initialTab: tab, focus: focus, context: ReaderSettingsPage.ReaderContext(
             pageAnimation: $pageAnimation,
             displayExtras: AnyView(readerDisplayExtras),
             speechExtras: AnyView(readerSpeechExtras),
@@ -1636,6 +1882,7 @@ struct ReaderView: View {
     private func closeSettingsPanels() {
         showsStyleControls = false
         showsReaderSettings = false
+        quickStyleDestination = nil
     }
 
     /// 只在阅读页才有的显示项：本章正文、自动阅读、点击区域、亮度。
@@ -2315,6 +2562,11 @@ struct ReaderView: View {
         guard let database = try? LegadoDatabase(url: LegadoDatabase.defaultURL()) else { return }
         let repository = SQLiteConfigurationRepository(database: database)
         var values = (try? await repository.loadHttpTTS()) ?? []
+        let upgraded = HttpTTSLibraryModel.upgradingBundledPresets(values)
+        if upgraded != values {
+            values = upgraded
+            try? await repository.saveHttpTTS(values)
+        }
         if values.isEmpty,
            let url = Bundle.main.url(forResource: "httpTTS", withExtension: "json"),
            let data = try? Data(contentsOf: url),

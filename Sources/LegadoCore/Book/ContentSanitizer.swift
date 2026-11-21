@@ -397,6 +397,13 @@ public struct ContentSanitizer: Sendable {
             }
         }
 
+        // 阅读设置「显示 › 文字处理」：繁简转换（与安卓 chineseConverterType 一致：1 繁转简，2 简转繁）。
+        let converter = UserDefaults.standard.integer(forKey: Self.chineseConverterKey)
+        if converter == 1 || converter == 2 {
+            title = Self.convertChinese(title, toSimplified: converter == 1)
+            body = Self.convertChinese(body, toSimplified: converter == 1)
+        }
+
         var seen = Set<Int64>()
         effective = effective.filter { seen.insert($0).inserted }
         return .init(
@@ -406,6 +413,15 @@ public struct ContentSanitizer: Sendable {
             removedDuplicateTitle: removed,
             diagnostics: diagnostics
         )
+    }
+
+    public static let chineseConverterKey = "chineseConverterType"
+
+    /// 繁简转换（ICU 的 Hant-Hans 变换，逐字转换，不改变段落结构）。
+    public static func convertChinese(_ text: String, toSimplified: Bool) -> String {
+        guard !text.isEmpty else { return text }
+        let transform = StringTransform(toSimplified ? "Hant-Hans" : "Hans-Hant")
+        return text.applyingTransform(transform, reverse: false) ?? text
     }
 
     private func applies(_ rule: ReplaceRule, to book: Book) -> Bool {

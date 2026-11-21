@@ -307,6 +307,27 @@ final class ReaderViewModel: ObservableObject {
         return current
     }
 
+    /// 阅读页「刷新目录」：换上新目录，当前章按章节地址找回（找不到时保持原序号），正文不重载。
+    func replaceChapters(_ updated: [BookChapter]) {
+        guard !updated.isEmpty else { return }
+        let currentURL = currentChapter?.url
+        discardReadyChapters()
+        chapters = updated
+        if let currentURL, let index = updated.firstIndex(where: { $0.url == currentURL }) {
+            currentIndex = index
+        } else {
+            currentIndex = Self.validIndex(min(currentIndex, updated.count - 1), chapters: updated)
+        }
+        prepareNeighborChapters()
+    }
+
+    /// 阅读页「清缓存并刷新」：清掉这本书缓存的正文，再强制从书源重新获取本章。
+    func clearCacheAndReload(rules: [ReplaceRule], prefetchNextChapter: Bool) async {
+        guard source != nil else { return }
+        sourceCacheNeedsInvalidation = true
+        await load(rules: rules, forceRefresh: true, prefetchNextChapter: prefetchNextChapter)
+    }
+
     func applySourceSwitch(_ report: BookSourceSwitchReport, source: BookSource) {
         book = report.book
         chapters = report.chapters

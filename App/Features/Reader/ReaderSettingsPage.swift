@@ -32,12 +32,15 @@ struct ReaderSettingsPage: View {
     }
 
     let context: ReaderContext?
+    /// 只显示「主题」里的某一组（阅读页「大小」面板的标题样式、页眉页脚、排版直接打开这一组）。
+    let focus: ReaderThemeSettingsSection?
     @State private var tab: Tab
     @Environment(\.dismiss) private var dismiss
 
-    init(initialTab: Tab = .theme, context: ReaderContext? = nil) {
+    init(initialTab: Tab = .theme, focus: ReaderThemeSettingsSection? = nil, context: ReaderContext? = nil) {
         self.context = context
-        _tab = State(initialValue: initialTab)
+        self.focus = focus
+        _tab = State(initialValue: focus == nil ? initialTab : .theme)
     }
 
     var body: some View {
@@ -52,7 +55,7 @@ struct ReaderSettingsPage: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 switch tab {
-                case .theme: ReaderThemeSettingsTab(pageAnimation: context?.pageAnimation)
+                case .theme: ReaderThemeSettingsTab(pageAnimation: context?.pageAnimation, only: focus)
                 case .display: ReaderDisplaySettingsTab(extras: context?.displayExtras)
                 case .speech: ReaderSpeechSettingsTab(extras: context?.speechExtras)
                 }
@@ -62,24 +65,42 @@ struct ReaderSettingsPage: View {
             .padding(.bottom, 48)
         }
         .background { AppThemeCanvas().ignoresSafeArea() }
-        .navigationTitle("阅读设置")
+        .navigationTitle(focus?.title ?? "阅读设置")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Picker("阅读设置", selection: $tab) {
-                    ForEach(Tab.allCases, id: \.self) { item in
-                        Text(item.title).tag(item)
+                if let focus {
+                    Text(focus.title).font(.headline)
+                } else {
+                    Picker("阅读设置", selection: $tab) {
+                        ForEach(Tab.allCases, id: \.self) { item in
+                            Text(item.title).tag(item)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .frame(width: 200)
+                    .accessibilityIdentifier("reader.settings.tabs")
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 200)
-                .accessibilityIdentifier("reader.settings.tabs")
             }
             ToolbarItem(placement: .confirmationAction) {
                 Button("完成") {
                     if let context { context.close() } else { dismiss() }
                 }
             }
+        }
+    }
+}
+
+/// 「主题」里可以单独打开的一组设置。
+enum ReaderThemeSettingsSection: String, Identifiable {
+    case titleStyle, headerFooter, spacing, layout
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .titleStyle: "章节标题样式"
+        case .headerFooter: "页眉页脚"
+        case .spacing: "间距设置"
+        case .layout: "排版设置"
         }
     }
 }
@@ -191,6 +212,7 @@ enum ReaderTipFont {
 
 private struct ReaderThemeSettingsTab: View {
     let pageAnimation: Binding<Int>?
+    var only: ReaderThemeSettingsSection? = nil
     @ThemePalette private var palette
     @ObservedObject private var highlights = ReaderHighlightStore.shared
     @ObservedObject private var bubbleStyles = BubbleStyleStore.shared
@@ -289,6 +311,19 @@ private struct ReaderThemeSettingsTab: View {
     }
 
     var body: some View {
+        if let only {
+            switch only {
+            case .titleStyle: titleSection
+            case .headerFooter: tipSection
+            case .spacing: spacingSection
+            case .layout: layoutSection
+            }
+        } else {
+            fullBody
+        }
+    }
+
+    @ViewBuilder private var fullBody: some View {
         Group {
             pageTurnSection
             AppearanceGroup("手势", prominent: true) {
@@ -317,26 +352,12 @@ private struct ReaderThemeSettingsTab: View {
             }
         }
         Group {
-            AppearanceGroup("底线设置", prominent: true) {
-                AppearanceSegmentedCard(title: "文字底线", options: [(0, "关闭"), (1, "实线"), (2, "虚线")], selection: $underlineMode)
-                ReaderSettingsFootnote(text: "开启后在正文每一行文字下方画线，像横格纸一样辅助阅读。")
-            }
             tipSection
             spacingSection
             titleSection
             layoutSection
         }
         Group {
-        AppearanceGroup("高亮设置", prominent: true) {
-            SwiftUI.NavigationLink {
-                ReaderHighlightSettingsView()
-            } label: {
-                AppearanceRowLabel(title: "正则高亮", icon: "highlighter",
-                                   value: highlights.enabled ? "已启用 \(highlights.enabledCount) 条" : "已关闭", chevron: true)
-            }
-            .buttonStyle(.plain)
-            ReaderSettingsFootnote(text: "按正则给对话、提示等文字上色，可用 CSS 做底色、圆角、渐变和下划线。")
-        }
         bubbleSection
         themeFileSection
         }
@@ -344,7 +365,7 @@ private struct ReaderThemeSettingsTab: View {
 
     // MARK: 翻页
 
-    private static let pageModes: [(Int, String)] = [(2, "仿真"), (1, "滑动"), (0, "覆盖"), (4, "无动画"), (3, "上下滚动")]
+    private static let pageModes: [(Int, String)] = [(2, "仿真"), (1, "滑动"), (0, "平移"), (4, "无动画"), (3, "上下滚动")]
 
     private var pageModeDescription: String {
         switch animationBinding.wrappedValue {
@@ -975,25 +996,149 @@ private struct ReaderTipPaddingPage: View {
 
 private struct ReaderDisplaySettingsTab: View {
     let extras: AnyView?
+    @ObservedObject private var highlights = ReaderHighlightStore.shared
     @AppStorage("screenOrientation") private var screenOrientation = "0"
     @AppStorage("readerKeepScreenOn") private var keepScreenOn = false
     @AppStorage("readerHideHomeIndicator") private var hideHomeIndicator = false
     @AppStorage("readerHideStatusBar") private var hideStatusBar = false
-    @AppStorage("readerShowBrightness") private var showBrightness = true
+    @AppStorage("readerBrightness") private var brightness = 0.0
+    @AppStorage(ContentSanitizer.chineseConverterKey) private var chineseConverter = 0
+    @AppStorage("underlineMode") private var underlineMode = 0
+
+    /// 0 表示跟随系统亮度；拖动滑块就切到自定义亮度。
+    private var followsSystemBrightness: Binding<Bool> {
+        Binding(get: { brightness <= 0.05 }, set: { follows in
+            brightness = follows ? 0 : max(Double(UIScreen.main.brightness), 0.06)
+        })
+    }
+
+    private var brightnessBinding: Binding<Double> {
+        Binding(get: { brightness > 0.05 ? brightness : Double(UIScreen.main.brightness) },
+                set: { brightness = min(max($0, 0.06), 1) })
+    }
+
+    private var showsStatusBar: Binding<Bool> {
+        Binding(get: { !hideStatusBar }, set: { hideStatusBar = !$0 })
+    }
 
     var body: some View {
-        if let extras { extras }
-        AppearanceGroup("屏幕", prominent: true) {
-            AppearancePickerRow(title: "屏幕方向", options: [
-                ("0", "跟随系统"), ("1", "竖向"), ("2", "横向"), ("3", "跟随传感器"), ("4", "反向竖屏"), ("5", "反向横屏")
-            ], selection: $screenOrientation)
-            AppearanceToggleRow(title: "阅读时不自动锁屏", isOn: $keepScreenOn)
+        AppearanceGroup("屏幕设置", prominent: true) {
+            ReaderBrightnessCard(value: brightnessBinding, followsSystem: brightness <= 0.05)
+            AppearanceToggleRow(title: "亮度跟随系统", isOn: followsSystemBrightness)
+            AppearancePickerRow(title: "屏幕常亮", options: [(false, "跟随系统"), (true, "阅读时常亮")], selection: $keepScreenOn)
+            AppearanceToggleRow(title: "显示系统状态栏", isOn: showsStatusBar)
             if #available(iOS 16.0, *) {
                 AppearanceToggleRow(title: "阅读时隐藏小横条", isOn: $hideHomeIndicator)
             }
-            AppearanceToggleRow(title: "隐藏状态栏", isOn: $hideStatusBar)
-            AppearanceToggleRow(title: "显示亮度调节", isOn: $showBrightness)
+            AppearancePickerRow(title: "屏幕方向", options: [
+                ("0", "跟随系统"), ("1", "竖向"), ("2", "横向"), ("3", "跟随传感器"), ("4", "反向竖屏"), ("5", "反向横屏")
+            ], selection: $screenOrientation)
         }
+        AppearanceGroup("文字处理", prominent: true) {
+            AppearancePickerRow(title: "简繁转换", options: [(0, "关闭"), (1, "繁体转简体"), (2, "简体转繁体")],
+                                selection: $chineseConverter)
+            ReaderSettingsFootnote(text: "正文和章节名逐字转换，朗读同样按转换后的文字读。")
+            AppearanceSegmentedCard(title: "文字底线", options: [(0, "关闭"), (1, "实线"), (2, "虚线")], selection: $underlineMode)
+        }
+        AppearanceGroup("正则高亮", prominent: true) {
+            SwiftUI.NavigationLink {
+                ReaderHighlightSettingsView()
+            } label: {
+                AppearanceRowLabel(title: "高亮规则", icon: "highlighter",
+                                   value: highlights.enabled ? "已启用 \(highlights.enabledCount) 条" : "已关闭", chevron: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("reader.display.highlightRules")
+            ReaderSettingsFootnote(text: "按正则给对话、提示等文字上色，可用 CSS 做底色、圆角、渐变和下划线。")
+        }
+        if let extras { extras }
+    }
+}
+
+/// 亮度卡片：小太阳 · 滑块 · 大太阳，右上角显示百分比或「跟随系统」。
+private struct ReaderBrightnessCard: View {
+    @Binding var value: Double
+    let followsSystem: Bool
+    @ThemePalette private var palette
+
+    var body: some View {
+        AppearanceCard {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("亮度").font(AppFontStyle.body.themed).foregroundStyle(palette.primary)
+                    Spacer()
+                    Text(followsSystem ? "跟随系统" : "\(Int((value * 100).rounded()))%")
+                        .font(AppFontStyle.subheadline.themed.monospacedDigit())
+                        .foregroundStyle(palette.secondary)
+                }
+                HStack(spacing: 10) {
+                    Image(systemName: "sun.min").foregroundStyle(palette.secondary)
+                    AppearanceSlider(value: $value, range: 0.06...1)
+                        .accessibilityLabel("亮度")
+                    Image(systemName: "sun.max").foregroundStyle(palette.secondary)
+                }
+            }
+        }
+    }
+}
+
+/// 「数值框 + 单位」「− 滑块 +」「范围说明」的调节行（朗读速度、音调、预加载段落）。
+private struct ReaderStepperSliderRow: View {
+    let title: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    var unit: String = ""
+    var digits: Int = 1
+    var note: String? = nil
+    var disabled = false
+    @ThemePalette private var palette
+
+    private var text: String {
+        digits == 0 ? "\(Int(value.rounded()))" : String(format: "%.\(digits)f", value)
+    }
+
+    private func nudge(_ delta: Double) {
+        let next = ((value + delta) / step).rounded() * step
+        value = min(max(next, range.lowerBound), range.upperBound)
+    }
+
+    var body: some View {
+        AppearanceCard {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Text(title).font(AppFontStyle.body.themed).foregroundStyle(palette.primary)
+                    Spacer()
+                    Text(text)
+                        .font(AppFontStyle.subheadline.themed.monospacedDigit())
+                        .foregroundStyle(palette.primary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 3)
+                        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(palette.secondary.opacity(0.12)))
+                    if !unit.isEmpty {
+                        Text(unit).font(AppFontStyle.footnote.themed).foregroundStyle(palette.secondary)
+                    }
+                }
+                HStack(spacing: 10) {
+                    Button { nudge(-step) } label: {
+                        Image(systemName: "minus.circle.fill").font(.system(size: 20)).foregroundStyle(palette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("减小\(title)")
+                    AppearanceSlider(value: $value, range: range, step: step)
+                    Button { nudge(step) } label: {
+                        Image(systemName: "plus.circle.fill").font(.system(size: 20)).foregroundStyle(palette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("增大\(title)")
+                }
+                if let note {
+                    Text(note).font(AppFontStyle.caption.themed).foregroundStyle(palette.secondary)
+                }
+            }
+        }
+        .disabled(disabled)
+        .opacity(disabled ? 0.45 : 1)
     }
 }
 
@@ -1001,6 +1146,7 @@ private struct ReaderDisplaySettingsTab: View {
 
 private struct ReaderSpeechSettingsTab: View {
     let extras: AnyView?
+    @ObservedObject private var status = ReaderSpeechStatus.shared
     @AppStorage("appTtsEngine") private var appTTSEngine = ""
     @AppStorage("systemTtsVoice") private var systemTTSVoice = ""
     @AppStorage("ttsFollowSys") private var ttsFollowSystem = true
@@ -1012,7 +1158,13 @@ private struct ReaderSpeechSettingsTab: View {
     @AppStorage("pauseReadAloudWhilePhoneCalls") private var pauseReadAloudWhilePhoneCalls = false
     @AppStorage("mediaButtonPerNext") private var mediaButtonPerNext = false
     @AppStorage("ttsTimer") private var ttsTimer = 0
+    @AppStorage(ReaderSpeechKeys.pitchKey) private var pitch = 1.0
+    @AppStorage(ReaderSpeechKeys.preloadKey) private var preloadCount = 3
+    @AppStorage(ReaderSpeechKeys.highlightEnabled) private var highlightEnabled = true
+    @AppStorage(ReaderSpeechKeys.lightHighlight) private var lightHighlight = ReaderSpeechKeys.defaultLightHighlight
+    @AppStorage(ReaderSpeechKeys.darkHighlight) private var darkHighlight = ReaderSpeechKeys.defaultDarkHighlight
     @State private var engines: [HttpTTS] = []
+    @State private var confirmsReset = false
 
     private var voices: [AVSpeechSynthesisVoice] {
         AVSpeechSynthesisVoice.speechVoices()
@@ -1020,48 +1172,122 @@ private struct ReaderSpeechSettingsTab: View {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// 存储的语速 0～45 对应 0.5x～5.0x（与朗读控制器的 (rate + 5) / 10 一致）。
     private var rateBinding: Binding<Double> {
-        Binding(get: { Double(ttsSpeechRate) }, set: { ttsSpeechRate = Int($0.rounded()) })
+        Binding(get: { Double(ttsSpeechRate + 5) / 10 },
+                set: { ttsSpeechRate = min(max(Int(($0 * 10).rounded()) - 5, 0), 45) })
+    }
+
+    private var preloadBinding: Binding<Double> {
+        Binding(get: { Double(preloadCount) }, set: { preloadCount = min(max(Int($0.rounded()), 1), 10) })
     }
 
     private var timerBinding: Binding<Double> {
         Binding(get: { Double(ttsTimer) }, set: { ttsTimer = Int($0.rounded()) })
     }
 
+    private var engineName: String {
+        engines.first { String($0.id) == appTTSEngine }?.name ?? "系统 TTS"
+    }
+
     var body: some View {
-        if let extras { extras }
         AppearanceGroup("朗读引擎", prominent: true) {
-            AppearancePickerRow(title: "全局朗读引擎",
+            AppearancePickerRow(title: "引擎",
                                 options: [("", "系统 TTS")] + engines.map { (String($0.id), $0.name) },
                                 selection: $appTTSEngine)
-            AppearancePickerRow(title: "系统声音",
-                                options: [("", "系统默认中文声音")] + voices.map { ($0.identifier, "\($0.name)（\($0.language)）") },
-                                selection: $systemTTSVoice)
-        }
-        AppearanceGroup("语速", prominent: true) {
-            AppearanceToggleRow(title: "跟随系统语速", isOn: $ttsFollowSystem)
-            if !ttsFollowSystem {
-                AppearanceSliderRow(title: "朗读语速", value: rateBinding, range: 0...45, step: 1) { "\(Int($0))" }
+            SwiftUI.NavigationLink {
+                HttpTTSManagementView()
+                    .onDisappear { Task { await loadEngines(force: true) } }
+            } label: {
+                AppearanceRowLabel(title: "朗读管理", icon: "waveform", value: "\(engines.count) 个源", chevron: true)
             }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("reader.speech.manageEngines")
+        }
+        if let extras { extras }
+        AppearanceGroup("朗读高亮", prominent: true) {
+            AppearanceToggleRow(title: "朗读时高亮当前段落", isOn: $highlightEnabled)
+            AppearanceColorRow(title: "浅色模式高亮色", hex: lightHighlight) { lightHighlight = $0 }
+            AppearanceColorRow(title: "深色模式高亮色", hex: darkHighlight) { darkHighlight = $0 }
+            ReaderSettingsFootnote(text: "正在朗读的段落用这个颜色显示，翻页、滚动模式都会跟读定位。")
+        }
+        AppearanceGroup("音频混合", prominent: true) {
+            AppearanceToggleRow(title: "与其他应用同时播放", isOn: $ignoreAudioFocus)
+            ReaderSettingsFootnote(text: "开启后朗读会与其他应用同时播放，关闭后朗读会独占音频输出，不再只是压低其他音频。")
+            AppearanceToggleRow(title: "同时播放时来电仍暂停", isOn: $pauseReadAloudWhilePhoneCalls, disabled: !ignoreAudioFocus)
+        }
+        AppearanceGroup("朗读状态", prominent: true) {
+            AppearanceRowLabel(title: "当前状态", value: status.label)
+        }
+        AppearanceGroup("语音设置", prominent: true) {
+            AppearancePickerRow(title: "朗读语音",
+                                options: [("", "系统默认中文声音")] + voices.map { ($0.identifier, SpeechVoiceCatalog.label($0)) },
+                                selection: $systemTTSVoice)
+            AppearanceToggleRow(title: "语速跟随系统", isOn: $ttsFollowSystem)
+            ReaderStepperSliderRow(title: "朗读速度", value: rateBinding, range: 0.5...5.0, step: 0.1,
+                                   unit: "x", note: "范围：0.5x - 5.0x", disabled: ttsFollowSystem)
+            ReaderStepperSliderRow(title: "音调", value: $pitch, range: 0.5...2.0, step: 0.1,
+                                   note: "范围：0.5 - 2.0（0.5=低沉，1.0=正常，2.0=高亮），作用于系统 TTS")
+            ReaderStepperSliderRow(title: "预加载段落", value: preloadBinding, range: 1...10, step: 1,
+                                   unit: "段", digits: 0, note: "范围：1 - 10，在线朗读预加载更多段落可减少卡顿")
         }
         AppearanceGroup("朗读方式", prominent: true) {
             AppearanceToggleRow(title: "按页朗读", isOn: $readAloudByPage)
             AppearanceToggleRow(title: "流式播放在线音频", isOn: $streamReadAloudAudio)
             AppearanceToggleRow(title: "朗读时保持亮屏", isOn: $readAloudWakeLock)
-            AppearanceToggleRow(title: "忽略音频焦点", isOn: $ignoreAudioFocus)
-            AppearanceToggleRow(title: "忽略焦点时仍在来电时暂停", isOn: $pauseReadAloudWhilePhoneCalls, disabled: !ignoreAudioFocus)
             AppearanceToggleRow(title: "媒体上一首/下一首切换章节", isOn: $mediaButtonPerNext)
             AppearanceSliderRow(title: "默认定时", value: timerBinding, range: 0...180, step: 5) {
                 $0 < 1 ? "关闭" : "\(Int($0)) 分钟"
             }
         }
+        Button {
+            confirmsReset = true
+        } label: {
+            AppearanceCard {
+                Text("恢复默认设置")
+                    .font(AppFontStyle.body.themed)
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("reader.speech.reset")
+        .confirmationDialog("把朗读设置恢复为默认值？", isPresented: $confirmsReset, titleVisibility: .visible) {
+            Button("恢复默认设置", role: .destructive) { resetDefaults() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("引擎、语音、语速、音调、预加载、高亮色和朗读方式会恢复默认；朗读源本身不受影响。")
+        }
         .task { await loadEngines() }
     }
 
-    private func loadEngines() async {
-        guard engines.isEmpty, let database = try? LegadoDatabase(url: LegadoDatabase.defaultURL()) else { return }
+    private func resetDefaults() {
+        appTTSEngine = ""
+        systemTTSVoice = ""
+        ttsFollowSystem = true
+        ttsSpeechRate = 5
+        pitch = 1.0
+        preloadCount = 3
+        highlightEnabled = true
+        lightHighlight = ReaderSpeechKeys.defaultLightHighlight
+        darkHighlight = ReaderSpeechKeys.defaultDarkHighlight
+        readAloudByPage = false
+        streamReadAloudAudio = true
+        readAloudWakeLock = false
+        ignoreAudioFocus = false
+        pauseReadAloudWhilePhoneCalls = false
+        mediaButtonPerNext = false
+        ttsTimer = 0
+    }
+
+    private func loadEngines(force: Bool = false) async {
+        guard engines.isEmpty || force, let database = try? LegadoDatabase(url: LegadoDatabase.defaultURL()) else { return }
         let repository = SQLiteConfigurationRepository(database: database)
         var values = (try? await repository.loadHttpTTS()) ?? []
+        let upgraded = HttpTTSLibraryModel.upgradingBundledPresets(values)
+        if upgraded != values {
+            values = upgraded
+            try? await repository.saveHttpTTS(values)
+        }
         if values.isEmpty,
            let url = Bundle.main.url(forResource: "httpTTS", withExtension: "json"),
            let data = try? Data(contentsOf: url),
@@ -1536,6 +1762,272 @@ final class ReaderThemeStore: ObservableObject {
     private func persist() {
         if let data = try? JSONEncoder().encode(themes) {
             defaults.set(data, forKey: Self.storageKey)
+        }
+    }
+}
+
+// MARK: - 阅读页「大小」快捷面板
+
+/// 「大小」面板底部八个入口。
+enum ReaderQuickStyleAction: String, Identifiable {
+    case display, spacing, speech, highlight, bubble, titleStyle, headerFooter, more
+    var id: String { rawValue }
+}
+
+/// 参考应用阅读页底栏「大小」：字号 + 字体、浅色 / 深色主题色块、跟随系统深浅色、翻页方式，
+/// 下面 2×4 的入口（显示、间距、朗读、高亮、气泡、标题样式、页眉页脚、更多设置）。
+/// 「间距设置」在面板里原地展开，其余入口由阅读页打开对应的设置页。
+struct ReaderQuickStylePanel: View {
+    @Binding var pageAnimation: Int
+    let tint: Color
+    let onAction: (ReaderQuickStyleAction) -> Void
+
+    @AppStorage("textSize") private var fontSize = 20.0
+    @AppStorage("textFont") private var fontPath = ""
+    @AppStorage("readerTheme") private var theme = "wechat"
+    @AppStorage("readerPreviousDayTheme") private var previousDayTheme = "wechat"
+    @AppStorage("readerDarkTheme") private var darkTheme = "night"
+    @AppStorage("readerFollowSystemDark") private var followSystemDark = false
+    @AppStorage("readerUseBackgroundImage") private var useBackgroundImage = false
+    @AppStorage("lineSpacingExtra") private var lineSpacing = 12.0
+    @AppStorage("paragraphSpacing") private var paragraphSpacing = 2.0
+    @AppStorage("paddingLeft") private var paddingLeft = 16.0
+    @AppStorage("paddingRight") private var paddingRight = 16.0
+    @AppStorage("paddingTop") private var paddingTop = 6.0
+    @AppStorage("paddingBottom") private var paddingBottom = 6.0
+    @State private var showsSpacing = false
+
+    private static let pageModes: [(Int, String)] = [(2, "仿真"), (1, "滑动"), (0, "平移"), (4, "无动画"), (3, "上下滚动")]
+
+    private var fontTitle: String {
+        fontPath.isEmpty ? "系统字体" : URL(fileURLWithPath: fontPath).deletingPathExtension().lastPathComponent
+    }
+
+    var body: some View {
+        Group {
+            if showsSpacing {
+                spacingPage
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                mainPage
+                    .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: showsSpacing)
+        .foregroundStyle(tint)
+    }
+
+    // MARK: 主页
+
+    private var mainPage: some View {
+        VStack(spacing: 12) {
+            fontRow
+            swatchRow(ReaderStylePreset.lightPresets + [ReaderStylePreset.custom(dark: false)], dark: false, icon: "sun.max")
+            swatchRow(ReaderStylePreset.darkPresets + [ReaderStylePreset.custom(dark: true)], dark: true, icon: "moon")
+            HStack(spacing: 8) {
+                Image(systemName: "circle.lefthalf.filled").font(.system(size: 14))
+                Text("跟随系统深浅色").font(.system(size: 13))
+                Spacer()
+                Toggle("跟随系统深浅色", isOn: $followSystemDark)
+                    .labelsHidden()
+                    .tint(ReadingTheme.accent)
+            }
+            .padding(.horizontal, 4)
+            pageModeRow
+            actionGrid
+        }
+    }
+
+    private var fontRow: some View {
+        HStack(spacing: 10) {
+            Button { fontSize = max(5, fontSize - 1) } label: {
+                Text("小").font(.system(size: 12, weight: .medium)).frame(width: 30, height: 30)
+                    .background(Circle().fill(tint.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("字号减小")
+            Slider(value: $fontSize, in: 5...50, step: 1)
+                .tint(ReadingTheme.accent)
+                .accessibilityLabel("字号")
+                .accessibilityValue("\(Int(fontSize))")
+            Button { fontSize = min(50, fontSize + 1) } label: {
+                Text("大").font(.system(size: 16, weight: .semibold)).frame(width: 30, height: 30)
+                    .background(Circle().fill(tint.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("字号增大")
+            Menu {
+                Button { fontPath = "" } label: {
+                    Label("系统字体", systemImage: fontPath.isEmpty ? "checkmark" : "textformat")
+                }
+                ForEach(ReaderHighlighter.importedFonts(), id: \.self) { file in
+                    let path = ReaderFontStore.directory.appendingPathComponent(file).path
+                    Button { fontPath = path } label: {
+                        Label((file as NSString).deletingPathExtension, systemImage: fontPath == path ? "checkmark" : "textformat")
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Text(fontTitle).lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                }
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 10)
+                .frame(height: 30)
+                .frame(maxWidth: 96)
+                .background(Capsule().fill(tint.opacity(0.08)))
+            }
+            .accessibilityLabel("字体")
+        }
+    }
+
+    private func isSelected(_ id: String, dark: Bool) -> Bool {
+        if useBackgroundImage { return false }
+        if followSystemDark {
+            if dark { return darkTheme == id }
+            return ReaderStylePreset.darkIDs.contains(theme) ? previousDayTheme == id : theme == id
+        }
+        return theme == id
+    }
+
+    private func select(_ id: String, dark: Bool) {
+        UISelectionFeedbackGenerator().selectionChanged()
+        useBackgroundImage = false
+        if dark { darkTheme = id } else { previousDayTheme = id }
+        theme = id
+    }
+
+    private func swatchRow(_ presets: [ReaderStylePreset], dark: Bool, icon: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon).font(.system(size: 14)).frame(width: 18)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(presets) { preset in
+                        let selected = isSelected(preset.id, dark: dark)
+                        Button { select(preset.id, dark: dark) } label: {
+                            Text("文")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(Color(uiColor: preset.foreground))
+                                .frame(width: 32, height: 32)
+                                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color(uiColor: preset.background)))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .strokeBorder(selected ? ReadingTheme.accent : tint.opacity(0.15), lineWidth: selected ? 2 : 0.75)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(preset.name)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+        }
+    }
+
+    private var pageModeRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "book").font(.system(size: 14)).frame(width: 18)
+            HStack(spacing: 2) {
+                ForEach(Self.pageModes, id: \.0) { mode in
+                    let selected = pageAnimation == mode.0
+                    Button {
+                        UISelectionFeedbackGenerator().selectionChanged()
+                        pageAnimation = mode.0
+                    } label: {
+                        Text(mode.1)
+                            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                            .foregroundStyle(selected ? Color.white : tint)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(maxWidth: .infinity, minHeight: 28)
+                            .background { if selected { Capsule().fill(ReadingTheme.accent) } }
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(2)
+            .background(Capsule().fill(tint.opacity(0.07)))
+        }
+        .accessibilityIdentifier("reader.quick.pageMode")
+    }
+
+    private var actionGrid: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+            tile(.display, title: "显示设置") { Text("大小").font(.system(size: 14, weight: .semibold)) }
+            tile(.spacing, title: "间距设置") { Image(systemName: "text.alignleft") }
+            tile(.speech, title: "朗读设置") { Image(systemName: "speaker.wave.2") }
+            tile(.highlight, title: "高亮设置") { Image(systemName: "highlighter") }
+            tile(.bubble, title: "气泡设置") { Image(systemName: "text.bubble") }
+            tile(.titleStyle, title: "标题样式") { Text("格式").font(.system(size: 14, weight: .semibold)) }
+            tile(.headerFooter, title: "页眉页脚") { Image(systemName: "doc.text") }
+            tile(.more, title: "更多设置") { Image(systemName: "ellipsis.circle") }
+        }
+    }
+
+    private func tile<Icon: View>(_ action: ReaderQuickStyleAction, title: String, @ViewBuilder icon: () -> Icon) -> some View {
+        Button {
+            if action == .spacing { showsSpacing = true } else { onAction(action) }
+        } label: {
+            VStack(spacing: 3) {
+                icon()
+                    .font(.system(size: 17))
+                    .frame(height: 22)
+                Text(title)
+                    .font(.system(size: 10))
+                    .foregroundStyle(tint.opacity(0.7))
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 52)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(tint.opacity(0.07)))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityIdentifier("reader.quick.\(action.rawValue)")
+    }
+
+    // MARK: 间距
+
+    private var spacingPage: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ZStack {
+                Text("间距设置").font(.system(size: 15, weight: .semibold))
+                HStack {
+                    Button { showsSpacing = false } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 32, height: 32)
+                            .background(Circle().fill(tint.opacity(0.08)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("返回")
+                    Spacer()
+                }
+            }
+            spacingSlider("行间距", value: $lineSpacing, range: 0...50, step: 1)
+            spacingSlider("段间距", value: $paragraphSpacing, range: 0...50, step: 0.5)
+            spacingSlider("左边距", value: $paddingLeft, range: 0...100, step: 1)
+            spacingSlider("右边距", value: $paddingRight, range: 0...100, step: 1)
+            spacingSlider("上边距", value: $paddingTop, range: 0...100, step: 1)
+            spacingSlider("下边距", value: $paddingBottom, range: 0...100, step: 1)
+        }
+    }
+
+    private func spacingSlider(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title).font(.system(size: 13))
+                Spacer()
+                Text(step < 1 ? String(format: "%.1f", value.wrappedValue) : "\(Int(value.wrappedValue))")
+                    .font(.system(size: 12).monospacedDigit())
+                    .foregroundStyle(tint.opacity(0.6))
+            }
+            Slider(value: value, in: range, step: step)
+                .tint(ReadingTheme.accent)
+                .accessibilityLabel(title)
         }
     }
 }

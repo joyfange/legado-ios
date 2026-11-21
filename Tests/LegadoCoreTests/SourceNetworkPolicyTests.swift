@@ -371,6 +371,42 @@ struct SourceNetworkPolicyTests {
         #expect(requests.count == 1)
     }
 
+    @Test func httpTTSExposesSpeakVariablesToJavaScriptLikeAndroid() async throws {
+        let url = try #require(URL(string: "https://tts.example/js"))
+        let transport = RecordingPolicyTransport(results: [.success(.init(
+            data: Data([0x49, 0x44, 0x33]),
+            statusCode: 200,
+            headers: ["Content-Type": "audio/mpeg"],
+            finalURL: url
+        ))])
+        var engine = HttpTTS(id: 31, name: "脚本", url: "@js:apiurl(speakText, speakSpeed);")
+        engine.jsLib = "function apiurl(t, s) { return 'https://tts.example/js?t=' + encodeURIComponent(t) + '&r=' + ((s - 10) * 10) + '&b=' + ((speakSpeed + 5) / 10 + 4); }"
+        let cache = HttpTTSAudioCache(directory: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        let service = HttpTTSService(networkPolicy: .init(), transport: transport, cache: cache)
+
+        _ = try await service.audio(engine: engine, text: "试听", speechRate: 15)
+
+        let request = try #require(await transport.requests().first)
+        let absolute = request.url?.absoluteString ?? ""
+        #expect(absolute.contains("r=50"))
+        #expect(absolute.contains("b=6"))
+        #expect(!absolute.contains("undefined"))
+    }
+
+    @Test func httpTTSReportsMissingLoginFieldsBeforeRequesting() async throws {
+        let transport = RecordingPolicyTransport(results: [])
+        let engine = HttpTTS(id: 32, name: "阿里云", url: #"https://tts.example/a,{"method":"POST","body":{"appkey":"{{source.getLoginInfoMap().get('AppKey')}}","text":"{{speakText}}"}}"#)
+        let service = HttpTTSService(
+            networkPolicy: .init(),
+            transport: transport,
+            cache: HttpTTSAudioCache(directory: FileManager.default.temporaryDirectory.appending(path: UUID().uuidString))
+        )
+        await #expect(throws: HttpTTSServiceError.self) {
+            _ = try await service.audio(engine: engine, text: "试听", speechRate: 5)
+        }
+        #expect(await transport.requests().isEmpty)
+    }
+
     @Test func httpTTSStreamsChunksAndStoresCompletedResponseInCache() async throws {
         let url = try #require(URL(string: "https://tts.example/stream"))
         let first = Data(repeating: 0x41, count: 4)

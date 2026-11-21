@@ -201,6 +201,9 @@ struct ReaderTextView: UIViewRepresentable {
     var centerText: Bool = false
     /// 翻页模式下上滑退出阅读；为 nil 时不响应。
     var onSwipeUp: (() -> Void)? = nil
+    /// 朗读高亮：正在朗读的段落（本章正文里的 UTF-16 范围）和高亮色；nil 不高亮。
+    var speechHighlight: NSRange? = nil
+    var speechHighlightColor: UIColor? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
 
@@ -399,6 +402,12 @@ struct ReaderTextView: UIViewRepresentable {
         if context.coordinator.lastChapterTurnToken == nil || context.coordinator.styleKey == styleKey {
             context.coordinator.lastChapterTurnToken = chapterTurnToken
         }
+        context.coordinator.updateSpeechHighlight(
+            in: view,
+            range: speechHighlight,
+            color: speechHighlightColor,
+            styleKey: context.coordinator.styleKey
+        )
         context.coordinator.updateLoadingFooter(in: view, visible: isLoadingNextChapter)
         context.coordinator.updateAutoRead(
             isRunning: isAutoReading,
@@ -514,6 +523,37 @@ struct ReaderTextView: UIViewRepresentable {
         var primaryContentKey = 0
         var styleKey = ""
         var renderedPrefixLength = 0
+        private var speechHighlightKey = ""
+        private var speechHighlightApplied: NSRange?
+
+        /// 用排版器的临时属性给正在朗读的段落上色：不重新排版，阅读位置和分页都不变。
+        func updateSpeechHighlight(in view: UITextView, range: NSRange?, color: UIColor?, styleKey: String) {
+            let key: String
+            if let range, let color {
+                key = "\(range.location)|\(range.length)|\(color.hash)|\(styleKey)|\(renderedPrefixLength)"
+            } else {
+                key = ""
+            }
+            guard key != speechHighlightKey else { return }
+            speechHighlightKey = key
+            let manager = view.layoutManager
+            let length = view.textStorage.length
+            if let old = speechHighlightApplied {
+                let clipped = NSIntersectionRange(old, NSRange(location: 0, length: length))
+                if clipped.length > 0 {
+                    manager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clipped)
+                }
+                speechHighlightApplied = nil
+            }
+            guard let range, let color else { return }
+            let target = NSIntersectionRange(
+                NSRange(location: range.location + renderedPrefixLength, length: range.length),
+                NSRange(location: 0, length: length)
+            )
+            guard target.length > 0 else { return }
+            manager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: target)
+            speechHighlightApplied = target
+        }
         var currentSectionStart = 0
         var currentBodyEnd = 0
         var previousBodyStart: Int?
