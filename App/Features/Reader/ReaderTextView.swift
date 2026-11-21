@@ -213,6 +213,7 @@ struct ReaderTextView: UIViewRepresentable {
         // 正则高亮的自绘排版器在创建文本视图之前就装好：自己建 TextKit 1 三件套再用
         // init(frame:textContainer:) 创建。不能事后对系统文本视图调用 replaceLayoutManager——
         // 文本视图内部仍引用被换掉（随即释放）的旧排版器，打开书就会闪退。
+        LegadoCrashLog.mark("正文视图创建")
         let view = ReaderLayoutTextView.makeTextKit1()
         view.onLayout = { [weak coordinator = context.coordinator] view in
             coordinator?.updatePageBreaker(in: view)
@@ -368,9 +369,11 @@ struct ReaderTextView: UIViewRepresentable {
             }
             context.coordinator.updatePageBreaker(in: view, invalidate: false)
             context.coordinator.isApplyingContent = true
+            LegadoCrashLog.mark("排版正文 \(rendered.length) 字符")
             view.attributedText = rendered
             context.coordinator.resetSpeechHighlight()
             context.coordinator.isApplyingContent = false
+            LegadoCrashLog.mark("正文已排版")
             context.coordinator.scroll(
                 to: primaryContentChanged ? requestedPosition : visiblePosition,
                 in: view

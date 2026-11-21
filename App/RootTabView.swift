@@ -1776,7 +1776,11 @@ struct BookshelfReadView: View {
                 ReaderOpeningPlaceholder()
             }
         }
-        .task { await model.load(book: book, source: source) }
+        .task {
+            LegadoCrashLog.mark("打开书籍《\(book.name)》 来源 \(source?.bookSourceName ?? "本地")")
+            await model.load(book: book, source: source)
+            LegadoCrashLog.mark("目录读取完成 \(model.chapters.count) 章 错误 \(model.errorMessage ?? "无")")
+        }
     }
 }
 
@@ -1836,6 +1840,7 @@ private struct ReaderOpeningPlaceholder: View {
         .navigationBarBackButtonHidden(true)
         .readingTabBarHidden()
         .task {
+            LegadoCrashLog.mark("过渡页出现")
             try? await Task.sleep(nanoseconds: 500_000_000)
             withAnimation(.easeIn(duration: 0.2)) { showsSpinner = true }
         }

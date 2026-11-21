@@ -60,6 +60,7 @@ struct ReaderScrollView: UIViewRepresentable {
         init(parent: ReaderScrollView) { self.parent = parent }
 
         func makeView() -> ReaderScrollCollectionView {
+            LegadoCrashLog.mark("滚动正文视图创建")
             let collection = ReaderScrollCollectionView(frame: .zero, collectionViewLayout: ReaderContinuousLayout())
             collection.backgroundColor = parent.configuration.backgroundColor
             collection.contentInsetAdjustmentBehavior = .never

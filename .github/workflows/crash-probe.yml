@@ -1,0 +1,43 @@
+name: Crash probe
+
+on:
+  push:
+    branches: ["reader-improvements"]
+  workflow_dispatch:
+
+concurrency:
+  group: probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: 打开书籍（Release 优化）
+    runs-on: macos-15-intel
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - name: 选择 Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          [ -n "$XC" ] && sudo xcode-select -s "$XC"
+      - name: 选择模拟器
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys;d=json.load(sys.stdin)['devices'];c=[x for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')];print(c[-1]['udid'])")
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$UDID" || true
+      - name: 打开书籍测试（Release）
+        run: |
+          set -o pipefail
+          xcodebuild -project Legado.xcodeproj -scheme LegadoReaderTests -configuration Release \
+            -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+            -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES \
+            -only-testing:LegadoReaderTests/ReaderOpenBookTests \
+            test 2>&1 | tee probe.log | grep -E "(error:|Test Case|Executed|crash|Crash|\*\* TEST)" | tail -n 200
+      - name: 崩溃日志
+        if: always()
+        run: |
+          for f in $(ls -t ~/Library/Logs/DiagnosticReports/*.ips 2>/dev/null | head -3); do
+            echo "=== $f"; head -c 60000 "$f"; echo
+          done
+          grep -nE "Fatal error|fatal error|Thread [0-9]+ Crashed|EXC_|SIGABRT|Terminating app|crashed|Restarting after unexpected exit" probe.log | head -n 50

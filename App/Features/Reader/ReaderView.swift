@@ -175,6 +175,7 @@ struct ReaderView: View {
 
 
     init(book: Book, chapters: [BookChapter], initialIndex: Int, source: BookSource) {
+        LegadoCrashLog.mark("阅读页创建（书源）第 \(initialIndex) 章 / \(chapters.count)")
         _pageAnimation = State(initialValue: book.readConfig?.pageAnim.flatMap { $0 >= 0 ? $0 : nil }
             ?? Self.globalPageAnimation())
         _model = StateObject(wrappedValue: ReaderViewModel(
@@ -186,6 +187,7 @@ struct ReaderView: View {
     }
 
     init(book: Book, chapters: [BookChapter], initialIndex: Int, usesEPUBLayout: Bool = true) {
+        LegadoCrashLog.mark("阅读页创建（本地）第 \(initialIndex) 章 / \(chapters.count)")
         self.usesEPUBLayout = usesEPUBLayout
         _pageAnimation = State(initialValue: book.readConfig?.pageAnim.flatMap { $0 >= 0 ? $0 : nil }
             ?? Self.globalPageAnimation())
@@ -279,6 +281,7 @@ struct ReaderView: View {
         .animation(.easeOut(duration: 0.2), value: showsBookActions)
         .animation(.easeOut(duration: 0.22), value: showsReaderMenu)
         .onAppear {
+            LegadoCrashLog.mark("阅读页出现 翻页 \(pageAnimation) 主题 \(theme) 方向 \(screenOrientation) 亮度 \(storedReaderBrightness) 简繁 \(chineseConverterType)")
             activity.beginReading(book)
             speech.onNextChapter = { moveSpeechToChapter(direction: 1) }
             speech.onPreviousChapter = { moveSpeechToChapter(direction: -1) }
@@ -298,7 +301,9 @@ struct ReaderView: View {
             }
             backgroundImage = ReaderBackgroundStore.load()
             darkBackgroundImage = ReaderCustomThemeImage.load(dark: true)
+            LegadoCrashLog.mark("背景图已读取")
             ReaderScreenOrientation.apply(screenOrientation)
+            LegadoCrashLog.mark("屏幕方向已设置")
             Task { await loadHTTPEngines() }
             if ProcessInfo.processInfo.arguments.contains("-uiDemoBookmarks") {
                 showsBookmarks = true
@@ -440,7 +445,9 @@ struct ReaderView: View {
             readerJumpPosition = nil
             readerPageRanges = []
             if needsInitialPosition { readerPosition = model.requestedPosition }
+            LegadoCrashLog.mark("开始读取正文 第 \(model.currentIndex) 章")
             await model.load(rules: model.usesReplaceRules ? replaceRules.rules : [], prefetchNextChapter: true)
+            LegadoCrashLog.mark("正文读取完成 \(model.content.utf16.count) 字符")
             guard !Task.isCancelled else { return }
             if needsInitialPosition {
                 readerPosition = pageAnimation == 3
@@ -2566,17 +2573,13 @@ struct ReaderView: View {
         guard let database = try? LegadoDatabase(url: LegadoDatabase.defaultURL()) else { return }
         let repository = SQLiteConfigurationRepository(database: database)
         var values = (try? await repository.loadHttpTTS()) ?? []
-        let upgraded = HttpTTSLibraryModel.upgradingBundledPresets(values)
-        if upgraded != values {
-            values = upgraded
-            try? await repository.saveHttpTTS(values)
-        }
+        // 阅读页只读不写数据库（打开书时不和书架进度写入抢连接）；旧预设只在内存里换成新版。
+        values = HttpTTSLibraryModel.upgradingBundledPresets(values)
         if values.isEmpty,
            let url = Bundle.main.url(forResource: "httpTTS", withExtension: "json"),
            let data = try? Data(contentsOf: url),
            let defaults = try? JSONDecoder().decode([HttpTTS].self, from: data) {
             values = defaults
-            try? await repository.saveHttpTTS(values)
         }
         httpTTSEngines = values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         if !appTTSEngine.isEmpty, selectedHTTPEngine == nil { appTTSEngine = "" }

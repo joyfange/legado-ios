@@ -77,7 +77,7 @@ struct ReaderMenuDismissShape: Shape {
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }) else { return }
         if #available(iOS 16.0, *) {
-            scene.requestGeometryUpdate(.iOS(interfaceOrientations: mask)) { _ in }
+            scene.requestGeometryUpdate(.iOS(interfaceOrientations: supportedOrientations), errorHandler: ReaderScreenOrientation.ignoreGeometryError)
             scene.windows.first?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
         } else {
             UIViewController.attemptRotationToDeviceOrientation()
@@ -85,6 +85,9 @@ struct ReaderMenuDismissShape: Shape {
     }
 
     static func restoreApplicationDefault() { apply("0") }
+
+    /// 系统可能在后台线程回调失败结果：不能是主线程隔离的闭包（Swift 6 会在回调时检查线程直接闪退）。
+    nonisolated static let ignoreGeometryError: @Sendable (Error) -> Void = { _ in }
 
     /// iPhone（尤其全面屏机型）不支持倒置竖屏：只返回 .portraitUpsideDown 时系统找不到共同方向，
     /// 会抛 UIApplicationInvalidInterfaceOrientation 直接闪退（每次打开书都会触发）。手机上改成竖向。

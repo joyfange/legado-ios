@@ -15,7 +15,10 @@ final class ReaderOpenBookTests: XCTestCase {
         "readerCustomDarkBackgroundHex", "readerCustomDarkForegroundHex", "readerCustomUseImage", "readerCustomDarkUseImage",
         "textFont", "textSize", "textBold", "paragraphIndent", "readerParagraphBlankLines", "readerTextCenter",
         "readerTipCustomFont", "titleColorHex", "themeMode", "showsReviewBubbles",
-        ReaderHighlightStore.storageKey, ReaderThemeStore.storageKey
+        ReaderHighlightStore.storageKey, ReaderThemeStore.storageKey,
+        "chineseConverterType", "readerBrightness", "readerHideStatusBar", "readerHideHomeIndicator",
+        "readerKeepScreenOn", "screenOrientation", "underlineMode", "ttsHighlightEnabled", "readAloudByPage",
+        "readerPresetOverrides", "readerUserThemes", "readerHiddenThemes"
     ]
     static let dialogueText = """
     “你回来了？”她站在门口，声音很轻。<img src="dp:5">
@@ -151,6 +154,96 @@ final class ReaderOpenBookTests: XCTestCase {
         try await openBook(pageAnimation: 3)
         defaults.set("2", forKey: "themeMode")
         try await openBook(pageAnimation: 0)
+    }
+
+    /// 阅读设置「显示 / 朗读」新加的各项（简繁转换、亮度、状态栏、屏幕方向、底线、朗读高亮）
+    /// 以及主题库（预设改色、自建主题）全部改成非默认值后打开书籍。
+    func testOpenBookWithDisplaySpeechAndThemeLibrarySettings() async throws {
+        let restore = preserveSettings()
+        defer { restore() }
+        resetReaderSettings()
+        let defaults = UserDefaults.standard
+        defaults.set(0.6, forKey: "readerBrightness")
+        defaults.set(true, forKey: "readerHideStatusBar")
+        defaults.set(true, forKey: "readerHideHomeIndicator")
+        defaults.set(true, forKey: "readerKeepScreenOn")
+        defaults.set(1, forKey: "underlineMode")
+        defaults.set(true, forKey: "ttsHighlightEnabled")
+        ReaderThemeLibrary.update("wechat", background: "334455", foreground: "EEEEEE")
+        let themeID = ReaderThemeLibrary.newUserThemeID()
+        ReaderThemeLibrary.saveUserTheme(ReaderThemeLibrary.UserTheme(id: themeID, name: "测试深色", dark: true,
+                                                                       backgroundHex: "101010", foregroundHex: "DDDDDD"))
+        for orientation in ["0", "1", "2", "3", "4", "5"] {
+            defaults.set(orientation, forKey: "screenOrientation")
+            try await openBook(pageAnimation: 0)
+        }
+        for converter in [1, 2] {
+            defaults.set(converter, forKey: "chineseConverterType")
+            for mode in [0, 3] { try await openBook(pageAnimation: mode) }
+        }
+        defaults.set(themeID, forKey: "readerTheme")
+        try await openBook(pageAnimation: 0)
+        defaults.set("wechat", forKey: "readerTheme")
+        try await openBook(pageAnimation: 3)
+    }
+
+    /// 走真实的打开流程（不是演示书）：本地 TXT 书读目录 → ReaderView(book:chapters:) 读正文、套替换规则、存进度。
+    func testOpenRealLocalTXTBookWithUserLikeSettings() async throws {
+        let restore = preserveSettings()
+        defer { restore() }
+        resetReaderSettings()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("open-book-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("测试书.txt")
+        var text = ""
+        for index in 1...6 {
+            text += "第\(index)章 灯塔\n\n" + String(repeating: Self.dialogueText + "\n", count: 8) + "\n"
+        }
+        try text.write(to: file, atomically: true, encoding: .utf8)
+        let book = Book(bookUrl: file.absoluteString, name: "测试书", origin: "local")
+        let chapters = try LocalBookService().loadChapters(book: book).chapters
+        XCTAssertFalse(chapters.isEmpty)
+        let defaults = UserDefaults.standard
+        for (converter, brightness, mode) in [(0, 0.0, 0), (2, 0.5, 0), (1, 0.7, 3), (0, 0.0, 1)] {
+            defaults.set(converter, forKey: "chineseConverterType")
+            defaults.set(brightness, forKey: "readerBrightness")
+            defaults.set(mode, forKey: "pageAnim")
+            try await openReader(ReaderView(book: book, chapters: chapters, initialIndex: 1), mode: mode)
+        }
+    }
+
+    private func openReader(_ readerView: ReaderView, mode: Int, file: StaticString = #filePath, line: UInt = #line) async throws {
+        let reader = readerView
+            .environmentObject(BookLibraryModel.demo(books: DemoContent.books))
+            .environmentObject(SourceLibraryModel.demo(sources: DemoContent.sources))
+            .environmentObject(ReplaceRuleLibraryModel.demo())
+            .environmentObject(ReadingActivityModel.demo())
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            window.windowScene = scene
+        }
+        let host = UIHostingController(rootView: ReadingNavigationStack { reader })
+        window.rootViewController = host
+        window.makeKeyAndVisible()
+        defer {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        var ready = false
+        for _ in 0..<60 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            host.view.layoutIfNeeded()
+            if mode == 3 {
+                if let scroll = Self.find(ReaderScrollCollectionView.self, in: host.view), !scroll.visibleCells.isEmpty { ready = true; break }
+            } else if let text = Self.find(ReaderLayoutTextView.self, in: host.view), text.textStorage.length > 0 {
+                ready = true; break
+            }
+        }
+        XCTAssertTrue(ready, "真实书籍的正文没有出现（翻页模式 \(mode)）", file: file, line: line)
+        _ = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+            window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
     }
 
     /// 阅读页的正文视图必须一开始就用正则高亮的排版器（不能事后替换系统文本视图的排版器）。
