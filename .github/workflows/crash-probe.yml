@@ -33,7 +33,7 @@ jobs:
             -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath DerivedData CODE_SIGNING_ALLOWED=NO ENABLE_TESTABILITY=YES \
             -only-testing:LegadoReaderTests/ReaderOpenBookTests \
-            test 2>&1 | tee probe.log | grep -E "(error:|Test Case|Executed|crash|Crash|\*\* TEST)" | tail -n 200
+            test 2>&1 | tee probe.log | grep -E "(error:|Test Case|Executed|crash|Crash|MAIN-STACK|\*\* TEST)" | tail -n 200
       - name: 崩溃日志
         if: always()
         run: |

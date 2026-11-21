@@ -6,6 +6,35 @@ import XCTest
 /// 打开书籍的回归测试：在真实窗口里挂上完整的阅读页（ReaderView），分别用默认设置、
 /// 旧版本留下的设置（旧主题 id、缺字段 / 损坏的存档）以及开启正则高亮（含渐变、圆角、波浪线规则），
 /// 在翻页模式和滚动模式下打开同一本书，并把正文真正画一遍。任何一步闪退都会让整个测试进程失败。
+
+/// 主线程栈峰值测量：先把当前栈指针以下没用到的部分填上固定字节，打开阅读页后看被覆盖到多深。
+/// 真机主线程栈只有约 1MB（模拟器约 8MB），模拟器不闪退不代表真机不会栈溢出。
+enum MainStackProbe {
+    static let pattern: UInt64 = 0xA5A5_A5A5_A5A5_A5A5
+    @inline(never) static func paint() {
+        let thread = pthread_self()
+        let top = UInt(bitPattern: pthread_get_stackaddr_np(thread))
+        let size = UInt(pthread_get_stacksize_np(thread))
+        var marker: UInt8 = 0
+        let sp = withUnsafeMutablePointer(to: &marker) { UInt(bitPattern: $0) }
+        let bottom = top - size + 32 * 1024
+        let end = (sp - 8 * 1024) & ~UInt(7)
+        guard end > bottom else { return }
+        let start = UnsafeMutablePointer<UInt64>(bitPattern: bottom)!
+        start.initialize(repeating: pattern, count: Int((end - bottom) / 8))
+    }
+
+    /// 栈从顶部往下用了多少字节（峰值）。
+    static func peakUsage() -> Int {
+        let thread = pthread_self()
+        let top = UInt(bitPattern: pthread_get_stackaddr_np(thread))
+        let size = UInt(pthread_get_stacksize_np(thread))
+        var address = top - size + 32 * 1024
+        while address < top, UnsafePointer<UInt64>(bitPattern: address)!.pointee == pattern { address += 8 }
+        return Int(top - address)
+    }
+}
+
 @MainActor
 final class ReaderOpenBookTests: XCTestCase {
     /// 测试会改动的设置键：测试前记下原值，测试后原样恢复。
@@ -223,12 +252,15 @@ final class ReaderOpenBookTests: XCTestCase {
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
             window.windowScene = scene
         }
+        MainStackProbe.paint()
         let host = UIHostingController(rootView: ReadingNavigationStack { reader })
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
             window.rootViewController = nil
+            let peak = MainStackProbe.peakUsage()
+            print("MAIN-STACK-PEAK \(peak / 1024) KB (本地书 翻页 \(mode))")
         }
         var ready = false
         for _ in 0..<60 {
@@ -287,12 +319,15 @@ final class ReaderOpenBookTests: XCTestCase {
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
             window.windowScene = scene
         }
+        MainStackProbe.paint()
         let host = UIHostingController(rootView: ReadingNavigationStack { reader })
         window.rootViewController = host
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
             window.rootViewController = nil
+            let peak = MainStackProbe.peakUsage()
+            print("MAIN-STACK-PEAK \(peak / 1024) KB (演示书 翻页 \(pageAnimation ?? -1))")
         }
         let mode = pageAnimation ?? UserDefaults.standard.integer(forKey: "pageAnim")
         for _ in 0..<40 {
