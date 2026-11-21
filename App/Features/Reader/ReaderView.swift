@@ -243,8 +243,8 @@ struct ReaderView: View {
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage1: AnyView {
-        AnyView(readerCanvas
+    private var readerBodyStage1Content: some View {
+        readerCanvas
         .preferredColorScheme(resolvedStyle.isDark ? .dark : .light)
         .readingTabBarHidden()
         .navigationBarBackButtonHidden(true)
@@ -266,13 +266,14 @@ struct ReaderView: View {
                 .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        )
     }
+
+    private var readerBodyStage1: AnyView { AnyView(readerBodyStage1Content) }
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage2: AnyView {
-        AnyView(readerBodyStage1
+    private var readerBodyStage2Content: some View {
+        readerBodyStage1
         .overlay(alignment: .top) {
             if let readerNotice {
                 Text(readerNotice)
@@ -356,13 +357,14 @@ struct ReaderView: View {
             speech.onPreviousChapter = nil
             speech.onRemoteStop = nil
         }
-        )
     }
+
+    private var readerBodyStage2: AnyView { AnyView(readerBodyStage2Content) }
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage3: AnyView {
-        AnyView(readerBodyStage2
+    private var readerBodyStage3Content: some View {
+        readerBodyStage2
         .overlay(alignment: .bottom) {
             if showsReaderMenu {
                 Group {
@@ -401,13 +403,14 @@ struct ReaderView: View {
         .sheet(item: $reviewPage) { page in
             ReaderReviewSheet(page: page)
         }
-        )
     }
+
+    private var readerBodyStage3: AnyView { AnyView(readerBodyStage3Content) }
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage4: AnyView {
-        AnyView(readerBodyStage3
+    private var readerBodyStage4Content: some View {
+        readerBodyStage3
         .alert("打不开段评", isPresented: Binding(get: { reviewError != nil }, set: { if !$0 { reviewError = nil } })) {
             Button("好", role: .cancel) { reviewError = nil }
         } message: {
@@ -439,13 +442,14 @@ struct ReaderView: View {
         .sheet(isPresented: $showsReplaceRules) {
             ReadingNavigationStack { ReplaceRuleManagementView() }
         }
-        )
     }
+
+    private var readerBodyStage4: AnyView { AnyView(readerBodyStage4Content) }
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage5: AnyView {
-        AnyView(readerBodyStage4
+    private var readerBodyStage5Content: some View {
+        readerBodyStage4
         .sheet(item: $quickReplacePick) { pick in
             ReaderQuickReplaceSheet(pick: pick, bookName: model.book.name, sourceURL: model.book.origin,
                                     rulesDisabled: !model.usesReplaceRules,
@@ -497,13 +501,14 @@ struct ReaderView: View {
             await model.prepareContinuousReading(rules: model.usesReplaceRules ? replaceRules.rules : [])
         }
         .onAppear { updateIdleTimer() }
-        )
     }
+
+    private var readerBodyStage5: AnyView { AnyView(readerBodyStage5Content) }
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage6: AnyView {
-        AnyView(readerBodyStage5
+    private var readerBodyStage6Content: some View {
+        readerBodyStage5
         .onChange(of: keepScreenOn) { _ in
             updateIdleTimer()
         }
@@ -537,13 +542,14 @@ struct ReaderView: View {
         .onChange(of: readAloudByPage) { _ in
             restartSpeechAfterReaderLayoutChange()
         }
-        )
     }
+
+    private var readerBodyStage6: AnyView { AnyView(readerBodyStage6Content) }
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage7: AnyView {
-        AnyView(readerBodyStage6
+    private var readerBodyStage7Content: some View {
+        readerBodyStage6
         .onChange(of: storedReaderBrightness) { value in
             // 阅读设置「显示 › 屏幕设置 › 亮度」：0 表示跟随系统。
             if value > 0.05 {
@@ -591,13 +597,14 @@ struct ReaderView: View {
             currentPage = 1
             totalPages = 1
         }
-        )
     }
+
+    private var readerBodyStage7: AnyView { AnyView(readerBodyStage7Content) }
 
     /// 修饰链分段并擦除类型：一整条 50 多个修饰符的链会让 SwiftUI 建视图时递归很深、
     /// 每层都复制整条链的值，主线程栈超过真机约 1MB 的上限而闪退。
-    private var readerBodyStage8: AnyView {
-        AnyView(readerBodyStage7
+    private var readerBodyStage8Content: some View {
+        readerBodyStage7
         .onChange(of: pageAnimation) { value in
             isAutoReading = false
             saveProgress(immediate: true)
@@ -608,8 +615,9 @@ struct ReaderView: View {
             let updatedBook = model.useGlobalPageAnimation()
             Task { await library.addOrUpdate(updatedBook) }
         }
-        )
     }
+
+    private var readerBodyStage8: AnyView { AnyView(readerBodyStage8Content) }
 
     private var textReaderBody: some View {
         readerBodyStage8
