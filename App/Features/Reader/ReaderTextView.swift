@@ -369,6 +369,7 @@ struct ReaderTextView: UIViewRepresentable {
             context.coordinator.updatePageBreaker(in: view, invalidate: false)
             context.coordinator.isApplyingContent = true
             view.attributedText = rendered
+            context.coordinator.resetSpeechHighlight()
             context.coordinator.isApplyingContent = false
             context.coordinator.scroll(
                 to: primaryContentChanged ? requestedPosition : visiblePosition,
@@ -525,8 +526,16 @@ struct ReaderTextView: UIViewRepresentable {
         var renderedPrefixLength = 0
         private var speechHighlightKey = ""
         private var speechHighlightApplied: NSRange?
+        private var speechHighlightOriginal: [(NSRange, Any?)] = []
 
-        /// 用排版器的临时属性给正在朗读的段落上色：不重新排版，阅读位置和分页都不变。
+        /// 正文整体替换后旧的高亮记录失效，下次按新文本重新上色。
+        func resetSpeechHighlight() {
+            speechHighlightKey = ""
+            speechHighlightApplied = nil
+            speechHighlightOriginal = []
+        }
+
+        /// 只改正在朗读段落的文字颜色（颜色属性不影响字形度量）：不重新排版，阅读位置和分页都不变。
         func updateSpeechHighlight(in view: UITextView, range: NSRange?, color: UIColor?, styleKey: String) {
             let key: String
             if let range, let color {
@@ -536,13 +545,21 @@ struct ReaderTextView: UIViewRepresentable {
             }
             guard key != speechHighlightKey else { return }
             speechHighlightKey = key
-            let manager = view.layoutManager
-            let length = view.textStorage.length
-            if let old = speechHighlightApplied {
-                let clipped = NSIntersectionRange(old, NSRange(location: 0, length: length))
-                if clipped.length > 0 {
-                    manager.removeTemporaryAttribute(.foregroundColor, forCharacterRange: clipped)
+            let storage = view.textStorage
+            let length = storage.length
+            if speechHighlightApplied != nil {
+                storage.beginEditing()
+                for (saved, value) in speechHighlightOriginal {
+                    let clipped = NSIntersectionRange(saved, NSRange(location: 0, length: length))
+                    guard clipped.length > 0 else { continue }
+                    if let value {
+                        storage.addAttribute(NSAttributedString.Key.foregroundColor, value: value, range: clipped)
+                    } else {
+                        storage.removeAttribute(NSAttributedString.Key.foregroundColor, range: clipped)
+                    }
                 }
+                storage.endEditing()
+                speechHighlightOriginal = []
                 speechHighlightApplied = nil
             }
             guard let range, let color else { return }
@@ -551,7 +568,14 @@ struct ReaderTextView: UIViewRepresentable {
                 NSRange(location: 0, length: length)
             )
             guard target.length > 0 else { return }
-            manager.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: target)
+            var original: [(NSRange, Any?)] = []
+            storage.enumerateAttribute(NSAttributedString.Key.foregroundColor, in: target, options: []) { value, subrange, _ in
+                original.append((subrange, value))
+            }
+            storage.beginEditing()
+            storage.addAttribute(NSAttributedString.Key.foregroundColor, value: color, range: target)
+            storage.endEditing()
+            speechHighlightOriginal = original
             speechHighlightApplied = target
         }
         var currentSectionStart = 0
