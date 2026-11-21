@@ -162,6 +162,12 @@ public actor HttpTTSService {
                     context: context,
                     defaultHeaders: try BookSourceHeaderResolver().resolve(source)
                 )
+                if EdgeTTSClient.isEdgeURL(prepared.url) {
+                    // 内置微软 Edge 朗读：不经过第三方转发服务器。
+                    let data = try await EdgeTTSClient.synthesize(text: text, options: .init(url: prepared.url))
+                    await cache.store(data, for: cacheKey)
+                    return .init(data: data, contentType: "audio/mpeg", finalURL: prepared.url)
+                }
                 var response = try await networkPolicy.execute(
                     prepared,
                     source: source,
@@ -211,6 +217,9 @@ public actor HttpTTSService {
                 if attempt == 5 { throw lastError }
             } catch let error as RuleEngineError {
                 throw error
+            } catch let error as EdgeTTSError {
+                lastError = error
+                if attempt >= 1 { throw error }
             } catch {
                 lastError = error
                 if attempt == 5 { throw error }
@@ -248,7 +257,7 @@ public actor HttpTTSService {
             context: context,
             defaultHeaders: try BookSourceHeaderResolver().resolve(source)
         )
-        if prepared.bodyJavaScript != nil || prepared.responseType != nil || prepared.proxy != nil || prepared.useWebView {
+        if EdgeTTSClient.isEdgeURL(prepared.url) || prepared.bodyJavaScript != nil || prepared.responseType != nil || prepared.proxy != nil || prepared.useWebView {
             let value = try await audio(engine: engine, text: text, speechRate: speechRate)
             return Self.bufferedStream(data: value.data, contentType: value.contentType, finalURL: value.finalURL)
         }

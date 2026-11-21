@@ -130,9 +130,11 @@ final class HttpTTSLibraryModel: ObservableObject {
         let bundled = Dictionary(defaults.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return values.map { stored in
             guard let fresh = bundled[stored.id] else { return stored }
-            let staleBaidu = stored.url.contains("pdt=160")
+            // 百度：旧参数（pdt=160 等）已被接口拒绝，没换成 pdt=301 的都换掉。
+            let staleBaidu = stored.url.contains("tts.baidu.com/text2audio") && !stored.url.contains("pdt=301")
+            // Next 引擎：第三方转发服务器已全部失效，换成内置 Edge 朗读版本（保留用户登录配置里选的发言人）。
             let staleNext = (stored.jsLib ?? "").contains("function apiurl(")
-                && !(stored.jsLib ?? "").contains("iOS 预设修复")
+                && !(stored.jsLib ?? "").contains("iOS 内置Edge")
                 && stored.lastUpdateTime <= 1_770_778_835_144
             guard staleBaidu || staleNext else { return stored }
             return fresh

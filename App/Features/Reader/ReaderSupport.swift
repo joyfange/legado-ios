@@ -72,7 +72,7 @@ struct ReaderMenuDismissShape: Shape {
         case "5": .landscapeLeft
         default: .allButUpsideDown
         }
-        supportedOrientations = mask
+        supportedOrientations = safeMask(mask)
         guard let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive }) else { return }
@@ -85,6 +85,14 @@ struct ReaderMenuDismissShape: Shape {
     }
 
     static func restoreApplicationDefault() { apply("0") }
+
+    /// iPhone（尤其全面屏机型）不支持倒置竖屏：只返回 .portraitUpsideDown 时系统找不到共同方向，
+    /// 会抛 UIApplicationInvalidInterfaceOrientation 直接闪退（每次打开书都会触发）。手机上改成竖向。
+    static func safeMask(_ mask: UIInterfaceOrientationMask) -> UIInterfaceOrientationMask {
+        guard UIDevice.current.userInterfaceIdiom == .phone else { return mask }
+        let usable = mask.intersection(.allButUpsideDown)
+        return usable.isEmpty ? .portrait : usable
+    }
 }
 
 /// Scrolls a table of contents to the chapter being read. The delay lets a

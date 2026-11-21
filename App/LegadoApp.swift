@@ -87,7 +87,45 @@ struct LegadoApp: App {
 }
 
 final class LegadoAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        LegadoCrashLog.install()
+        // 手机上旧版存下的「反向竖屏」会让打开书时闪退，换成竖向。
+        if UIDevice.current.userInterfaceIdiom == .phone, UserDefaults.standard.string(forKey: "screenOrientation") == "4" {
+            UserDefaults.standard.set("1", forKey: "screenOrientation")
+        }
+        return true
+    }
+
     func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
         ReaderScreenOrientation.supportedOrientations
+    }
+}
+
+/// 闪退记录：未捕获的异常 / 致命信号写进「文件」App 里本应用文件夹的「闪退日志.txt」，便于反馈。
+enum LegadoCrashLog {
+    nonisolated(unsafe) static var path: UnsafeMutablePointer<CChar>?
+
+    static func install() {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+        path = strdup(documents.appendingPathComponent("闪退日志.txt").path)
+        NSSetUncaughtExceptionHandler { exception in
+            let text = "\n==== \(Date()) 未捕获异常 ====\n\(exception.name.rawValue): \(exception.reason ?? "")\n"
+                + exception.callStackSymbols.joined(separator: "\n") + "\n"
+            LegadoCrashLog.append(text)
+        }
+        for signalNumber in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE] {
+            signal(signalNumber) { number in
+                let text = "\n==== \(Date()) 信号 \(number) ====\n" + Thread.callStackSymbols.joined(separator: "\n") + "\n"
+                LegadoCrashLog.append(text)
+                signal(number, SIG_DFL)
+                raise(number)
+            }
+        }
+    }
+
+    static func append(_ text: String) {
+        guard let path, let handle = fopen(path, "a") else { return }
+        _ = text.withCString { fputs($0, handle) }
+        fclose(handle)
     }
 }

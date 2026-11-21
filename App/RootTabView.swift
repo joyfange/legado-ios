@@ -1798,9 +1798,9 @@ private struct ReaderOpeningPlaceholder: View {
         let defaults = UserDefaults.standard
         let themeMode = defaults.string(forKey: "themeMode") ?? "0"
         // 旧版「使用背景图」或选中的自定义主题（浅色 / 深色）带的背景图。
-        let side = themeMode == "3" ? nil
-            : ReaderCustomThemeImage.activeImageSide(for: ReaderStylePreset.resolve(defaults.string(forKey: "readerTheme") ?? "wechat"))
-        _backgroundImage = State(initialValue: side.flatMap { ReaderCustomThemeImage.load(dark: $0) })
+        let url = themeMode == "3" ? nil
+            : ReaderCustomThemeImage.activeImageURL(for: ReaderStylePreset.resolve(defaults.string(forKey: "readerTheme") ?? "wechat"))
+        _backgroundImage = State(initialValue: url.flatMap { ReaderBackgroundStore.load(from: $0) })
     }
 
     var body: some View {

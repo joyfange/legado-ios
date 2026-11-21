@@ -131,6 +131,8 @@
 		C1000000000000000000002C /* RSSSourceDebugger.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000002C /* RSSSourceDebugger.swift */; };
 		C1000000000000000000002D /* AddBookURLService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000002D /* AddBookURLService.swift */; };
 		C1000000000000000000002E /* HttpTTSService.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000002E /* HttpTTSService.swift */; };
+		EE1000000000000000000002 /* EdgeTTSClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE2000000000000000000002 /* EdgeTTSClient.swift */; };
+		EE1000000000000000000001 /* EdgeTTSToken.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE2000000000000000000001 /* EdgeTTSToken.swift */; };
 		B10000000000000000000027 /* BookshelfReadViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000027 /* BookshelfReadViewModel.swift */; };
 		C1000000000000000000BA01 /* BookshelfActionsSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2000000000000000000BA01 /* BookshelfActionsSheet.swift */; };
 		B10000000000000000000028 /* BookDetailViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20000000000000000000028 /* BookDetailViewModel.swift */; };
@@ -293,6 +295,8 @@
 		C2000000000000000000002C /* RSSSourceDebugger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RSSSourceDebugger.swift; sourceTree = "<group>"; };
 		C2000000000000000000002D /* AddBookURLService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddBookURLService.swift; sourceTree = "<group>"; };
 		C2000000000000000000002E /* HttpTTSService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HttpTTSService.swift; sourceTree = "<group>"; };
+		EE2000000000000000000002 /* EdgeTTSClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeTTSClient.swift; sourceTree = "<group>"; };
+		EE2000000000000000000001 /* EdgeTTSToken.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EdgeTTSToken.swift; sourceTree = "<group>"; };
 		D20000000000000000000001 /* Legado.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Legado.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000000000000000000027 /* BookshelfReadViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookshelfReadViewModel.swift; sourceTree = "<group>"; };
 		C2000000000000000000BA01 /* BookshelfActionsSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BookshelfActionsSheet.swift; sourceTree = "<group>"; };
@@ -662,6 +666,8 @@
 			isa = PBXGroup;
 			children = (
 				C2000000000000000000002E /* HttpTTSService.swift */,
+				EE2000000000000000000002 /* EdgeTTSClient.swift */,
+				EE2000000000000000000001 /* EdgeTTSToken.swift */,
 			);
 			path = TTS;
 			sourceTree = "<group>";
@@ -961,6 +967,8 @@
 				C1000000000000000000002B /* RSSReadingPolicy.swift in Sources */,
 				C1000000000000000000002C /* RSSSourceDebugger.swift in Sources */,
 				C1000000000000000000002E /* HttpTTSService.swift in Sources */,
+				EE1000000000000000000002 /* EdgeTTSClient.swift in Sources */,
+				EE1000000000000000000001 /* EdgeTTSToken.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

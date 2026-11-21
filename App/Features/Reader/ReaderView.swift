@@ -135,6 +135,8 @@ struct ReaderView: View {
     @AppStorage("readerParagraphBlankLines") private var paragraphBlankLines = 0
     @AppStorage("readerTipCustomFont") private var tipCustomFont = false
     @AppStorage("readerBackgroundRevision") private var backgroundRevision = 0
+    @AppStorage(ReaderThemeLibrary.overridesKey) private var presetOverridesData = Data()
+    @AppStorage(ReaderThemeLibrary.userThemesKey) private var userThemesData = Data()
     @AppStorage("autoReadSpeed") private var autoReadSpeed = 10
     @AppStorage("ttsFollowSys") private var ttsFollowSystem = true
     @AppStorage("ttsSpeechRate") private var ttsSpeechRate = 5
@@ -871,11 +873,12 @@ struct ReaderView: View {
     private var activeBackgroundImage: UIImage? {
         guard themeMode != "3" else { return nil }
         if useBackgroundImage { return backgroundImage }
-        // 自定义主题（浅色 / 深色各一套）带的背景图。
+        // 当前主题（预设、自定义、新建主题）自己的背景图。
         let style = resolvedStyle
         if style.id == ReaderStylePreset.customID, customUsesImage { return backgroundImage }
         if style.id == ReaderStylePreset.customDarkID, customDarkUsesImage { return darkBackgroundImage }
-        return nil
+        _ = (presetOverridesData, userThemesData)
+        return ReaderThemeLibrary.image(for: style.id, revision: backgroundRevision)
     }
 
     private var backgroundColor: Color {
@@ -889,14 +892,15 @@ struct ReaderView: View {
     private var resolvedStyle: ReaderStylePreset {
         if themeMode == "3" { return .eInk }
         if let bound = ReaderStylePreset.boundToAppTheme(themeMode: themeMode) { return bound }
-        _ = (customBackgroundHex, customForegroundHex, customDarkBackgroundHex, customDarkForegroundHex)
+        _ = (customBackgroundHex, customForegroundHex, customDarkBackgroundHex, customDarkForegroundHex,
+             presetOverridesData, userThemesData)
         if followSystemDark {
             // 「跟随系统深色模式」：系统深色用选中的深色主题，浅色时用浅色主题。
             if systemPrefersDark {
-                return ReaderStylePreset.darkIDs.contains(darkTheme) ? ReaderStylePreset.resolve(darkTheme) : ReaderStylePreset.resolve("night")
+                return ReaderStylePreset.isDarkID(darkTheme) ? ReaderStylePreset.resolve(darkTheme) : ReaderStylePreset.resolve("night")
             }
-            if ReaderStylePreset.darkIDs.contains(theme) {
-                return ReaderStylePreset.darkIDs.contains(previousDayTheme) ? ReaderStylePreset.resolve("wechat") : preset(previousDayTheme)
+            if ReaderStylePreset.isDarkID(theme) {
+                return ReaderStylePreset.isDarkID(previousDayTheme) ? ReaderStylePreset.resolve("wechat") : preset(previousDayTheme)
             }
         }
         return preset(theme)
@@ -1687,10 +1691,10 @@ struct ReaderView: View {
         if resolvedStyle.isDark {
             // 跟随系统深色时手动切回日间：关掉跟随，否则下一次刷新又会变回深色。
             if followSystemDark { followSystemDark = false }
-            theme = ReaderStylePreset.darkIDs.contains(previousDayTheme) ? "wechat" : previousDayTheme
+            theme = ReaderStylePreset.isDarkID(previousDayTheme) ? "wechat" : previousDayTheme
         } else {
             previousDayTheme = resolvedStyle.id
-            theme = ReaderStylePreset.darkIDs.contains(darkTheme) ? darkTheme : "night"
+            theme = ReaderStylePreset.isDarkID(darkTheme) ? darkTheme : "night"
         }
     }
 

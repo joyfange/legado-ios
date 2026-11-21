@@ -12,6 +12,8 @@ struct ReaderStylePreset: Identifiable {
     let name: String
     let background: UIColor
     let foreground: UIColor
+    /// 用户新建的主题自己记录深浅；预设按 id 判断。
+    var darkFlag: Bool? = nil
 
     static let legadoDefaults: [ReaderStylePreset] = [
         .init(id: "wechat", name: "微信读书", background: UIColor(hex: 0xC0EDC6), foreground: UIColor(hex: 0x0B0B0B)),
@@ -29,9 +31,14 @@ struct ReaderStylePreset: Identifiable {
 
     /// 深色阅读主题（夜间、深蓝、墨绿、自定义深色）：阅读页的系统控件随之用深色外观。
     static let darkIDs: Set<String> = ["night", "deepBlue", "inkGreen", customDarkID]
-    var isDark: Bool { Self.darkIDs.contains(id) }
-    static var lightPresets: [ReaderStylePreset] { legadoDefaults.filter { !$0.isDark } }
-    static var darkPresets: [ReaderStylePreset] { legadoDefaults.filter(\.isDark) }
+    var isDark: Bool { darkFlag ?? Self.darkIDs.contains(id) }
+    /// 某个主题 id 是否是深色主题（含用户新建的深色主题）。
+    static func isDarkID(_ id: String) -> Bool {
+        darkIDs.contains(id) || ReaderThemeLibrary.userTheme(id)?.dark == true
+    }
+    /// 内置预设（已套用用户改过的颜色）。
+    static var lightPresets: [ReaderStylePreset] { legadoDefaults.filter { !$0.isDark }.map { resolve($0.id) } }
+    static var darkPresets: [ReaderStylePreset] { legadoDefaults.filter(\.isDark).map { resolve($0.id) } }
     static let eInk = ReaderStylePreset(
         id: "eink",
         name: "E-Ink",
@@ -48,7 +55,31 @@ struct ReaderStylePreset: Identifiable {
         }
         if migratedID == customID { return custom() }
         if migratedID == customDarkID { return customDark() }
-        return legadoDefaults.first(where: { $0.id == migratedID }) ?? legadoDefaults[0]
+        if let entry = ReaderThemeLibrary.userTheme(migratedID) {
+            return ReaderStylePreset(
+                id: entry.id,
+                name: entry.name,
+                background: UIColor(readerHex: entry.backgroundHex) ?? (entry.dark ? .black : .white),
+                foreground: UIColor(readerHex: entry.foregroundHex) ?? (entry.dark ? .lightGray : .black),
+                darkFlag: entry.dark
+            )
+        }
+        let base = legadoDefaults.first(where: { $0.id == migratedID }) ?? legadoDefaults[0]
+        // 预设可以在阅读设置里直接改颜色（不再跳到「自定义」）。
+        if let override = ReaderThemeLibrary.presetOverride(base.id) {
+            return ReaderStylePreset(
+                id: base.id,
+                name: base.name,
+                background: override.backgroundHex.flatMap { UIColor(readerHex: $0) } ?? base.background,
+                foreground: override.foregroundHex.flatMap { UIColor(readerHex: $0) } ?? base.foreground
+            )
+        }
+        return base
+    }
+
+    /// 内置预设的原始颜色（不含用户的修改）。
+    static func original(_ id: String) -> ReaderStylePreset? {
+        legadoDefaults.first { $0.id == id }
     }
 
     /// 外观主题「绑定阅读主题」开启时，阅读背景与文字跟随应用主题（亮 / 深色各自一套）；未开启返回 nil。
@@ -121,6 +152,192 @@ struct ReaderStylePreset: Identifiable {
     var isCustom: Bool { id == Self.customID || id == Self.customDarkID }
 }
 
+
+/// 阅读主题色块的个性化：
+/// - 内置预设可以直接改文字 / 背景颜色、加背景图（改的是预设自己，不会跳到「自定义」）；
+/// - 用户可以新建任意多个浅色 / 深色主题，新建后出现在对应一排；
+/// - 每个色块都可以隐藏，在「管理主题」里随时显示回来。
+enum ReaderThemeLibrary {
+    struct PresetOverride: Codable, Equatable {
+        var backgroundHex: String?
+        var foregroundHex: String?
+        var usesImage: Bool = false
+    }
+
+    struct UserTheme: Codable, Equatable, Identifiable {
+        var id: String
+        var name: String
+        var dark: Bool
+        var backgroundHex: String
+        var foregroundHex: String
+        var usesImage: Bool = false
+    }
+
+    static let overridesKey = "readerPresetOverrides"
+    static let userThemesKey = "readerUserThemes"
+    static let hiddenKey = "readerHiddenThemes"
+    static let userPrefix = "user-"
+
+    private static var defaults: UserDefaults { .standard }
+
+    // MARK: 存取
+
+    static func presetOverrides() -> [String: PresetOverride] {
+        guard let data = defaults.data(forKey: overridesKey),
+              let value = try? JSONDecoder().decode([String: PresetOverride].self, from: data) else { return [:] }
+        return value
+    }
+
+    static func presetOverride(_ id: String) -> PresetOverride? { presetOverrides()[id] }
+
+    static func setPresetOverride(_ id: String, _ value: PresetOverride?) {
+        var all = presetOverrides()
+        all[id] = value
+        if let data = try? JSONEncoder().encode(all) { defaults.set(data, forKey: overridesKey) }
+    }
+
+    static func userThemes() -> [UserTheme] {
+        guard let data = defaults.data(forKey: userThemesKey),
+              let value = try? JSONDecoder().decode([UserTheme].self, from: data) else { return [] }
+        return value
+    }
+
+    static func userThemes(dark: Bool) -> [UserTheme] { userThemes().filter { $0.dark == dark } }
+
+    static func userTheme(_ id: String) -> UserTheme? {
+        guard id.hasPrefix(userPrefix) else { return nil }
+        return userThemes().first { $0.id == id }
+    }
+
+    static func saveUserTheme(_ theme: UserTheme) {
+        var all = userThemes()
+        if let index = all.firstIndex(where: { $0.id == theme.id }) { all[index] = theme } else { all.append(theme) }
+        if let data = try? JSONEncoder().encode(all) { defaults.set(data, forKey: userThemesKey) }
+    }
+
+    static func deleteUserTheme(_ id: String) {
+        let all = userThemes().filter { $0.id != id }
+        if let data = try? JSONEncoder().encode(all) { defaults.set(data, forKey: userThemesKey) }
+        try? FileManager.default.removeItem(at: imageURL(id))
+    }
+
+    static func newUserThemeID() -> String { userPrefix + UUID().uuidString.lowercased() }
+
+    // MARK: 隐藏
+
+    /// 隐藏的色块 id（逗号分隔，便于设置页用 @AppStorage 跟随刷新）。
+    static func hiddenIDs() -> Set<String> {
+        Set((defaults.string(forKey: hiddenKey) ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty })
+    }
+
+    static func isHidden(_ id: String) -> Bool { hiddenIDs().contains(id) }
+
+    static func setHidden(_ id: String, _ hidden: Bool) {
+        var ids = hiddenIDs()
+        if hidden { ids.insert(id) } else { ids.remove(id) }
+        defaults.set(ids.sorted().joined(separator: ","), forKey: hiddenKey)
+    }
+
+    /// 旧版「自定义」主题（浅色 / 深色）是否用过：用过才作为一个色块显示。
+    static func legacyCustomUsed(dark: Bool) -> Bool {
+        let keys = ReaderStylePreset.customKeys(dark: dark)
+        let id = dark ? ReaderStylePreset.customDarkID : ReaderStylePreset.customID
+        return defaults.object(forKey: keys.background) != nil
+            || defaults.bool(forKey: keys.useImage)
+            || defaults.string(forKey: "readerTheme") == id
+    }
+
+    /// 一侧（浅色 / 深色）全部色块：内置预设、用过的旧版「自定义」、用户新建的主题。
+    static func allThemes(dark: Bool) -> [ReaderStylePreset] {
+        var items = dark ? ReaderStylePreset.darkPresets : ReaderStylePreset.lightPresets
+        if legacyCustomUsed(dark: dark) { items.append(ReaderStylePreset.custom(dark: dark)) }
+        items += userThemes(dark: dark).map { ReaderStylePreset.resolve($0.id) }
+        return items
+    }
+
+    /// 一侧要显示的色块（去掉用户隐藏的；当前选中的即使被隐藏也照常显示，免得找不到）。
+    static func visibleThemes(dark: Bool, selected: Set<String> = []) -> [ReaderStylePreset] {
+        let hidden = hiddenIDs()
+        return allThemes(dark: dark).filter { !hidden.contains($0.id) || selected.contains($0.id) }
+    }
+
+    // MARK: 颜色与背景图（预设、旧版「自定义」、用户主题统一处理）
+
+    static func imageURL(_ id: String) -> URL {
+        if id == ReaderStylePreset.customID { return ReaderBackgroundStore.url }
+        if id == ReaderStylePreset.customDarkID { return ReaderCustomThemeImage.darkURL }
+        let safe = id.replacingOccurrences(of: "/", with: "_")
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Legado/reader-theme-\(safe).jpg")
+    }
+
+    static func usesImage(_ id: String) -> Bool {
+        if id == ReaderStylePreset.customID { return ReaderCustomThemeImage.usesImage(dark: false) }
+        if id == ReaderStylePreset.customDarkID { return ReaderCustomThemeImage.usesImage(dark: true) }
+        if let theme = userTheme(id) { return theme.usesImage }
+        return presetOverride(id)?.usesImage ?? false
+    }
+
+    static func hasImage(_ id: String) -> Bool { FileManager.default.fileExists(atPath: imageURL(id).path) }
+
+    /// 写入某个主题的颜色 / 背景图开关；nil 表示不改。
+    static func update(_ id: String, background: String? = nil, foreground: String? = nil, usesImage: Bool? = nil) {
+        if id == ReaderStylePreset.customID || id == ReaderStylePreset.customDarkID {
+            let keys = ReaderStylePreset.customKeys(dark: id == ReaderStylePreset.customDarkID)
+            if let background, UIColor(readerHex: background) != nil { defaults.set(background, forKey: keys.background) }
+            if let foreground, UIColor(readerHex: foreground) != nil { defaults.set(foreground, forKey: keys.foreground) }
+            if let usesImage { defaults.set(usesImage, forKey: keys.useImage) }
+            return
+        }
+        if var theme = userTheme(id) {
+            if let background, UIColor(readerHex: background) != nil { theme.backgroundHex = background }
+            if let foreground, UIColor(readerHex: foreground) != nil { theme.foregroundHex = foreground }
+            if let usesImage { theme.usesImage = usesImage }
+            saveUserTheme(theme)
+            return
+        }
+        guard ReaderStylePreset.original(id) != nil else { return }
+        var value = presetOverride(id) ?? PresetOverride()
+        if let background, UIColor(readerHex: background) != nil { value.backgroundHex = background }
+        if let foreground, UIColor(readerHex: foreground) != nil { value.foregroundHex = foreground }
+        if let usesImage { value.usesImage = usesImage }
+        setPresetOverride(id, value)
+    }
+
+    /// 预设恢复成原来的颜色、去掉背景图。
+    static func resetPreset(_ id: String) {
+        setPresetOverride(id, nil)
+        try? FileManager.default.removeItem(at: imageURL(id))
+    }
+
+    static func isModifiedPreset(_ id: String) -> Bool { presetOverride(id) != nil }
+
+    /// 这个主题当前要铺的背景图文件（没开或没有图时为 nil）。
+    static func activeImageURL(for id: String) -> URL? {
+        guard usesImage(id) else { return nil }
+        let url = imageURL(id)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
+    nonisolated(unsafe) private static let cache = NSCache<NSString, UIImage>()
+
+    /// 带缓存地读背景图（阅读页每次刷新都会问，避免反复解码）。revision 变化时重读。
+    static func image(for id: String, revision: Int) -> UIImage? {
+        guard let url = activeImageURL(for: id) else { return nil }
+        let key = "\(id)#\(revision)" as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        guard let image = ReaderBackgroundStore.load(from: url) else { return nil }
+        cache.setObject(image, forKey: key)
+        return image
+    }
+
+    /// 读背景图（不走缓存），用于设置页的色块和预览。
+    static func previewImage(_ id: String) -> UIImage? {
+        guard hasImage(id) else { return nil }
+        return ReaderBackgroundStore.load(from: imageURL(id))
+    }
+}
+
 /// 自定义主题的背景图：浅色沿用原来的阅读背景图文件（旧版本选过的背景图不丢），深色单独一张。
 enum ReaderCustomThemeImage {
     static let lightUseKey = "readerCustomUseImage"
@@ -168,6 +385,12 @@ enum ReaderCustomThemeImage {
         if style.id == ReaderStylePreset.customID, usesImage(dark: false, defaults: defaults) { return false }
         if style.id == ReaderStylePreset.customDarkID, usesImage(dark: true, defaults: defaults) { return true }
         return nil
+    }
+
+    /// 阅读页当前该铺的背景图文件：旧版全局开关优先，否则看当前主题（预设、自定义、新建主题）自己的背景图。
+    static func activeImageURL(for style: ReaderStylePreset, defaults: UserDefaults = .standard) -> URL? {
+        if defaults.bool(forKey: "readerUseBackgroundImage") { return ReaderBackgroundStore.url }
+        return ReaderThemeLibrary.activeImageURL(for: style.id)
     }
 }
 
